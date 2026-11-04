@@ -4,8 +4,8 @@ Oracle: **Nix 2.24.9**, nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. 
 
 ```bash
 bash scripts/check-cgo.sh
-go test ./eval -run 'TestPathPlusOracle|TestBootstrapXgcc|TestBootstrapStage2Binutils|TestBootstrapStage2GCCWrapper|TestImportNixpkgsLibVersion' -count=1
-go test ./ladder -run Hello -count=1
+go test ./eval -run 'TestPathPlusOracle|TestBootstrapXgcc|TestBootstrapStage2Binutils|TestBootstrapStage2GCCWrapper|TestBootstrapStage2Stdenv|TestImportNixpkgsLibVersion' -count=1
+go test ./ladder -count=1
 ```
 
 ## Fixes (recent)
@@ -23,9 +23,11 @@ go test ./ladder -run Hello -count=1
 |------|--------|
 | bootstrap-tools, stage0/1 env bytes | **green** |
 | xgcc, gcc-wrapper, binutils-wrapper | **green** |
-| bootstrap-stage2-stdenv-linux | **red** (go `defaultNativeBuildInputs` env lists extra `bootstrap-stage2-gcc-wrapper` path vs Nix) |
-| stdenvNoCC probe / hello ladder drvPath | **green** (golden) |
-| curl | **red** (large closure; not re-run this turn) |
+| bootstrap-stage2-stdenv-linux | **green** (byte ATerm + `stage2_stdenv_oracle.nix` list attrs) |
+| stdenvNoCC probe / hello ladder drvPath | **green** (see below) |
+| curl ladder drvPath | **green** (`TestCurlLadderMatchesGolden`; full run, not `-short`) |
+
+**Hello “green”** means `ladder.TestHelloDrvPathMatchesGolden`: goonix `drvPath` is checked against Nix via `evalLadderDrvPath`, then against the pinned golden file `testdata/golden/hello.drvPath` (`…/gciipqhqkdlqqn803zd4a389v86ran45-hello-2.12.1.drv`). That is **not** a full hello-closure byte ATerm match (`eval/drvdiff_test.go` closure test remains separate/skipped in short runs).
 
 ## CGO
 
