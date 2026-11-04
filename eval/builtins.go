@@ -1524,7 +1524,11 @@ func builtinGenList(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	}
 	out := make([]*Value, n.Int)
 	for i := int64(0); i < n.Int; i++ {
-		out[i] = ev.deferredApplyCall(f, Int(i), pos)
+		el, err := ev.applyCall(f, Int(i), pos)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = el
 	}
 	return List(out...), nil
 }

@@ -34,15 +34,25 @@ Import now proceeds past `mkDerivation`; next failure (separate): `all-packages.
 
 ## Blocker: `all-packages.nix:6681` (`stdenv.cc.isGNU`)
 
-**Symptom:** `GOONIX_DEBUG_TYPE=1` → at `6681:8`, want attribute set, got **`kind=null`** (`stdenv.cc` is null when `gccStdenv` runs).
+**Symptom:** `(builtins.tryEval pkgs).success` is **false** in goonix (error at `6681:8`, `stdenv.cc` null in `gccStdenv`); Nix 2.24.9 returns **true**.
 
 **Oracle:** `builtins.typeOf (import nixpkgs {…}).stdenv.cc` → `"set"` (Nix 2.24.9).
 
-**Force stack (import / `typeOf pkgs`):** Linux boot `dfold` → stage `assert isBuiltByNixpkgsCompiler prevStage.glibc` → forces `pkgs.glibc` → `callPackage … { stdenv = gccStdenv; }` (`all-packages.nix:10294`) → `makeOverridable` (`customisation.nix:165`) → **`gccStdenv` at `:6681`** (`if stdenv.cc.isGNU`) with **`stdenv.cc` null** in goonix.
+**Force stack (import / `tryEval pkgs`):** Linux boot `dfold` → stage `assert isBuiltByNixpkgsCompiler prevStage.glibc` → forces `pkgs.glibc` → `callPackage … { stdenv = gccStdenv; }` (`all-packages.nix:10294`) → `makeOverridable` (`customisation.nix:165`) → **`gccStdenv` at `:6681`** (`if stdenv.cc.isGNU`) with **`stdenv.cc` null** in goonix.
 
-**Not the cause:** lazy `map`/`genList` overlay at 727 (fixed); `tryEval` deep-forcing (fixed — now WHNF-only like Nix).
+**Boot / dfold audit (goonix vs Nix 2.24.9):**
 
-**Still to fix:** why boot `pkgs.stdenv.cc` is null when `gccStdenv` is forced (stage stdenv / `prevStage.gcc` / cc-wrapper shape), or match Nix laziness so `glibc`/`gccStdenv` are not forced on that boot path yet.
+| Oracle | Result |
+|--------|--------|
+| `testdata/oracle/dfold_stage_order.nix` (3 stages) | **match** |
+| `testdata/oracle/dfold_nine_stage_order.nix` (9 stages, linux count) | **match** |
+| `testdata/oracle/dfold_succ_binding.nix` (`succ = go cur (n+1)`) | **match** |
+| `testdata/oracle/list_boot_primitives.nix` (`imap1`, `reverseList`, `genList`, `foldl'`, …) | **match** |
+| `testdata/oracle/linux_boot_stage_dfold.nix` (real stageFuns + stub merge) | Nix **cannot** strict-eval chain (asserts); goonix logs `chainByDfoldIndex` in test |
+
+**Eval change:** `builtins.genList` is **eager** again (map/`concatMap` stay lazy via `deferredApplyCall`) so boot `imap1`/`dfold` list cells match Nix bootstrapping expectations.
+
+**Still to fix:** why real boot + `allPackages` forces `gccStdenv` with null `stdenv.cc` under `tryEval pkgs` while Nix does not (stage `prevStage` / cc-wrapper / laziness on the glibc assert path).
 
 ## Reverted (wrong semantics)
 
