@@ -24,19 +24,24 @@ import (
 	"strings"
 
 	"github.com/connerohnesorge/goonix/data"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store"
 )
 
 // Builtin is a primitive function registered on the global builtin attrset.
 type Builtin struct {
-	Name string
-	Fn   func(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
+	Name    string
+	Nullary bool // auto-apply when selected as an attribute (e.g. nixVersion)
+	Fn      func(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 }
 
 func (ev *Evaluator) registerBuiltins() {
 	register := func(name string, fn func(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)) {
 		ev.Builtins[name] = &Builtin{Name: name, Fn: fn}
+	}
+	registerNullary := func(name string, fn func(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)) {
+		ev.Builtins[name] = &Builtin{Name: name, Nullary: true, Fn: fn}
 	}
 
 	register("import", builtinImport)
@@ -74,12 +79,12 @@ func (ev *Evaluator) registerBuiltins() {
 	register("toFile", builtinToFile)
 	register("path", builtinPath)
 	register("filterSource", builtinFilterSourceStub)
-	register("nixPath", builtinNixPath)
+	registerNullary("nixPath", builtinNixPath)
 	register("findFile", builtinFindFile)
-	register("storeDir", builtinStoreDir)
-	register("nixVersion", builtinNixVersion)
+	registerNullary("storeDir", builtinStoreDir)
+	registerNullary("nixVersion", builtinNixVersion)
 	register("compareVersions", builtinCompareVersions)
-	register("currentSystem", builtinCurrentSystem)
+	registerNullary("currentSystem", builtinCurrentSystem)
 	register("fetchurl", builtinFetchurl)
 }
 
@@ -108,12 +113,11 @@ func builtinImport(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err != nil {
 		return nil, err
 	}
-	path = resolveImportPath(path)
-	expr, err := parser.ParseFile(path)
-	if err != nil {
-		return nil, err
+	if (strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../")) && ev.curFile != "" {
+		path = filepath.Join(filepath.Dir(ev.curFile), path)
 	}
-	moduleVal, err := ev.evalExpr(expr, NewEnv())
+	path = resolveImportPath(path)
+	moduleVal, err := ev.importModule(path)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +125,27 @@ func builtinImport(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 		return moduleVal, nil
 	}
 	return ev.applyCall(moduleVal, args[1], pos)
+}
+
+func (ev *Evaluator) importModule(path string) (*Value, error) {
+	if cached, ok := ev.importCache[path]; ok {
+		return cached, nil
+	}
+	expr, err := parser.ParseFile(path)
+	if err != nil {
+		return nil, err
+	}
+	prev := ev.curFile
+	ev.curFile = path
+	defer func() { ev.curFile = prev }()
+	env := NewEnv()
+	env.bind(ev.Intern.Intern("builtins"), ev.BuiltinAttrSet())
+	moduleVal, err := ev.evalExpr(expr, env)
+	if err != nil {
+		return nil, err
+	}
+	ev.importCache[path] = moduleVal
+	return moduleVal, nil
 }
 
 func resolveImportPath(path string) string {
@@ -1043,7 +1068,7 @@ func builtinCompareVersions(ev *Evaluator, pos parser.Pos, args []*Value) (*Valu
 }
 
 func builtinNixVersion(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-	return Str("2.18.0-goonix", pos), nil
+	return Str(oracle.NixVersion, pos), nil
 }
 
 func builtinCurrentSystem(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {

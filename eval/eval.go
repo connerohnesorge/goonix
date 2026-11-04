@@ -17,6 +17,7 @@ package eval
 import (
 	"fmt"
 	"math"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -49,7 +50,9 @@ type Evaluator struct {
 	NixPath  *NixPath
 	StoreCfg storeConfig
 
-	curFile string
+	curFile     string
+	importDepth int
+	importCache map[string]*Value
 }
 
 type storeConfig struct {
@@ -60,10 +63,11 @@ type storeConfig struct {
 func NewEvaluator() *Evaluator {
 	intern := data.NewInterner()
 	e := &Evaluator{
-		Intern:  intern,
-		Effects: PureEffects{},
-		Builtins: make(map[string]*Builtin),
-		NixPath: NewNixPathFromEnv(),
+		Intern:      intern,
+		Effects:     PureEffects{},
+		Builtins:    make(map[string]*Builtin),
+		NixPath:     NewNixPathFromEnv(),
+		importCache: make(map[string]*Value),
 	}
 	e.registerBuiltins()
 	return e
@@ -76,6 +80,15 @@ func (ev *Evaluator) WithEffects(eff Effects) *Evaluator {
 	if eff != nil {
 		c.StoreCfg.storeDir = eff.StoreDir()
 	}
+	if c.importCache == nil {
+		c.importCache = make(map[string]*Value)
+	} else {
+		cache := make(map[string]*Value, len(ev.importCache))
+		for k, v := range ev.importCache {
+			cache[k] = v
+		}
+		c.importCache = cache
+	}
 	return &c
 }
 
@@ -86,6 +99,11 @@ func (ev *Evaluator) Eval(expr parser.Expr) (*Value, error) {
 		return nil, err
 	}
 	return ev.forceValue(v)
+}
+
+// SetCurFile sets the path of the expression being evaluated (for relative imports).
+func (ev *Evaluator) SetCurFile(path string) {
+	ev.curFile = path
 }
 
 // EvalWithBuiltins evaluates expr with `builtins` in scope.
@@ -116,6 +134,9 @@ func (ev *Evaluator) EvalString(src string) (*Value, error) {
 func (ev *Evaluator) evalExpr(expr parser.Expr, env *Env) (*Value, error) {
 	if expr == nil {
 		return Null(), nil
+	}
+	if p := expr.Pos(); p.File != "" {
+		ev.curFile = p.File
 	}
 	switch e := expr.(type) {
 	case *parser.Integer:
@@ -303,6 +324,11 @@ func (ev *Evaluator) evalPath(p *parser.Path, env *Env) (*Value, error) {
 		}
 		return Path(resolved), nil
 	}
+	if strings.HasPrefix(text, "./") || strings.HasPrefix(text, "../") {
+		if ev.curFile != "" {
+			text = filepath.Join(filepath.Dir(ev.curFile), text)
+		}
+	}
 	if strings.HasPrefix(text, "./") || strings.HasPrefix(text, "../") || strings.HasPrefix(text, "/") {
 		return Path(text), nil
 	}
@@ -337,12 +363,35 @@ func (ev *Evaluator) evalAttrSet(a *parser.AttrSet, env *Env, fromLet bool) (*Va
 	}
 
 	for _, inh := range a.Inherit {
-		if err := ev.evalInherit(inh, bindEnv, av); err != nil {
+		if err := ev.bindAttrInherit(inh, bindEnv, av); err != nil {
 			return nil, err
 		}
 	}
 
 	return av, nil
+}
+
+func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, env *Env, av *Value) error {
+	for _, n := range inh.Names {
+		name := n.Name
+		if n.Expr != nil {
+			continue
+		}
+		sym := ev.Intern.Intern(name)
+		var expr parser.Expr
+		if inh.From != nil {
+			expr = &parser.Select{
+				P:    inh.Pos,
+				Expr: inh.From,
+				Path: []parser.AttrName{{Name: name}},
+			}
+		} else {
+			expr = &parser.Var{P: inh.Pos, Name: name}
+		}
+		t := ev.newThunk(expr, env, inh.Pos)
+		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
+	}
+	return nil
 }
 
 func (ev *Evaluator) bindingSym(b parser.Binding) data.Symbol {
@@ -420,6 +469,11 @@ func (ev *Evaluator) evalInherit(inh parser.Inherit, env *Env, av *Value) error 
 func (ev *Evaluator) evalLet(l *parser.Let, env *Env) (*Value, error) {
 	child := env.extend()
 	if l.Attrs != nil {
+		for _, inh := range l.Attrs.Inherit {
+			if err := ev.bindLetInherit(inh, child); err != nil {
+				return nil, err
+			}
+		}
 		for _, bind := range l.Attrs.Binds {
 			sym := ev.bindingSym(bind)
 			if sym == 0 {
@@ -427,17 +481,31 @@ func (ev *Evaluator) evalLet(l *parser.Let, env *Env) (*Value, error) {
 			}
 			child.bindThunk(sym, ev.newThunk(bind.Value, child, bind.Pos))
 		}
-		for _, inh := range l.Attrs.Inherit {
-			tmp := Attrs(false)
-			if err := ev.evalInherit(inh, child, tmp); err != nil {
-				return nil, err
-			}
-			for sym, b := range tmp.Attrs.Binds {
-				child.bind(sym, b.Value)
-			}
-		}
 	}
 	return ev.evalExpr(l.Body, child)
+}
+
+func (ev *Evaluator) bindLetInherit(inh parser.Inherit, env *Env) error {
+	for _, n := range inh.Names {
+		name := n.Name
+		if n.Expr != nil {
+			// inherit (from) ${name} — handled via dynamic name in inherit from set
+			continue
+		}
+		sym := ev.Intern.Intern(name)
+		var expr parser.Expr
+		if inh.From != nil {
+			expr = &parser.Select{
+				P:    inh.Pos,
+				Expr: inh.From,
+				Path: []parser.AttrName{{Name: name}},
+			}
+		} else {
+			expr = &parser.Var{P: inh.Pos, Name: name}
+		}
+		env.bindThunk(sym, ev.newThunk(expr, env, inh.Pos))
+	}
+	return nil
 }
 
 func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
@@ -487,6 +555,9 @@ func (ev *Evaluator) applyLambda(l *LambdaValue, args []*Value, pos parser.Pos) 
 }
 
 func (ev *Evaluator) applyFormals(l *LambdaValue, args []*Value, child *Env, pos parser.Pos) (*Value, error) {
+	if l.SimpleArg != "" && len(args) == 1 {
+		child.bind(ev.Intern.Intern(l.SimpleArg), args[0])
+	}
 	named := make(map[string]*Value)
 	var rest []*Value
 	if len(args) == 1 && args[0].Kind == VKAttrs {
@@ -580,6 +651,9 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 			continue
 		}
 		return nil, evalErr(s.P, "value is not an attribute set")
+	}
+	if fb.Kind == VKBuiltin && fb.Builtin != nil && fb.Builtin.Nullary {
+		return fb.Builtin.Fn(ev, s.P, nil)
 	}
 	return fb, nil
 }
@@ -687,6 +761,27 @@ func (ev *Evaluator) evalBinary(b *parser.BinaryOp, env *Env) (*Value, error) {
 		}
 		if !lb {
 			return Bool(false), nil
+		}
+		r, err := ev.evalExpr(b.Right, env)
+		if err != nil {
+			return nil, err
+		}
+		rb, err := ev.forceBool(ev, r, env)
+		if err != nil {
+			return nil, err
+		}
+		return Bool(rb), nil
+	case "->":
+		l, err := ev.evalExpr(b.Left, env)
+		if err != nil {
+			return nil, err
+		}
+		lb, err := ev.forceBool(ev, l, env)
+		if err != nil {
+			return nil, err
+		}
+		if !lb {
+			return Bool(true), nil
 		}
 		r, err := ev.evalExpr(b.Right, env)
 		if err != nil {
@@ -914,7 +1009,7 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		return t.memo, nil
 	}
 	if t.locked {
-		return nil, evalErr(t.pos, "infinite recursion encountered")
+		return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 	}
 	t.locked = true
 	v, err := t.eval.evalExpr(t.expr, t.env)
@@ -973,6 +1068,12 @@ func (ev *Evaluator) forceString(v *Value) (string, error) {
 	fv, err := ev.forceValue(v)
 	if err != nil {
 		return "", err
+	}
+	if fv.Kind == VKBuiltin && fv.Builtin != nil && fv.Builtin.Nullary {
+		fv, err = fv.Builtin.Fn(ev, parser.Pos{}, nil)
+		if err != nil {
+			return "", err
+		}
 	}
 	if fv.Kind == VKString {
 		return fv.String, nil
