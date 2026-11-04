@@ -3,7 +3,8 @@ package eval_test
 import "testing"
 
 func TestBootstrapStage2XgccATermMatchesNix(t *testing.T) {
-	bootstrapATermOracleLogical(t, "-xgcc-13.3.0.drv")
+	nixKey, goKey, ev, _ := bootstrapStage2XgccPair(t)
+	bootstrapATermOracleKeys(t, nixKey, goKey, ev)
 }
 
 func TestBootstrapStage2BinutilsWrapperATermMatchesNix(t *testing.T) {

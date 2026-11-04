@@ -11,7 +11,9 @@ go test ./eval -run 'TestImportNixpkgsLibVersion|TestNullDynamic|TestXgccNoEmpty
 
 - **Null dynamic attr names** (`${if … then "CC" else null} = …`) are dropped like Nix (fixes xgcc **`env[""] = "gcc -m64"`** from gcc’s solaris `CC` stub).
 - **`derivationStrict` env context invariant** in eval: string-context drv outputs must appear in env text and in `inputDrvs`; structured attrs checked via `__json`.
-- **`derivationStrict` memo** by `drvAttrs` attr-set identity (same attrs → same strict result).
+- **`derivationStrict` memo** by `drvAttrs` attr-set identity; **`WithVerifyStrictMemo`** recomputes on cache hit in tests.
+- **`builtins.placeholder`** string context + env materialization (`/hash` refs like Nix); oracle **`TestPlaceholderMaterializesInDerivationStrictEnv`**.
+- **Topological byte-first diff** (`drvdiff.CompareBytesBottomUpNameStdenv`) pairs by **`name` + `env.stdenv`**; **`TestBootstrapStage2XgccTopologicalByteFirstNameStdenv`**.
 - **`outPath`-only** attrset coercion (no `out` fallback).
 
 ## Bootstrap ATerm ladder
@@ -20,7 +22,9 @@ go test ./eval -run 'TestImportNixpkgsLibVersion|TestNullDynamic|TestXgccNoEmpty
 |------|--------|
 | bootstrap-tools, stage0/1 | **green** |
 | stage2 cc / ERP stdenv oracles | **green** |
-| xgcc, binutils-wrapper, gcc-wrapper, stage2 stdenv | **red** (byte ATerm; logical-name paired tests) |
+| perl (stage1) placeholder env | **fixed** (configureFlags); downstream hashes still diverge until stdenv list/env bugs fixed |
+| stage1 stdenv `defaultNativeBuildInputs` | **red** (path set / store prefix vs Nix; topo culprit) |
+| xgcc, binutils-wrapper, gcc-wrapper, stage2 stdenv | **red** (byte ATerm; pair by gcc-wrapper → xgcc) |
 | stdenvNoCC, hello, curl | **red** |
 
 ## Import / contexts

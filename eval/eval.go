@@ -68,6 +68,8 @@ type Evaluator struct {
 
 	materializeStorePaths bool // true while coercing derivation env strings (path → store)
 	inStringInterpolation bool // "${path}" / string+path string contexts
+
+	verifyStrictMemo bool // recompute derivationStrict on memo hit and assert identical (tests)
 }
 
 // CopyPathTraceEvent records a store copy during evaluation (testing/diagnostics).

@@ -131,27 +131,30 @@ func parseOutputNamesFromEnv(s string) (map[string]struct{}, error) {
 	return out, nil
 }
 
-func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue, pos parser.Pos) error {
+func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue, pos parser.Pos) (map[string][]StringContextElem, error) {
 	if attrs == nil || attrs.Kind != VKAttrs {
-		return evalErr(pos, "derivationStrict expects attribute set")
+		return nil, evalErr(pos, "derivationStrict expects attribute set")
 	}
 
 	ignoreNulls := false
 	if b := attrs.Attrs.Binds[ev.Intern.Intern("__ignoreNulls")]; b != nil {
 		tv, err := ev.attrsBindingForce(b)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		ignoreNulls, err = ev.forceBool(ev, tv, nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	if structured, err := ev.structuredAttrsEnabled(attrs); err != nil {
-		return err
+		return nil, err
 	} else if structured {
-		return ev.fillStructuredDerivationFromAttrs(attrs, drv, pos, ignoreNulls)
+		if err := ev.fillStructuredDerivationFromAttrs(attrs, drv, pos, ignoreNulls); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
 
 	syms := make([]data.Symbol, 0, len(attrs.Attrs.Binds))
@@ -175,7 +178,7 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 		b := attrs.Attrs.Binds[sym]
 		val, err := ev.attrsBindingForce(b)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if ignoreNulls && val.Kind == VKNull {
 			continue
@@ -184,17 +187,17 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 		if key == "args" {
 			lv, err := ev.forceValue(val)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if lv.Kind != VKList {
-				return evalErr(pos, "args must be a list")
+				return nil, evalErr(pos, "args must be a list")
 			}
 			drv.Args = nil
 			for _, el := range lv.List {
 				subCol := newDerivationInputCollector()
 				s, elCtx, err := ev.coerceDerivationEnvString(el, pos, subCol)
 				if err != nil {
-					return err
+					return nil, err
 				}
 				drv.Args = append(drv.Args, s)
 				col.merge(subCol)
@@ -206,7 +209,7 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 		subCol := newDerivationInputCollector()
 		s, sCtx, err := ev.coerceDerivationEnvString(val, pos, subCol)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		drv.Env[key] = s
 		envCtx[key] = sCtx
@@ -226,7 +229,7 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 		case "outputs":
 			outs, err := parseOutputNamesFromEnv(s)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			drv.Outputs = outs
 		}
@@ -236,10 +239,10 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 	_ = outputHashMode
 
 	if drv.Builder == "" {
-		return evalErr(pos, "required attribute 'builder' missing")
+		return nil, evalErr(pos, "required attribute 'builder' missing")
 	}
 	if drv.System == "" {
-		return evalErr(pos, "required attribute 'system' missing")
+		return nil, evalErr(pos, "required attribute 'system' missing")
 	}
 	if len(drv.Outputs) == 0 {
 		drv.Outputs = map[string]struct{}{"out": {}}
@@ -247,7 +250,7 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 
 	drv.InputDerivations, drv.InputSources = col.toGoNixMaps()
 	if err := ev.verifyDerivationEnvContext(drv, envCtx); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return envCtx, nil
 }

@@ -23,6 +23,7 @@ type ATermBytes interface {
 // ByteCulprit is the first paired node in leaf-first order whose ATerm bytes differ
 // while every paired input derivation already matches byte-for-byte.
 type ByteCulprit struct {
+	PairID      string
 	LogicalName string
 	NixKey      string
 	GoonixKey   string
@@ -30,38 +31,103 @@ type ByteCulprit struct {
 	GoonixPath  string
 	NixATerm    []byte
 	GoonixATerm []byte
+	EnvDiffs    []FieldDiff
 }
 
 // CompareBytesBottomUp finds the first ATerm mismatch in topological (leaves-first) order.
 func CompareBytesBottomUp(nixDoc, goDoc drvshow.Document, nixRootKey, goRootKey string, src ATermBytes) (*ByteCulprit, error) {
-	pairs := pairClosureByLogical(nixDoc, goDoc)
-	if pairs == nil {
+	pairsAll := pairClosureByLogical(nixDoc, goDoc)
+	return compareBytesBottomUpFromRoot(nixDoc, goDoc, nixRootKey, pairsAll, logicalPairID(nixDoc, nixRootKey), src, func(key string) string {
+		return drvshow.LogicalName(key)
+	})
+}
+
+// CompareBytesBottomUpNameStdenv pairs nodes by drvshow.NameStdenvPairID (name + env.stdenv stage).
+func CompareBytesBottomUpNameStdenv(nixDoc, goDoc drvshow.Document, nixRootKey, goRootKey string, src ATermBytes) (*ByteCulprit, error) {
+	pairsAll := pairClosureByNameStdenv(nixDoc, goDoc)
+	return compareBytesBottomUpFromRoot(nixDoc, goDoc, nixRootKey, pairsAll, nameStdenvPairID(nixDoc, nixRootKey), src, func(key string) string {
+		return nameStdenvPairID(nixDoc, key)
+	})
+}
+
+func logicalPairID(doc drvshow.Document, key string) string {
+	return drvshow.LogicalName(key)
+}
+
+func nameStdenvPairID(doc drvshow.Document, key string) string {
+	e, ok := doc.Derivations[key]
+	if !ok {
+		return ""
+	}
+	return drvshow.NameStdenvPairID(e)
+}
+
+func compareBytesBottomUpFromRoot(nixDoc, goDoc drvshow.Document, nixRootKey string, pairsAll map[string]keyPair, rootID string, src ATermBytes, idOfKey func(string) string) (*ByteCulprit, error) {
+	if pairsAll == nil {
 		return nil, fmt.Errorf("no paired derivations")
 	}
-	rootLogical := drvshow.LogicalName(nixRootKey)
-	if _, ok := pairs[rootLogical]; !ok {
-		return nil, fmt.Errorf("root logical %q not paired", rootLogical)
+	closure := closurePairIDs(nixDoc, nixRootKey, idOfKey)
+	pairs := make(map[string]keyPair, len(closure))
+	for id := range closure {
+		p, ok := pairsAll[id]
+		if !ok {
+			continue
+		}
+		pairs[id] = p
 	}
+	if _, ok := pairs[rootID]; !ok {
+		return nil, fmt.Errorf("root pair id %q not paired (nix=%s)", rootID, nixRootKey)
+	}
+	return compareBytesBottomUpPairs(nixDoc, goDoc, pairs, idOfKey, src)
+}
 
+func closurePairIDs(doc drvshow.Document, rootKey string, idOfKey func(string) string) map[string]struct{} {
+	out := make(map[string]struct{})
+	var walk func(string)
+	walk = func(key string) {
+		if key == "" {
+			return
+		}
+		id := idOfKey(key)
+		if id == "" {
+			return
+		}
+		if _, ok := out[id]; ok {
+			return
+		}
+		out[id] = struct{}{}
+		e, ok := doc.Derivations[key]
+		if !ok {
+			return
+		}
+		for dk := range e.Inputs.Drvs {
+			walk(dk)
+		}
+	}
+	walk(rootKey)
+	return out
+}
+
+func compareBytesBottomUpPairs(nixDoc, goDoc drvshow.Document, pairs map[string]keyPair, idOfKey func(string) string, src ATermBytes) (*ByteCulprit, error) {
 	deps := make(map[string][]string, len(pairs))
-	for logical, p := range pairs {
+	for id, p := range pairs {
 		n := nixDoc.Derivations[p.nixKey]
 		seen := map[string]struct{}{}
-		for k := range n.Inputs.Drvs {
-			dep := drvshow.LogicalName(k)
-			if dep == logical {
+		for dk := range n.Inputs.Drvs {
+			depID := idOfKey(dk)
+			if depID == "" || depID == id {
 				continue
 			}
-			if _, ok := pairs[dep]; !ok {
+			if _, ok := pairs[depID]; !ok {
 				continue
 			}
-			if _, ok := seen[dep]; ok {
+			if _, ok := seen[depID]; ok {
 				continue
 			}
-			seen[dep] = struct{}{}
-			deps[logical] = append(deps[logical], dep)
+			seen[depID] = struct{}{}
+			deps[id] = append(deps[id], depID)
 		}
-		sort.Strings(deps[logical])
+		sort.Strings(deps[id])
 	}
 
 	order, err := topoLeavesFirstByDepth(deps, pairs)
@@ -75,8 +141,8 @@ func CompareBytesBottomUp(nixDoc, goDoc drvshow.Document, nixRootKey, goRootKey 
 		return len(nb) > 0 && len(gb) > 0 && string(nb) == string(gb)
 	}
 
-	for _, logical := range order {
-		p := pairs[logical]
+	for _, id := range order {
+		p := pairs[id]
 		nb := src.NixATerm(p.nixKey)
 		gb := src.GoATerm(p.goKey)
 		if len(nb) == 0 || len(gb) == 0 {
@@ -86,7 +152,7 @@ func CompareBytesBottomUp(nixDoc, goDoc drvshow.Document, nixRootKey, goRootKey 
 			continue
 		}
 		inputsOK := true
-		for _, dep := range deps[logical] {
+		for _, dep := range deps[id] {
 			dp := pairs[dep]
 			if !bytesEqual(dp.nixKey, dp.goKey) {
 				inputsOK = false
@@ -96,14 +162,19 @@ func CompareBytesBottomUp(nixDoc, goDoc drvshow.Document, nixRootKey, goRootKey 
 		if !inputsOK {
 			continue
 		}
+		nEntry := nixDoc.Derivations[p.nixKey]
+		gEntry := goDoc.Derivations[p.goKey]
+		envDiffs := fieldDiffs(nEntry, gEntry)
 		return &ByteCulprit{
-			LogicalName: logical,
+			PairID:      id,
+			LogicalName: drvshow.LogicalName(p.nixKey),
 			NixKey:      p.nixKey,
 			GoonixKey:   p.goKey,
 			NixDrvPath:  src.NixDrvPath(p.nixKey),
 			GoonixPath:  src.GoDrvPath(p.goKey),
 			NixATerm:    nb,
 			GoonixATerm: gb,
+			EnvDiffs:    envDiffs,
 		}, nil
 	}
 	return nil, nil
@@ -127,6 +198,24 @@ func pairClosureByLogical(nixDoc, goDoc drvshow.Document) map[string]keyPair {
 			continue
 		}
 		out[logical] = keyPair{nixKey: nk, goKey: k}
+	}
+	return out
+}
+
+func pairClosureByNameStdenv(nixDoc, goDoc drvshow.Document) map[string]keyPair {
+	nixBy := make(map[string]string)
+	for k, e := range nixDoc.Derivations {
+		id := drvshow.NameStdenvPairID(e)
+		nixBy[id] = k
+	}
+	out := make(map[string]keyPair)
+	for k, e := range goDoc.Derivations {
+		id := drvshow.NameStdenvPairID(e)
+		nk, ok := nixBy[id]
+		if !ok {
+			continue
+		}
+		out[id] = keyPair{nixKey: nk, goKey: k}
 	}
 	return out
 }
@@ -223,13 +312,25 @@ func FormatByteCulprit(c *ByteCulprit) string {
 		return "all paired .drv ATerm bodies match (leaf-first scan)\n"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "first byte mismatch (inputs match) logical=%q\n", c.LogicalName)
+	fmt.Fprintf(&b, "first byte mismatch (inputs match) pair=%q logical=%q\n", c.PairID, c.LogicalName)
 	fmt.Fprintf(&b, "  nix key:    %s\n", c.NixKey)
 	fmt.Fprintf(&b, "  goonix key: %s\n", c.GoonixKey)
 	fmt.Fprintf(&b, "  nix drvPath:    %s\n", c.NixDrvPath)
 	fmt.Fprintf(&b, "  goonix drvPath: %s\n", c.GoonixPath)
+	for _, d := range c.EnvDiffs {
+		if strings.HasPrefix(d.Path, "env.") {
+			fmt.Fprintf(&b, "  %s nix=%q go=%q\n", d.Path, truncField(d.Nix, 200), truncField(d.Goonix, 200))
+		}
+	}
 	b.WriteString(formatByteDiff(c.NixATerm, c.GoonixATerm, 120))
 	return b.String()
+}
+
+func truncField(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 func formatByteDiff(nix, goonix []byte, context int) string {

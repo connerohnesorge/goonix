@@ -988,8 +988,18 @@ func builtinStorePath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 	return Path(p), nil
 }
 
-func builtinPlaceholder(_ *Evaluator, pos parser.Pos, _ []*Value) (*Value, error) {
-	return Str("unknown-tee", pos), nil
+func builtinPlaceholder(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	out, err := ev.forceString(args[0])
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		out = "out"
+	}
+	return StrWithContext(placeholderText, []StringContextElem{{Output: out}}, pos), nil
 }
 
 func builtinDerivationStrict(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1025,7 +1035,6 @@ func builtinDerivation(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 }
 
 func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
-	pos := parser.Pos{}
 	if ev.forceTrace {
 		ev.forceFrames = append(ev.forceFrames, "derivationStrict")
 		defer func() { ev.forceFrames = ev.forceFrames[:len(ev.forceFrames)-1] }()
@@ -1035,9 +1044,19 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 			ev.drvStrictByAttrs = make(map[*AttrSet]*DerivationValue)
 		}
 		if cached, ok := ev.drvStrictByAttrs[attrs.Attrs]; ok && cached != nil {
+			if ev.verifyStrictMemo {
+				if err := ev.verifyStrictMemoMatch(attrs, cached); err != nil {
+					return nil, err
+				}
+			}
 			return cached, nil
 		}
 	}
+	return ev.computeAttrsToDerivation(attrs)
+}
+
+func (ev *Evaluator) computeAttrsToDerivation(attrs *Value) (*DerivationValue, error) {
+	pos := parser.Pos{}
 	getS := func(name string) (string, error) {
 		sym := ev.Intern.Intern(name)
 		b, ok := attrs.Attrs.Binds[sym]
@@ -1057,7 +1076,8 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 		return nil, err
 	}
 	drv := &DerivationValue{Name: name}
-	if err := ev.fillDerivationFromAttrs(attrs, drv, pos); err != nil {
+	envCtx, err := ev.fillDerivationFromAttrs(attrs, drv, pos)
+	if err != nil {
 		return nil, err
 	}
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
@@ -1067,6 +1087,10 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 	}
 	drv.DrvPath = drvPath
 	drv.OutPaths = outPaths
+	ev.materializeDerivationEnvPlaceholders(drv, envCtx)
+	if err := ev.verifyDerivationEnvContext(drv, envCtx); err != nil {
+		return nil, err
+	}
 	ev.rememberStrictDerivation(drv)
 	if attrs != nil && attrs.Kind == VKAttrs && attrs.Attrs != nil && ev.drvStrictByAttrs != nil {
 		ev.drvStrictByAttrs[attrs.Attrs] = drv

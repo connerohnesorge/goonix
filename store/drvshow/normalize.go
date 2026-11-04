@@ -38,6 +38,15 @@ func DrvKey(drvPath string) string {
 	return path.Base(drvPath)
 }
 
+// NameStdenvPairID pairs derivations by pkg name and the logical stdenv drv (env.stdenv).
+func NameStdenvPairID(e Entry) string {
+	stage := ""
+	if v := e.Env["stdenv"]; v != "" {
+		stage = LogicalName(v)
+	}
+	return e.Name + "\x1e" + stage
+}
+
 // LogicalName is the human-readable suffix after the store hash (e.g. bash-5.3p20).
 func LogicalName(storePathOrDrv string) string {
 	fp := StoreFingerprint(drvPathKey(storePathOrDrv))
