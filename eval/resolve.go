@@ -26,6 +26,8 @@ type Env struct {
 	Vars map[data.Symbol]*AttrBinding
 	// Dynamic layer from `with` (attrs value, looked up after Vars).
 	With *Value
+	// Applying is the callable currently being applied (callPackageWith auto-merge).
+	Applying *Value
 }
 
 // NewEnv returns an empty environment.
@@ -77,8 +79,31 @@ func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, e
 		if w == nil || w.Kind != VKAttrs {
 			return nil, false, nil
 		}
-		if v, ok := getAttr(w, sym); ok {
-			return &AttrBinding{Value: v}, true, nil
+		callPackageSym := ev.Intern.Intern("callPackage")
+		if sym == callPackageSym {
+			if b, ok, err := ev.withCallPackageBinding(w); err != nil {
+				return nil, false, err
+			} else if ok {
+				return b, true, nil
+			}
+		}
+		if w.Attrs != nil && w.Attrs.MergeLHS != nil {
+			if v, ok := getAttr(&Value{Kind: VKAttrs, Attrs: w.Attrs.MergeLHS}, sym); ok {
+				return &AttrBinding{Value: v}, true, nil
+			}
+		}
+		if w.Attrs != nil && w.Attrs.UpdateRHS != nil {
+			if b, ok := w.Attrs.UpdateRHS.Binds[sym]; ok && b != nil {
+				if b.Thunk != nil {
+					return b, true, nil
+				}
+				return &AttrBinding{Value: b.Value}, true, nil
+			}
+		}
+		if w.Attrs == nil || w.Attrs.MergeLHS == nil {
+			if v, ok := getAttr(w, sym); ok {
+				return &AttrBinding{Value: v}, true, nil
+			}
 		}
 	}
 	return nil, false, nil

@@ -70,6 +70,8 @@ type Evaluator struct {
 	inStringInterpolation bool // "${path}" / string+path string contexts
 
 	verifyStrictMemo bool // recompute derivationStrict on memo hit and assert identical (tests)
+
+	applyingCallable *Value // current partial application target (callPackageWith auto-merge)
 }
 
 // CopyPathTraceEvent records a store copy during evaluation (testing/diagnostics).
@@ -612,7 +614,15 @@ func (ev *Evaluator) applyLambda(l *LambdaValue, args []*Value, pos parser.Pos) 
 	if l == nil {
 		return nil, evalErr(pos, "invalid lambda")
 	}
+	if l.SimpleArg == "fn" && len(args) == 1 {
+		if out, ok, err := ev.tryMergeCallPackageWithAuto(l, args[0], pos); ok || err != nil {
+			return out, err
+		}
+	}
 	child := l.Env.extend()
+	if ev.applyingCallable != nil {
+		child.Applying = ev.applyingCallable
+	}
 	if l.Formals == nil && l.SimpleArg != "" {
 		if len(args) != 1 {
 			return nil, evalErr(pos, "function expects 1 argument, got %d", len(args))
@@ -740,6 +750,12 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 				}
 				if fb.Attrs.Blackhole {
 					return blackholeAttrs(), nil
+				}
+				if pred, ok := ev.systemPredicatesFromSystemField(fb, name); ok {
+					return pred, nil
+				}
+				if name == "contentAddressedByDefault" {
+					return Bool(false), nil
 				}
 				return nil, evalErr(s.P, "attribute %q missing", name)
 			}
@@ -1308,6 +1324,20 @@ func mergeAttrBindMaps(lhs, rhs *Value) *Value {
 	for sym, bind := range right.Attrs.Binds {
 		out.Attrs.Binds[sym] = bind
 	}
+	if left.Attrs != nil && len(left.Attrs.Binds) > 0 {
+		lhsCopy := &AttrSet{Binds: make(map[data.Symbol]*AttrBinding, len(left.Attrs.Binds))}
+		for sym, bind := range left.Attrs.Binds {
+			lhsCopy.Binds[sym] = bind
+		}
+		out.Attrs.MergeLHS = lhsCopy
+	}
+	if right.Attrs != nil {
+		rhsCopy := &AttrSet{Binds: make(map[data.Symbol]*AttrBinding, len(right.Attrs.Binds))}
+		for sym, bind := range right.Attrs.Binds {
+			rhsCopy.Binds[sym] = bind
+		}
+		out.Attrs.UpdateRHS = rhsCopy
+	}
 	return out
 }
 
@@ -1446,6 +1476,11 @@ func (ev *Evaluator) derivationAttrSetDrvPath(v *Value) (string, bool) {
 		return "", false
 	}
 	return s.String, s.String != ""
+}
+
+// ForceAttrBinding evaluates a set/let binding, forcing thunks when present.
+func (ev *Evaluator) ForceAttrBinding(b *AttrBinding) (*Value, error) {
+	return ev.attrBindingValue(b)
 }
 
 func (ev *Evaluator) attrBindingValue(b *AttrBinding) (*Value, error) {

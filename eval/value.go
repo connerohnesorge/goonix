@@ -81,6 +81,10 @@ type AttrSet struct {
 	Recursive bool
 	Blackhole bool // in-progress fixpoint placeholder
 	Binds     map[data.Symbol]*AttrBinding
+	// MergeLHS holds left-hand bindings from `lhs // rhs` for `with` lookup before RHS overlay.
+	MergeLHS *AttrSet
+	// UpdateRHS holds right-hand bindings from `lhs // rhs` for `with` lookup (Nix fixpoint merge).
+	UpdateRHS *AttrSet
 }
 
 // AttrBinding is one attribute, optionally deferred.
