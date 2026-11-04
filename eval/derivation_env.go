@@ -6,7 +6,6 @@ package eval
 
 import (
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/connerohnesorge/goonix/data"
@@ -128,91 +127,12 @@ func (ev *Evaluator) isDerivationAttrSet(v *Value) (bool, error) {
 }
 
 func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *derivationInputCollector) (string, error) {
-	fv, err := ev.forceValue(v)
+	sv, err := ev.coerceToString(v, CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true})
 	if err != nil {
 		return "", err
 	}
-	switch fv.Kind {
-	case VKNull:
-		return "", nil
-	case VKBool:
-		if fv.Bool {
-		 return "1", nil
-		}
-		return "", nil
-	case VKInt:
-		return strconv.FormatInt(fv.Int, 10), nil
-	case VKFloat:
-		return strconv.FormatFloat(fv.Float, 'g', -1, 64), nil
-	case VKString:
-		col.mergeValueContext(fv)
-		return fv.String, nil
-	case VKPath:
-		col.mergeValueContext(fv)
-		return fv.Path, nil
-	case VKList:
-		var parts []string
-		for _, el := range fv.List {
-			subCol := newDerivationInputCollector()
-			p, err := ev.coerceDerivationEnvString(el, pos, subCol)
-			if err != nil {
-				return "", err
-			}
-			if p != "" {
-				parts = append(parts, p)
-			}
-			col.merge(subCol)
-		}
-		return strings.Join(parts, " "), nil
-	case VKAttrs:
-		ok, err := ev.isDerivationAttrSet(fv)
-		if err != nil {
-			return "", err
-		}
-		if !ok {
-			return "", evalErr(pos, "cannot coerce %s to a string", valueKindName(fv.Kind))
-		}
-		outName := "out"
-		if b := fv.Attrs.Binds[ev.Intern.Intern("outputName")]; b != nil {
-			if tv, err := ev.attrsBindingForce(b); err == nil {
-				if s, err := ev.forceString(tv); err == nil && s != "" {
-					outName = s
-				}
-			}
-		}
-		var outPath string
-		if b := fv.Attrs.Binds[ev.Intern.Intern(outName)]; b != nil {
-			if tv, err := ev.attrsBindingForce(b); err == nil {
-				switch tv.Kind {
-				case VKPath:
-					outPath = tv.Path
-				default:
-					outPath, _ = ev.forceString(tv)
-				}
-			}
-		}
-		if outPath == "" {
-			if b := fv.Attrs.Binds[ev.Intern.Intern("outPath")]; b != nil {
-				if tv, err := ev.attrsBindingForce(b); err == nil && tv.Kind == VKPath {
-					outPath = tv.Path
-				}
-			}
-		}
-		var drvPath string
-		if b := fv.Attrs.Binds[ev.Intern.Intern("drvPath")]; b != nil {
-			if tv, err := ev.attrsBindingForce(b); err == nil && tv.Kind == VKPath {
-				drvPath = tv.Path
-			}
-		}
-		if drvPath != "" {
-			col.addDrv(drvPath, outName)
-			return outPath, nil
-		}
-		col.addSrc(outPath)
-		return outPath, nil
-	default:
-		return "", evalErr(pos, "cannot coerce %s to a string", valueKindName(fv.Kind))
-	}
+	col.mergeValueContext(sv)
+	return sv.String, nil
 }
 
 func parseOutputNamesFromEnv(s string) (map[string]struct{}, error) {

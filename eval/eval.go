@@ -276,6 +276,8 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 
 func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 	var b strings.Builder
+	var ctx []StringContextElem
+	cc := CoerceContext{Mode: CoerceString, Pos: s.P}
 	for _, part := range s.Parts {
 		if part.Interp == nil {
 			b.WriteString(part.Text)
@@ -285,17 +287,20 @@ func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		fv, err := ev.forceValue(v)
+		sv, err := ev.coerceToString(v, cc)
 		if err != nil {
 			return nil, err
 		}
-		b.WriteString(fv.DisplayString(ev, ev.Intern))
+		b.WriteString(sv.String)
+		ctx = mergeStringContexts(ctx, sv.Ctx)
 	}
-	return Str(b.String(), s.P), nil
+	return StrWithContext(b.String(), ctx, s.P), nil
 }
 
 func (ev *Evaluator) evalIndentedString(s *parser.IndentedString, env *Env) (*Value, error) {
 	var b strings.Builder
+	var ctx []StringContextElem
+	cc := CoerceContext{Mode: CoerceString, Pos: s.P}
 	for _, part := range s.Parts {
 		if part.Interp == nil {
 			b.WriteString(part.Text)
@@ -305,13 +310,14 @@ func (ev *Evaluator) evalIndentedString(s *parser.IndentedString, env *Env) (*Va
 		if err != nil {
 			return nil, err
 		}
-		fv, err := ev.forceValue(v)
+		sv, err := ev.coerceToString(v, cc)
 		if err != nil {
 			return nil, err
 		}
-		b.WriteString(fv.DisplayString(ev, ev.Intern))
+		b.WriteString(sv.String)
+		ctx = mergeStringContexts(ctx, sv.Ctx)
 	}
-	return Str(b.String(), s.P), nil
+	return StrWithContext(b.String(), ctx, s.P), nil
 }
 
 func (ev *Evaluator) evalPath(p *parser.Path, env *Env) (*Value, error) {
@@ -964,10 +970,8 @@ func (ev *Evaluator) evalArithmetic(b *parser.BinaryOp, env *Env) (*Value, error
 	if err != nil {
 		return nil, err
 	}
-	if b.Op == "+" && (fl.Kind == VKString || fr.Kind == VKString) {
-		ls, _ := ev.forceString(fl)
-		rs, _ := ev.forceString(fr)
-		return Str(ls+rs, b.P), nil
+	if b.Op == "+" && (fl.Kind == VKString || fr.Kind == VKString || fl.Kind == VKPath || fr.Kind == VKPath) {
+		return ev.concatCoercedStrings(fl, fr, b.P)
 	}
 	if fl.Kind == VKInt && fr.Kind == VKInt {
 		switch b.Op {
@@ -1101,10 +1105,17 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 		return Int(sum), nil
 	}
 	var b strings.Builder
+	var ctx []StringContextElem
+	cc := CoerceContext{Mode: CoerceString, Pos: c.P}
 	for _, fv := range vals {
-		b.WriteString(fv.DisplayString(ev, ev.Intern))
+		sv, err := ev.coerceToString(fv, cc)
+		if err != nil {
+			return nil, err
+		}
+		b.WriteString(sv.String)
+		ctx = mergeStringContexts(ctx, sv.Ctx)
 	}
-	return Str(b.String(), c.P), nil
+	return StrWithContext(b.String(), ctx, c.P), nil
 }
 
 func (ev *Evaluator) evalOpUpdate(b *parser.BinaryOp, env *Env) (*Value, error) {
@@ -1257,26 +1268,17 @@ func (ev *Evaluator) valueToBool(v *Value) (bool, error) {
 
 func (ev *Evaluator) forceString(v *Value) (string, error) {
 	pos := parser.Pos{}
-	if v != nil && v.Kind == VKDeferred && v.Deferred != nil {
+	if v != nil && v.Pos.File != "" {
+		pos = v.Pos
+	}
+	if v != nil && v.Kind == VKDeferred && v.Deferred != nil && pos.File == "" {
 		pos = v.Deferred.pos
 	}
-	fv, err := ev.mustWHNF(v, pos)
+	sv, err := ev.coerceToString(v, CoerceContext{Mode: CoerceString, Pos: pos})
 	if err != nil {
 		return "", err
 	}
-	if fv.Kind == VKBuiltin && fv.Builtin != nil && fv.Builtin.Nullary {
-		fv, err = fv.Builtin.Fn(ev, parser.Pos{}, nil)
-		if err != nil {
-			return "", err
-		}
-	}
-	if fv.Kind == VKString {
-		return fv.String, nil
-	}
-	if fv.Kind == VKPath {
-		return fv.Path, nil
-	}
-	return fv.DisplayString(ev, ev.Intern), nil
+	return sv.String, nil
 }
 
 func (ev *Evaluator) concatValues(a, b *Value, pos parser.Pos) (*Value, error) {
@@ -1293,15 +1295,7 @@ func (ev *Evaluator) concatValues(a, b *Value, pos parser.Pos) (*Value, error) {
 		return List(out...), nil
 	}
 	if fa.Kind == VKString || fb.Kind == VKString || fa.Kind == VKPath || fb.Kind == VKPath {
-		as, err := ev.forceString(fa)
-		if err != nil {
-			return nil, err
-		}
-		bs, err := ev.forceString(fb)
-		if err != nil {
-			return nil, err
-		}
-		return Str(as+bs, pos), nil
+		return ev.concatCoercedStrings(fa, fb, pos)
 	}
 	return nil, evalErr(pos, "cannot concatenate values")
 }

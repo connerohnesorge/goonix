@@ -219,11 +219,11 @@ func builtinToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	v, err := ev.forceValue(args[0])
+	sv, err := ev.coerceToString(args[0], CoerceContext{Mode: CoerceString, Pos: pos})
 	if err != nil {
 		return nil, err
 	}
-	return Str(v.DisplayString(ev, ev.Intern), pos), nil
+	return Str(sv.String, pos), nil
 }
 
 func builtinMap(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1010,7 +1010,8 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 		if err != nil {
 			return "", err
 		}
-		return ev.forceString(v)
+		col := newDerivationInputCollector()
+		return ev.coerceDerivationEnvString(v, pos, col)
 	}
 	name, err := getS("name")
 	if err != nil {
