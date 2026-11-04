@@ -145,19 +145,6 @@ func (ev *Evaluator) coerceAttrSetToString(fv *Value, cc CoerceContext) (*Value,
 		if err != nil {
 			return nil, err
 		}
-		sv, err := ev.coerceToString(tv, cc)
-		if err != nil {
-			return nil, err
-		}
-		if sv.String != "" || cc.Mode != CoerceString || !ev.materializeStorePaths {
-			return sv, nil
-		}
-	}
-	if b := fv.Attrs.Binds[intern.Intern("out")]; b != nil {
-		tv, err := ev.attrsBindingForce(b)
-		if err != nil {
-			return nil, err
-		}
 		return ev.coerceToString(tv, cc)
 	}
 	return nil, evalErr(cc.Pos, "cannot coerce %s to a string", valueKindName(VKAttrs))
