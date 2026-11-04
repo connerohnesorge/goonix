@@ -157,9 +157,6 @@ func (ev *Evaluator) valueToStructuredJSON(v *Value, pos parser.Pos, col *deriva
 		col.mergeValueContext(fv)
 		return fv.String, nil
 	case VKPath:
-		prev := ev.coerceEnvStrings
-		ev.coerceEnvStrings = true
-		defer func() { ev.coerceEnvStrings = prev }()
 		sv, err := ev.coerceToString(fv, CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true})
 		if err != nil {
 			return nil, err
