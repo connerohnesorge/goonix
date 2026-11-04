@@ -106,6 +106,9 @@ func isSRIHashString(h string) bool {
 }
 
 func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *derivationInputCollector) (string, error) {
+	prev := ev.coerceEnvStrings
+	ev.coerceEnvStrings = true
+	defer func() { ev.coerceEnvStrings = prev }()
 	sv, err := ev.coerceToString(v, CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true})
 	if err != nil {
 		return "", err
@@ -143,6 +146,12 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 		if err != nil {
 			return err
 		}
+	}
+
+	if structured, err := ev.structuredAttrsEnabled(attrs); err != nil {
+		return err
+	} else if structured {
+		return ev.fillStructuredDerivationFromAttrs(attrs, drv, pos, ignoreNulls)
 	}
 
 	syms := make([]data.Symbol, 0, len(attrs.Attrs.Binds))

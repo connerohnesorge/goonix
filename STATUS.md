@@ -7,38 +7,22 @@ Oracle: **Nix 2.24.9**, nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. 
 ```bash
 bash scripts/check-cgo.sh
 go test ./store/... -run 'TestParseFixedOutput|TestStorePathForFilesystemPath' -count=1
-go test ./eval/... -run 'TestFetchurlSRI|TestPkgConfigFetchurl|TestDrvDiffStdenvNoCC|TestStdenvNoCCMkDerivation' -count=1
+go test ./eval/... -run 'TestGlibcBootstrap|TestBootstrapStage0Binutils|TestCurlPlatform|TestSelectOr' -count=1
 go test ./ladder/... -count=1
 ```
 
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
 | #2 | Eval core / laziness | **partial** |
-| #13 | Ladder / goldens | **partial** — `input_drv`, `toFile` **green**; hello / stdenvNoCC / curl still red (bootstrap closure drv hashes) |
+| #13 | Ladder / goldens | **partial** — `input_drv`, `toFile` **green**; hello / stdenvNoCC / curl still red |
 
-## FOD / fetchurl (fixed)
+## Bootstrap ATerm chain (green)
 
-- **`ParseFixedOutputHash`:** legacy **nix-base32** `outputHash` with explicit `outputHashAlgo` (nixpkgs `fetchurl`, e.g. pkg-config) via `nixhash.ParseAny(hash, &algo)`; SRI still works with empty algo.
-- **Do not clear** explicit `outputHashAlgo` when `outputHash` is SRI — nixpkgs fetchurl keeps both; only `<nix/fetchurl.nix>` sets `outputHashAlgo = ""` for SRI via the `.nix` default.
-- **Oracle:** `store/parse_fixed_output_test.go`, `eval/pkg_config_fetchurl_oracle_test.go`, `eval/fetchurl_sri_oracle_test.go` (**green**).
-
-## Filesystem path → store (fixed)
-
-- **`StorePathForFilesystemPath`:** Nix `hashStringsModulo("source", "sha256", base16NarHash, storeDir, name)` + `CompressHash` (was wrongly using raw NAR digest as path hash).
-- **String interpolation:** `evalString` uses `CopyPaths` with `Stat` guard before copying.
-- **Oracle:** `store/path_store_oracle_test.go` vs `builtins.path` (**green**).
-
-## drv-diff (extended)
-
-- **Leaf-first ATerm byte compare:** `CompareBytesBottomUp` + `FormatByteCulprit` (first paired node whose raw `.drv` bytes differ while input `.drv` bytes all match). Use `AnalyseWithATerm` / `goonix drv-diff`.
-- Normalized field diff retained (`FormatMismatchDetail`) for debugging only.
-- **Byte culprit (stdenvNoCC inst):** `bootstrap-stage0-binutils-wrapper-` — `installPhase` / `postFixup` still embed **source paths** instead of copied store paths for `${./…-wrapper.sh}` (path→string / string context). glibc-bootstrapFiles + bootstrap-stage0-stdenv-linux ATerm oracles **green**; vendored `eval-okay-ind-string` **green**.
-
-## Fixes (bootstrap chain)
-
-- **`''` strings:** Nix 2.24.9 parse-time `stripIndentation` (per literal, no eval-time indent memory); lexer `''(\ *\n)?`, `'''` → `''`, `''` escapes and lone `$`/`'` in text; `"..."` unescape at parse (`decodeRegularStringText`).
-- **inputSrcs / inputDrvs:** only from string **context** at coercion time (`mergeValueContext` on `Ctx` only); no scanning env text or path fallback.
-- **Oracles:** `eval/derivation_env_inputsrc_test.go`, `eval/ind_string_lang_test.go`, `testdata/lang/eval-okay-ind-string.nix`, `parse-okay-ind-string.nix`, `eval/glibc_bootstrap_files_aterm_test.go`, `eval/bootstrap_stdenv_linux_aterm_test.go`.
+- **`''` strings:** parse-time `stripIndentation` only (Nix 2.24.9).
+- **Derivation env paths:** `coerceEnvStrings` + single `coerceToString` with `CopyPaths` for `''`/`""` and concat parts; `store.CopyPathToStore` uses `0755` while building trees (fixes empty `-by-name` store objects); `RealiseStorePath` skips only non-empty store paths.
+- **`__structuredAttrs`:** JSON env via `fillStructuredDerivationFromAttrs` (Nix `printValueAsJSON` shape).
+- **`builtins.fromJSON`:** attr keys use `ev.Intern` (was a fresh interner — broke `sdkVersions.${…}` and apple-sdk on linux).
+- **Oracles:** `TestGlibcBootstrapFilesATermMatchesNix`, `TestBootstrapStage0StdenvLinuxATermMatchesNix`, `TestBootstrapStage0BinutilsWrapperATermMatchesNix`, `TestCurlPlatformProbeMatchesNix`, `TestSelectOrMissingAttrMatchesNix` (**green**). No `lib.throw` injection; global `throw` via `evalVar` → `Builtins`.
 
 ## Ladder goldens
 
@@ -46,15 +30,19 @@ go test ./ladder/... -count=1
 |------|------|--------|
 | inputDrvs | `TestInputDrvLadderMatchesGolden` | **green** |
 | toFile | `TestToFileLadderMatchesGolden` | **green** |
-| hello | `TestHelloDrvPathMatchesGolden` | **red** (full hello closure) |
+| hello | `TestHelloDrvPathMatchesGolden` | **red** |
 | stdenvNoCC | `TestStdenvNoCCLadderMatchesGolden` | **red** |
-| curl | `TestCurlLadderMatchesGolden` | **red** — reaches `lib.throw` on apple-sdk (linux host SDK major); not missing `throw` attr |
+| curl | `TestCurlLadderMatchesGolden` | **red** — check-meta python propagation assert during closure (past apple-sdk / `fromJSON`) |
 
-## Still red
+## Still red / next
 
-- `TestStdenvNoCCMkDerivationOracleMatchesNix`, `TestDrvDiffStdenvNoCCProbeReportsDeepest` (next: `bootstrap-stage0-binutils-wrapper-`)
-- `TestHelloDrvPathMatchesGolden`, stdenv/curl ladder (downstream)
+- Ladder hello / stdenvNoCC / curl `drvPath` goldens vs oracle
+- `TestStdenvNoCCMkDerivationOracleMatchesNix`, `TestDrvDiffStdenvNoCCProbeReportsDeepest` (if not covered by ATerm chain)
 
 ## derivationStrict rungs 1–10
 
 **Green** drvPath + ATerm oracles (`eval/derivation_strict_rung_test.go`).
+
+## CGO
+
+`bash scripts/check-cgo.sh` — **green** (no CGO in module graph).

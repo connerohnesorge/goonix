@@ -192,37 +192,12 @@ func (ev *Evaluator) importModule(path string) (*Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.HasSuffix(path, string(filepath.Separator)+"lib"+string(filepath.Separator)+"default.nix") ||
-		strings.HasSuffix(path, "/lib/default.nix") {
-		moduleVal = ev.injectLibThrow(moduleVal)
-	}
 	ev.importCache[path] = moduleVal
 	return moduleVal, nil
 }
 
-func (ev *Evaluator) injectLibThrow(v *Value) *Value {
-	fv, err := ev.forceAttrs(v, parser.Pos{})
-	if err != nil || fv == nil {
-		return v
-	}
-	throwB, ok := ev.Builtins["throw"]
-	if !ok {
-		return v
-	}
-	sym := ev.Intern.Intern("throw")
-	if _, exists := fv.Attrs.Binds[sym]; exists {
-		return fv
-	}
-	out := Attrs(fv.Attrs.Recursive)
-	for k, b := range fv.Attrs.Binds {
-		out.Attrs.Binds[k] = b
-	}
-	out.Attrs.Binds[sym] = &AttrBinding{Value: &Value{Kind: VKBuiltin, Builtin: throwB}}
-	return out
-}
-
 func (ev *Evaluator) bindCorepkgsEnv(env *Env) {
-	for _, name := range []string{"derivation", "baseNameOf", "toString", "dirOf", "throw"} {
+	for _, name := range []string{"derivation", "baseNameOf", "toString", "dirOf"} {
 		if b, ok := ev.Builtins[name]; ok {
 			env.bind(ev.Intern.Intern(name), &Value{Kind: VKBuiltin, Builtin: b})
 		}
@@ -896,10 +871,10 @@ func builtinFromJSON(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	if err := json.Unmarshal([]byte(s), &raw); err != nil {
 		return nil, evalErr(pos, "invalid JSON: %v", err)
 	}
-	return jsonToValue(raw, pos), nil
+	return jsonToValue(ev, raw, pos), nil
 }
 
-func jsonToValue(raw any, pos parser.Pos) *Value {
+func jsonToValue(ev *Evaluator, raw any, pos parser.Pos) *Value {
 	switch t := raw.(type) {
 	case nil:
 		return Null()
@@ -915,14 +890,13 @@ func jsonToValue(raw any, pos parser.Pos) *Value {
 	case []any:
 		elems := make([]*Value, len(t))
 		for i, el := range t {
-			elems[i] = jsonToValue(el, pos)
+			elems[i] = jsonToValue(ev, el, pos)
 		}
 		return List(elems...)
 	case map[string]any:
 		av := Attrs(false)
-		intern := data.NewInterner()
 		for k, v := range t {
-			av.Attrs.Binds[intern.Intern(k)] = &AttrBinding{Value: jsonToValue(v, pos)}
+			av.Attrs.Binds[ev.Intern.Intern(k)] = &AttrBinding{Value: jsonToValue(ev, v, pos)}
 		}
 		return av
 	default:
@@ -938,7 +912,7 @@ func builtinToJSON(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := valueToJSON(v)
+	raw, err := valueToJSON(ev, v)
 	if err != nil {
 		return nil, err
 	}
@@ -949,22 +923,26 @@ func builtinToJSON(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	return Str(string(b), pos), nil
 }
 
-func valueToJSON(v *Value) (any, error) {
-	switch v.Kind {
+func valueToJSON(ev *Evaluator, v *Value) (any, error) {
+	fv, err := ev.forceValue(v)
+	if err != nil {
+		return nil, err
+	}
+	switch fv.Kind {
 	case VKNull:
 		return nil, nil
 	case VKBool:
-		return v.Bool, nil
+		return fv.Bool, nil
 	case VKInt:
-		return v.Int, nil
+		return fv.Int, nil
 	case VKFloat:
-		return v.Float, nil
+		return fv.Float, nil
 	case VKString:
-		return v.String, nil
+		return fv.String, nil
 	case VKList:
-		out := make([]any, len(v.List))
-		for i, el := range v.List {
-			x, err := valueToJSON(el)
+		out := make([]any, len(fv.List))
+		for i, el := range fv.List {
+			x, err := valueToJSON(ev, el)
 			if err != nil {
 				return nil, err
 			}
@@ -973,14 +951,26 @@ func valueToJSON(v *Value) (any, error) {
 		return out, nil
 	case VKAttrs:
 		m := make(map[string]any)
-		for sym, bind := range v.Attrs.Binds {
-			// sym is data.Symbol but we need intern lookup - skip for stub
-			_ = sym
-			_ = bind
+		for sym, bind := range fv.Attrs.Binds {
+			name := ev.Intern.Lookup(sym)
+			var el *Value
+			if bind.Thunk != nil {
+				el, err = ev.forceValue(Deferred(bind.Thunk))
+			} else {
+				el = bind.Value
+			}
+			if err != nil {
+				return nil, err
+			}
+			x, err := valueToJSON(ev, el)
+			if err != nil {
+				return nil, err
+			}
+			m[name] = x
 		}
 		return m, nil
 	default:
-		return fmt.Sprintf("<%v>", v.Kind), nil
+		return fmt.Sprintf("<%v>", fv.Kind), nil
 	}
 }
 

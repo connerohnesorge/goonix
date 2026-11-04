@@ -47,7 +47,7 @@ func (PureEffects) Stat(path string) (fs.FileInfo, error) {
 }
 
 func (PureEffects) RealiseStorePath(storePath string, produce func() error) error {
-	if _, err := os.Stat(storePath); err == nil {
+	if storePathMaterialised(storePath) {
 		return nil
 	}
 	return produce()
@@ -78,13 +78,26 @@ func (IOEffects) Stat(path string) (fs.FileInfo, error) {
 }
 
 func (e IOEffects) RealiseStorePath(storePath string, produce func() error) error {
-	if _, err := os.Stat(storePath); err == nil {
+	if storePathMaterialised(storePath) {
 		return nil
 	}
 	if err := produce(); err != nil {
 		return err
 	}
 	return nil
+}
+
+// storePathMaterialised reports whether storePath already holds a non-empty object.
+func storePathMaterialised(storePath string) bool {
+	info, err := os.Stat(storePath)
+	if err != nil {
+		return false
+	}
+	if !info.IsDir() {
+		return true
+	}
+	entries, err := os.ReadDir(storePath)
+	return err == nil && len(entries) > 0
 }
 
 func (e IOEffects) StoreDir() string {

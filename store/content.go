@@ -96,12 +96,12 @@ func copyPathRecursive(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o555); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
 		return os.WriteFile(dst, data, info.Mode()&0o777)
 	}
-	if err := os.MkdirAll(dst, 0o555); err != nil {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
 	entries, err := os.ReadDir(src)

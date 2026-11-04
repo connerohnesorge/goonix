@@ -63,6 +63,8 @@ type Evaluator struct {
 	drvStrictByPath map[string]*DerivationValue
 	strictDrvs      map[string]*gonixdrv.Derivation // every derivationStrict result, keyed by drvPath
 	moduloCache     *store.ModuloCache
+
+	coerceEnvStrings bool // true while coercing derivation env strings (path → store)
 }
 
 type storeConfig struct {
@@ -277,7 +279,7 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 	var b strings.Builder
 	var ctx []StringContextElem
-	cc := CoerceContext{Mode: CoerceString, Pos: s.P, CopyPaths: true}
+	cc := CoerceContext{Mode: CoerceString, Pos: s.P, CopyPaths: ev.coerceEnvStrings}
 	for _, part := range s.Parts {
 		if part.Interp == nil {
 			b.WriteString(part.Text)
@@ -287,7 +289,11 @@ func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		sv, err := ev.coerceToString(v, cc)
+		ccCopy := cc
+		if ev.coerceEnvStrings {
+			ccCopy.CopyPaths = true
+		}
+		sv, err := ev.coerceToString(v, ccCopy)
 		if err != nil {
 			return nil, err
 		}
@@ -573,9 +579,6 @@ func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
 func (ev *Evaluator) evalOrFallback(base parser.Expr, rest []parser.Expr, env *Env, pos parser.Pos) (*Value, error) {
 	baseVal, err := ev.evalExpr(base, env)
 	if err != nil {
-		if len(rest) > 0 && isMissingAttributeErr(err) {
-			return ev.evalExpr(rest[0], env)
-		}
 		return nil, err
 	}
 	if baseVal != nil && baseVal.Kind == VKDeferred {
@@ -583,9 +586,6 @@ func (ev *Evaluator) evalOrFallback(base parser.Expr, rest []parser.Expr, env *E
 	}
 	fb, err := ev.forceWHNF(baseVal, pos)
 	if err != nil {
-		if len(rest) > 0 && isMissingAttributeErr(err) {
-			return ev.evalExpr(rest[0], env)
-		}
 		return nil, err
 	}
 	if fb != nil && fb.Kind == VKNull {
@@ -1093,6 +1093,9 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 	for i, fv := range vals {
 		partCC := cc
 		partCC.Pos = c.Parts[i].Pos()
+		if ev.coerceEnvStrings {
+			partCC.CopyPaths = true
+		}
 		sv, err := ev.coerceToString(fv, partCC)
 		if err != nil {
 			return nil, err
@@ -1417,14 +1420,4 @@ func (ev *Evaluator) attrBindingValue(b *AttrBinding) (*Value, error) {
 // attrsBindingForce is an alias used by derivation and attr coercion call sites.
 func (ev *Evaluator) attrsBindingForce(b *AttrBinding) (*Value, error) {
 	return ev.attrBindingValue(b)
-}
-
-func isMissingAttributeErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	if ee, ok := err.(*EvalError); ok {
-		return strings.Contains(ee.Msg, "attribute") && strings.Contains(ee.Msg, "missing")
-	}
-	return strings.Contains(err.Error(), "attribute") && strings.Contains(err.Error(), "missing")
 }
