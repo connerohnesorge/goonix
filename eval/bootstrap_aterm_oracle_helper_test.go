@@ -14,6 +14,20 @@ import (
 	"github.com/connerohnesorge/goonix/store/drvshow"
 )
 
+func assertClosureKeySetsEqual(t *testing.T, nixDoc, goDoc drvshow.Document) {
+	t.Helper()
+	nixKeys := drvshow.ClosureKeySet(nixDoc)
+	goKeys := drvshow.ClosureKeySet(goDoc)
+	if len(nixKeys) != len(goKeys) {
+		t.Fatalf("closure size nix=%d go=%d", len(nixKeys), len(goKeys))
+	}
+	for i := range nixKeys {
+		if nixKeys[i] != goKeys[i] {
+			t.Fatalf("closure key mismatch at %d: nix=%q go=%q", i, nixKeys[i], goKeys[i])
+		}
+	}
+}
+
 func bootstrapATermOracleLogical(t *testing.T, logicalSuffix string) {
 	t.Helper()
 	if _, err := os.Stat("/nix/store"); err != nil {
@@ -69,6 +83,12 @@ func bootstrapATermOracleLogical(t *testing.T, logicalSuffix string) {
 }
 
 func pairClosureKeysBySuffix(nixDoc, goDoc drvshow.Document, suffix string) (nixKey, goKey string) {
+	matched := drvshow.MatchKeysBySuffix(nixDoc, goDoc, suffix)
+	sort.Strings(matched)
+	if len(matched) > 0 {
+		return matched[0], matched[0]
+	}
+	// Fallback when store hashes differ but logical+stdenv pairing is needed (rare).
 	var nixCandidates []string
 	for k := range nixDoc.Derivations {
 		if strings.HasSuffix(k, suffix) {

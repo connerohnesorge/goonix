@@ -20,7 +20,7 @@ func ParseDerivationShowJSON(out []byte) (Document, error) {
 		if probe.Derivations == nil {
 			probe.Derivations = map[string]Entry{}
 		}
-		return Document{Derivations: probe.Derivations, Version: probe.Version}, nil
+		return NormalizeDocument(Document{Derivations: probe.Derivations, Version: probe.Version}), nil
 	}
 	var legacy map[string]Entry
 	if err := json.Unmarshal(out, &legacy); err != nil {
@@ -29,5 +29,5 @@ func ParseDerivationShowJSON(out []byte) (Document, error) {
 	if len(legacy) == 0 {
 		return Document{}, fmt.Errorf("derivation show JSON: empty document")
 	}
-	return Document{Derivations: legacy, Version: 0}, nil
+	return NormalizeDocument(Document{Derivations: legacy, Version: 0}), nil
 }
