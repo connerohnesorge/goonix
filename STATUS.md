@@ -10,38 +10,42 @@ go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
-| #2 | Eval core / laziness | **partial** — strict blackhole; Nix `//` order; lazy `or` / `addErrorContext`; modules `config` still recurses |
-| #13 | Ladder / goldens | **blocked** on modules `config` |
+| #2 | Eval core / laziness | **partial** — strict blackhole; lazy `zipAttrsWith`, formals, `or`, `addErrorContext`; import `pkgs //` still recurses |
+| #13 | Ladder / goldens | **blocked** on full `import <nixpkgs>` (`splice.nix` / `callPackage`) |
 
 ## Strict blackhole (no partial memo)
 
 Removed: `currentForce`, `publishAttrSetIfForcing`, `publishBindingIfForcing`, `shouldPrimeUpdateLHS`, locked-thunk memo peek during force.
 
-- **`//`**: RHS `evalAttrs` then LHS (Nix `evalOpUpdate` order).
 - **`forceValue` / `forceThunk`**: locked without completed memo → infinite recursion (no partial attrset).
 - **Fixpoint tests**: bare `final // { … }` is **invalid in real Nix** (`testdata/oracle/fixpoint_bare_update.nix`); tests use **`lib.extends` + `lib.fix`** (`fixpoint_extends.nix`).
 
 ## Laziness fixes (Nix-aligned)
 
-- **`e1 or e2`**: cursed-invoke / `SelectOr` — do not `mustWHNF`/`forceValue` the fixpoint when choosing the left side.
-- **`builtins.addErrorContext`**: lazy wrapper (context applied when the inner value is forced).
-- **`equalValues`**: WHNF peel; `null` on either side without deep attr forcing.
-- **`builtins.is*`**: `mustWHNF` on the scrutinee (not full `forceValue`).
-- **`with` lookups**: `forceWHNF` on the attrset (not `forceAttrs`).
+- **Formals** (`applyFormals`): `forceAttrs` on the single argument (WHNF only); bind declared formals as lazy refs from the arg set; defaults lazy; do not copy the whole arg attrset into the env.
+- **`a.${n} or d` (`SelectOr`)**: force base to WHNF only; if present return binding unforced; else default. Cursed `e or e2` stays in `evalCall` / `evalOrFallback`.
+- **`mapAttrs` / `functionArgs` / `addErrorContext`**: `mapAttrs` forces function + set WHNF; values are lazy `f name attr`; `functionArgs` forces only the function; `addErrorContext` returns the value and attaches context on force failure (`Thunk.errCtx`).
+- **`//`**: both operands `evalAttrs` (WHNF heads); merge binding maps without forcing values.
+- **`zipAttrsWith`**: **lazy per output key** (was eagerly forcing every name in the union — root cause of `lib/modules.nix:270` via `pushedDownDefinitionsByName`).
+- **`with` + pending `//`**: RHS attribute lookup on unevaluated `lhs // rhs` for missing names (e.g. `callPackage` on fixpoint self).
+- **`equalValues`**: WHNF peel; `null` short-circuit.
+- **`builtins.is*`**: `mustWHNF` on scrutinee.
+- **`with` lookups**: `forceWHNF` on the attrset (plus pending `//` RHS).
 
 ## Oracle reproducers
 
 See `testdata/oracle/` and `eval/oracle_repro_test.go` (runs when `nix-instantiate` is on PATH).
 
-## Blocker: `lib/modules.nix:270` (`config` fixpoint)
+## Blocker: full `import <nixpkgs>`
 
-Minimal repro: `eval/modules_config_repro_test.go` (`configEval.config` with `config.nix` + `{ config = { }; }`).
+- **`TestEvalModulesTopLevelConfigNix`**: **green** (fixed via lazy `zipAttrsWith`).
+- **Import / hello golden**: **red** — e.g. `pkgs/top-level/splice.nix:152` (`pkgs // …` while `pkgs` fixpoint still forcing); xorg `callPackage` scope.
 
-Nix evaluates this; goonix still recurses while evaluating option `_module.freeformType` and **module argument `config`** (`applyModuleArgs` / `addErrorContext` path). Next trace: who forces the `config` formal during option merge before the merged `config` let completes.
+Debug: `GOONIX_TRACE_FORCE=1 go test ./eval/... -run TestEvalModulesTopLevelConfigNix -v` prints a force stack on infinite recursion.
 
 ## Tests
 
 - `bash scripts/check-cgo.sh`: **green**
 - `go test ./lang/...`: **green**
-- Lib WHNF oracles, extends fixpoint, pending-merge `with self`, `evalModules` empty: **green**
-- Full `import <nixpkgs>` / hello golden: **red** (modules `config`)
+- Lib WHNF oracles, extends fixpoint, pending-merge `with self`, `evalModules` config repro: **green**
+- Full `import <nixpkgs>` / hello golden: **red**

@@ -17,6 +17,7 @@ package eval
 import (
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -53,6 +54,9 @@ type Evaluator struct {
 	curFile     string
 	importDepth int
 	importCache map[string]*Value
+
+	forceTrace  bool
+	forceFrames []string
 }
 
 type storeConfig struct {
@@ -70,6 +74,9 @@ func NewEvaluator() *Evaluator {
 		importCache: make(map[string]*Value),
 	}
 	e.registerBuiltins()
+	if os.Getenv("GOONIX_TRACE_FORCE") != "" {
+		e.forceTrace = true
+	}
 	return e
 }
 
@@ -617,9 +624,6 @@ func (ev *Evaluator) applyLambda(l *LambdaValue, args []*Value, pos parser.Pos) 
 }
 
 func (ev *Evaluator) applyFormals(l *LambdaValue, args []*Value, child *Env, pos parser.Pos) (*Value, error) {
-	if l.SimpleArg != "" && len(args) == 1 {
-		child.bind(ev.Intern.Intern(l.SimpleArg), args[0])
-	}
 	named := make(map[string]*Value)
 	var rest []*Value
 	if len(args) == 1 {
@@ -627,19 +631,40 @@ func (ev *Evaluator) applyFormals(l *LambdaValue, args []*Value, child *Env, pos
 		if err != nil {
 			return nil, err
 		}
-		if fa.Kind == VKAttrs {
-			for sym, bind := range fa.Attrs.Binds {
-				name := ev.Intern.Lookup(sym)
-				formalSym := ev.Intern.Intern(name)
-				if bind.Thunk != nil {
-					child.bindThunk(formalSym, bind.Thunk)
-				} else {
-					child.bind(formalSym, bind.Value)
+		if l.SimpleArg != "" {
+			if l.ArgFirst {
+				child.bind(ev.Intern.Intern(l.SimpleArg), fa)
+			} else {
+				child.bind(ev.Intern.Intern(l.SimpleArg), args[0])
+			}
+		}
+		if l.Formals != nil {
+			for _, f := range l.Formals.Params {
+				formalSym := ev.Intern.Intern(f.Name)
+				if b, ok := fa.Attrs.Binds[formalSym]; ok {
+					if b.Thunk != nil {
+						child.bindThunk(formalSym, b.Thunk)
+					} else {
+						child.bind(formalSym, b.Value)
+					}
+					continue
 				}
+				if f.Default != nil {
+					child.bindThunk(formalSym, ev.newThunk(f.Default, child, pos))
+					continue
+				}
+				return nil, evalErr(pos, "argument %q missing", f.Name)
+			}
+			if l.Formals.Ellipsis {
+				// Rest formal: pass the full attribute set (WHNF head only).
+				rest = []*Value{args[0]}
 			}
 		}
 	} else {
 		rest = args
+	}
+	if l.Formals == nil {
+		return ev.evalExpr(l.Body, child)
 	}
 	for _, f := range l.Formals.Params {
 		formalSym := ev.Intern.Intern(f.Name)
@@ -676,17 +701,11 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 	var fb *Value
 	if hasDefault {
 		fb, err = ev.forceWHNF(base, s.P)
-		if err != nil {
-			return nil, err
-		}
-		if fb != nil && (fb.Kind == VKDeferred || fb.Kind != VKAttrs) {
-			return ev.evalExpr(defaultExpr, env)
-		}
 	} else {
 		fb, err = ev.mustWHNF(base, s.P)
-		if err != nil {
-			return nil, err
-		}
+	}
+	if err != nil {
+		return nil, err
 	}
 	for i, seg := range s.Path {
 		name := seg.Name
@@ -702,6 +721,13 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 			name = ns
 		}
 		sym := ev.Intern.Intern(name)
+		if fb.Kind != VKAttrs {
+			if hasDefault {
+				return ev.evalExpr(defaultExpr, env)
+			}
+			ev.logTypeMismatchWant(s.P, fb, "attribute set")
+			return nil, evalErr(s.P, "value is not an attribute set")
+		}
 		if fb.Kind == VKAttrs {
 			b, ok := fb.Attrs.Binds[sym]
 			if !ok {
@@ -733,11 +759,6 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 			fb = next
 			continue
 		}
-		if hasDefault {
-			return ev.evalExpr(defaultExpr, env)
-		}
-		ev.logTypeMismatchWant(s.P, fb, "attribute set")
-		return nil, evalErr(s.P, "value is not an attribute set")
 	}
 	if fb.Kind == VKBuiltin && fb.Builtin != nil && fb.Builtin.Nullary {
 		return fb.Builtin.Fn(ev, s.P, nil)
@@ -1083,12 +1104,11 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 }
 
 func (ev *Evaluator) evalOpUpdate(b *parser.BinaryOp, env *Env) (*Value, error) {
-	// Nix evalOpUpdate: RHS evalAttrs, then LHS, then merge (RHS wins on key clash).
-	r, err := ev.evalAttrs(b.Right, env, b.P)
+	l, err := ev.evalAttrs(b.Left, env, b.P)
 	if err != nil {
 		return nil, err
 	}
-	l, err := ev.evalAttrs(b.Left, env, b.P)
+	r, err := ev.evalAttrs(b.Right, env, b.P)
 	if err != nil {
 		return nil, err
 	}
@@ -1106,11 +1126,19 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 	if t == nil {
 		return Null(), nil
 	}
+	if ev.forceTrace {
+		ev.forceFrames = append(ev.forceFrames, ev.describeThunk(t))
+		defer func() { ev.forceFrames = ev.forceFrames[:len(ev.forceFrames)-1] }()
+	}
 	if t.memo != nil && !t.locked {
 		return t.memo, nil
 	}
 	if t.locked {
-		return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
+		msg := fmt.Sprintf("infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
+		if ev.forceTrace && len(ev.forceFrames) > 0 {
+			msg += "\nforce stack (innermost last):\n  " + strings.Join(ev.forceFrames, "\n  ")
+		}
+		return nil, evalErr(t.pos, "%s", msg)
 	}
 	t.locked = true
 	defer func() {
@@ -1124,6 +1152,12 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		v, err = ev.evalExpr(t.expr, t.env)
 	}
 	if err != nil {
+		if t.errCtx != "" {
+			if ee, ok := err.(*EvalError); ok {
+				return nil, &EvalError{Pos: ee.Pos, Msg: t.errCtx + " " + ee.Msg}
+			}
+			return nil, fmt.Errorf("%s: %w", t.errCtx, err)
+		}
 		return nil, err
 	}
 	if v != nil && v.Kind == VKDeferred && v.Deferred == t {
@@ -1141,7 +1175,11 @@ func (ev *Evaluator) forceValue(v *Value) (*Value, error) {
 	for v != nil && v.Kind == VKDeferred && v.Deferred != nil {
 		t := v.Deferred
 		if t.locked {
-			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
+			msg := fmt.Sprintf("infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
+			if ev.forceTrace && len(ev.forceFrames) > 0 {
+				msg += "\nforce stack (innermost last):\n  " + strings.Join(ev.forceFrames, "\n  ")
+			}
+			return nil, evalErr(t.pos, "%s", msg)
 		}
 		if _, ok := seen[t]; ok {
 			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
@@ -1340,6 +1378,33 @@ func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+func (ev *Evaluator) describeThunk(t *Thunk) string {
+	if t == nil {
+		return "<nil>"
+	}
+	if t.errCtx != "" {
+		return t.errCtx
+	}
+	if t.lazy != nil {
+		return fmt.Sprintf("lazy@%s:%d", t.pos.File, t.pos.Line)
+	}
+	if t.expr != nil {
+		switch e := t.expr.(type) {
+		case *parser.Var:
+			return fmt.Sprintf("var %q@%s:%d", e.Name, e.P.File, e.P.Line)
+		case *parser.Select:
+			return fmt.Sprintf("select@%s:%d", e.P.File, e.P.Line)
+		case *parser.SelectOr:
+			return fmt.Sprintf("selectOr@%s:%d", e.P.File, e.P.Line)
+		case *parser.Call:
+			return fmt.Sprintf("call@%s:%d", e.P.File, e.P.Line)
+		default:
+			return fmt.Sprintf("%T@%s:%d", e, t.pos.File, t.pos.Line)
+		}
+	}
+	return fmt.Sprintf("thunk@%s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 }
 
 func (ev *Evaluator) attrBindingValue(b *AttrBinding) (*Value, error) {

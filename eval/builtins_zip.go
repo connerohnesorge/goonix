@@ -15,7 +15,7 @@ func builtinZipAttrsWith(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	f, err := ev.forceValue(args[0])
+	f, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -25,12 +25,9 @@ func builtinZipAttrsWith(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	}
 	var sets []*Value
 	for _, el := range setsList {
-		v, err := ev.forceValue(el)
+		v, err := ev.forceAttrs(el, pos)
 		if err != nil {
 			return nil, err
-		}
-		if v.Kind != VKAttrs {
-			return nil, evalErr(pos, "zipAttrsWith: expected list of attribute sets")
 		}
 		sets = append(sets, v)
 	}
@@ -51,32 +48,37 @@ func builtinZipAttrsWith(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 
 	out := Attrs(false)
 	for _, sym := range syms {
-		name := ev.Intern.Lookup(sym)
-		var vals []*Value
-		for _, s := range sets {
-			if b, ok := s.Attrs.Binds[sym]; ok && b != nil {
-				if b.Thunk != nil {
-					v, err := ev.forceThunk(b.Thunk)
-					if err != nil {
-						return nil, err
+		sym := sym
+		inSets := sets
+		t := &Thunk{
+			eval: ev,
+			pos:  pos,
+			lazy: func(ev *Evaluator) (*Value, error) {
+				name := ev.Intern.Lookup(sym)
+				var vals []*Value
+				for _, s := range inSets {
+					if b, ok := s.Attrs.Binds[sym]; ok && b != nil {
+						if b.Thunk != nil {
+							v, err := ev.forceThunk(b.Thunk)
+							if err != nil {
+								return nil, err
+							}
+							vals = append(vals, v)
+						} else if b.Value != nil {
+							vals = append(vals, b.Value)
+						}
 					}
-					vals = append(vals, v)
-				} else if b.Value != nil {
-					vals = append(vals, b.Value)
 				}
-			}
+				nameVal := Str(name, pos)
+				listVal := List(vals...)
+				r, err := ev.applyCall2(f, nameVal, listVal, pos)
+				if err != nil {
+					return nil, err
+				}
+				return ev.forceValue(r)
+			},
 		}
-		nameVal := Str(name, pos)
-		listVal := List(vals...)
-		r, err := ev.applyCall2(f, nameVal, listVal, pos)
-		if err != nil {
-			return nil, err
-		}
-		rv, err := ev.forceValue(r)
-		if err != nil {
-			return nil, err
-		}
-		out.Attrs.Binds[sym] = &AttrBinding{Value: rv}
+		out.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
 	}
 	return out, nil
 }

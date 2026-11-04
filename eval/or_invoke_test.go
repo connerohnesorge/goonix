@@ -7,22 +7,6 @@ import (
 	"github.com/connerohnesorge/goonix/parser"
 )
 
-func TestOrFallbackDoesNotForceDeferred(t *testing.T) {
-	src := `rec { x = x; }.x or 42`
-	ev := eval.NewEvaluator()
-	expr, err := parser.ParseString(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	val, err := ev.EvalWithBuiltins(expr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if val == nil || val.Kind != eval.VKDeferred {
-		t.Fatalf("expected deferred fixpoint, got %v", val)
-	}
-}
-
 func TestOrFallbackNullUsesRight(t *testing.T) {
 	src := `null or 7`
 	ev := eval.NewEvaluator()

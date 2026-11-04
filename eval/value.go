@@ -114,6 +114,8 @@ type Thunk struct {
 
 	memo   *Value
 	locked bool // true while this thunk is being forced (blackhole)
+	// errCtx is prepended when this thunk's force fails (builtins.addErrorContext).
+	errCtx string
 }
 
 func (v *Value) force(e *Evaluator) (*Value, error) {

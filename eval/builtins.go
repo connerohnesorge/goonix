@@ -1553,7 +1553,7 @@ func builtinMapAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	f, err := ev.forceValue(args[0])
+	f, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -1587,7 +1587,7 @@ func builtinMapAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 				if err != nil {
 					return nil, err
 				}
-				return ev.forceValue(r)
+				return r, nil
 			},
 		}
 		out.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
@@ -2298,23 +2298,39 @@ func builtinAddErrorContext(ev *Evaluator, pos parser.Pos, args []*Value) (*Valu
 	if err != nil {
 		return nil, err
 	}
-	inner := args[1]
-	if inner == nil {
+	v := args[1]
+	if v == nil {
 		return Null(), nil
 	}
+	if ctx == "" {
+		return v, nil
+	}
+	return ev.wrapErrorContext(ctx, v, pos), nil
+}
+
+func (ev *Evaluator) wrapErrorContext(ctx string, v *Value, pos parser.Pos) *Value {
+	if v == nil {
+		return Null()
+	}
+	if ctx == "" {
+		return v
+	}
+	if v.Kind == VKDeferred && v.Deferred != nil {
+		t := v.Deferred
+		if t.errCtx != "" {
+			ctx = ctx + " " + t.errCtx
+		}
+		nt := *t
+		nt.errCtx = ctx
+		return Deferred(&nt)
+	}
 	t := &Thunk{
-		eval: ev,
-		pos:  pos,
+		eval:   ev,
+		pos:    pos,
+		errCtx: ctx,
 		lazy: func(ev *Evaluator) (*Value, error) {
-			v, err := ev.forceValue(inner)
-			if err != nil {
-				if ee, ok := err.(*EvalError); ok {
-					return nil, &EvalError{Pos: ee.Pos, Msg: ctx + " " + ee.Msg}
-				}
-				return nil, fmt.Errorf("%s: %w", ctx, err)
-			}
-			return v, nil
+			return ev.forceValue(v)
 		},
 	}
-	return Deferred(t), nil
+	return Deferred(t)
 }
