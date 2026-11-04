@@ -729,17 +729,41 @@ func pathChar(c byte) bool {
 		c == '.' || c == '_' || c == '+' || c == '-'
 }
 
+// absPathRootAfterOperator is true when "/" starts a root path (e.g. after `==`), not division.
+func absPathRootAfterOperator(src []byte, slash int) bool {
+	j := slash - 1
+	for j >= 0 && (src[j] == ' ' || src[j] == '\t') {
+		j--
+	}
+	if j < 0 {
+		return true
+	}
+	switch src[j] {
+	case '=', '(', '[', ',', ';', '{', '!':
+		return true
+	default:
+		return false
+	}
+}
+
 // scanAbsPath lexes absolute path literals starting with / (including / and /.).
 func scanAbsPath(src []byte, i int) (int, bool) {
 	if i >= len(src) || src[i] != '/' {
 		return 0, false
 	}
-	// "/" followed by whitespace or punctuation is division, not a path ("/" alone at EOF is root).
-	if i+1 < len(src) {
-		c := src[i+1]
-		if c != '/' && !pathChar(c) {
-			return 0, false
+	// Root path "/" at EOF (e.g. `== /`).
+	if i+1 >= len(src) {
+		return i + 1, true
+	}
+	c := src[i+1]
+	if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+		if absPathRootAfterOperator(src, i) {
+			return i + 1, true
 		}
+		return 0, false
+	}
+	if c != '/' && !pathChar(c) {
+		return 0, false
 	}
 	j := i + 1
 	for j < len(src) && pathChar(src[j]) {

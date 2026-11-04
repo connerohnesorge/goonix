@@ -45,12 +45,8 @@ builtins.derivationStrict {
 		t.Fatalf("expected attrset, got %q", s)
 	}
 	typeSym := ev.Intern.Intern("type")
-	bind := val.Attrs.Binds[typeSym]
-	if bind == nil || bind.Value == nil {
-		t.Fatal("missing type")
-	}
-	if bind.Value.Kind != eval.VKString || bind.Value.String != "derivation" {
-		t.Fatalf("type = %v", bind.Value)
+	if bind := val.Attrs.Binds[typeSym]; bind != nil {
+		t.Fatal("derivationStrict must not expose type (use builtins.derivation wrapper)")
 	}
 	drvSym := ev.Intern.Intern("drvPath")
 	db := val.Attrs.Binds[drvSym]

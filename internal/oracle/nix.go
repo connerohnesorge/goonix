@@ -5,6 +5,7 @@
 package oracle
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -82,14 +83,48 @@ func (l Layout) InstantiateArgs() []string {
 
 func (l Layout) evalRaw(t *testing.T, expr string) (string, error) {
 	t.Helper()
-	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--raw", "-E", expr)
+	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--json", "-E", expr)
 	cmd := exec.Command("nix-instantiate", args...)
 	cmd.Env = l.HermeticEnv()
-	out, err := cmd.CombinedOutput()
+	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("nix-instantiate: %w\n%s", err, out)
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("nix-instantiate: %w\n%s", err, ee.Stderr)
+		}
+		return "", fmt.Errorf("nix-instantiate: %w", err)
+	}
+	return decodeNixInstantiateJSON(out)
+}
+
+func decodeNixInstantiateJSON(out []byte) (string, error) {
+	var s string
+	if err := json.Unmarshal(out, &s); err == nil {
+		return strings.TrimSpace(s), nil
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func decodeNixInstantiateJSONPreserve(out []byte) (string, error) {
+	var s string
+	if err := json.Unmarshal(out, &s); err == nil {
+		return s, nil
+	}
+	return string(out), nil
+}
+
+func (l Layout) evalFileJSON(t *testing.T, nixFile string) (string, error) {
+	t.Helper()
+	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--json", nixFile)
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("nix-instantiate %s: %w\n%s", nixFile, err, ee.Stderr)
+		}
+		return "", fmt.Errorf("nix-instantiate %s: %w", nixFile, err)
+	}
+	return decodeNixInstantiateJSON(out)
 }
 
 // EvalRaw evaluates an expression with the hermetic oracle flags.
@@ -108,30 +143,31 @@ func (l Layout) EvalExprAllowError(t *testing.T, expr string) (string, error) {
 	return l.evalRaw(t, expr)
 }
 
-// EvalFileRaw evaluates a .nix file to a raw string (e.g. drvPath).
+// EvalFileRaw evaluates a .nix file to a string (drvPath, etc.) via --json.
 func (l Layout) EvalFileRaw(t *testing.T, nixFile string) string {
 	t.Helper()
-	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--raw", nixFile)
-	cmd := exec.Command("nix-instantiate", args...)
-	cmd.Env = l.HermeticEnv()
-	out, err := cmd.Output()
+	s, err := l.evalFileJSON(t, nixFile)
 	if err != nil {
-		t.Fatalf("nix-instantiate %s: %v\n%s", nixFile, err, out)
+		t.Fatal(err)
 	}
-	return strings.TrimSpace(string(out))
+	return s
 }
 
-// EvalFileRawBytes is like EvalFileRaw but preserves trailing newlines from --raw output.
+// EvalFileRawBytes evaluates a .nix file and returns the JSON string result without trimming.
 func (l Layout) EvalFileRawBytes(t *testing.T, nixFile string) string {
 	t.Helper()
-	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--raw", nixFile)
+	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--json", nixFile)
 	cmd := exec.Command("nix-instantiate", args...)
 	cmd.Env = l.HermeticEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("nix-instantiate %s: %v\n%s", nixFile, err, out)
 	}
-	return string(out)
+	s, err := decodeNixInstantiateJSONPreserve(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 // Instantiate materialises a derivation and returns its .drv store path (fresh instantiate).
@@ -161,7 +197,7 @@ func (l Layout) EvalStrictDrvPath(t *testing.T, attrs string) string {
 // EvalStdinRaw evaluates Nix source from stdin.
 func (l Layout) EvalStdinRaw(t *testing.T, src string) string {
 	t.Helper()
-	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--raw", "-")
+	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--json", "-")
 	cmd := exec.Command("nix-instantiate", args...)
 	cmd.Env = l.HermeticEnv()
 	cmd.Stdin = strings.NewReader(src)
@@ -169,19 +205,14 @@ func (l Layout) EvalStdinRaw(t *testing.T, src string) string {
 	if err != nil {
 		t.Fatalf("nix-instantiate: %v\n%s", err, out)
 	}
-	return strings.TrimSpace(string(out))
+	s, err := decodeNixInstantiateJSON(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
-// EvalStdinRawBytes is like EvalStdinRaw but preserves trailing newlines from --raw output.
+// EvalStdinRawBytes is like EvalStdinRaw.
 func (l Layout) EvalStdinRawBytes(t *testing.T, src string) string {
-	t.Helper()
-	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--raw", "-")
-	cmd := exec.Command("nix-instantiate", args...)
-	cmd.Env = l.HermeticEnv()
-	cmd.Stdin = strings.NewReader(src)
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("nix-instantiate: %v\n%s", err, out)
-	}
-	return string(out)
+	return l.EvalStdinRaw(t, src)
 }

@@ -33,15 +33,11 @@ func TestStdenvDrvPathTwiceSameEvaluator(t *testing.T) {
 		if b == nil {
 			t.Fatalf("missing %s", name)
 		}
-		v, err := ev.ForceValue(b.Value)
+		v, err := ev.ForceAttrBinding(b)
 		if err != nil {
 			t.Fatal(err)
 		}
-		fv, err := ev.ForceValue(v)
-		if err != nil {
-			t.Fatal(err)
-		}
-		s, err := forceStringOrPathEvalTest(t, ev, fv)
+		s, err := forceStringOrPathEvalTest(t, ev, v)
 		if err != nil {
 			t.Fatal(err)
 		}

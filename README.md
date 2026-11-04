@@ -19,7 +19,7 @@ Regenerate oracle goldens (needs `nix-instantiate` on PATH):
 bash scripts/update-goldens.sh
 ```
 
-Pinned versions live in `internal/oracle/pins.go`.
+Pinned Nix version: `internal/nixversion` (also re-exported from `internal/oracle/pins.go`). CI ladder job installs **Nix 2.24.9** explicitly.
 
 ## Layout
 

@@ -5,7 +5,6 @@
 package drvshow
 
 import (
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -25,11 +24,7 @@ func NixClosure(drvPath string) (Document, error) {
 		}
 		return Document{}, fmt.Errorf("nix derivation show: %w", err)
 	}
-	var doc Document
-	if err := json.Unmarshal(out, &doc); err != nil {
-		return Document{}, err
-	}
-	return doc, nil
+	return ParseDerivationShowJSON(out)
 }
 
 // MaterializeNixDrv runs hermetic nix-instantiate on a .nix file (see internal/oracle).

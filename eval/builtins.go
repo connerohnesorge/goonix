@@ -26,7 +26,7 @@ import (
 	"strings"
 
 	"github.com/connerohnesorge/goonix/data"
-	"github.com/connerohnesorge/goonix/internal/oracle"
+	"github.com/connerohnesorge/goonix/internal/nixversion"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store"
 )
@@ -1014,7 +1014,25 @@ func builtinDerivationStrict(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 	if err != nil {
 		return nil, err
 	}
-	return ev.derivationValueToAttrs(drv), nil
+	names, err := ev.derivationOutputNames(attrs, pos)
+	if err != nil {
+		return nil, err
+	}
+	return ev.strictDerivationResultAttrs(drv, names, pos), nil
+}
+
+func (ev *Evaluator) strictDerivationResultAttrs(drv *DerivationValue, outputNames []string, pos parser.Pos) *Value {
+	av := Attrs(false)
+	set := func(name string, v *Value) {
+		av.Attrs.Binds[ev.Intern.Intern(name)] = &AttrBinding{Value: v}
+	}
+	set("drvPath", Path(drv.DrvPath))
+	for _, outName := range outputNames {
+		p := drv.OutPaths[outName]
+		ctx := []StringContextElem{{DrvPath: drv.DrvPath, Output: outName}}
+		set(outName, StrWithContext(p, ctx, pos))
+	}
+	return av
 }
 
 func builtinDerivation(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1285,7 +1303,7 @@ func builtinSplitVersion(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 }
 
 func builtinNixVersion(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-	return Str(oracle.NixVersion, pos), nil
+	return Str(nixversion.Version, pos), nil
 }
 
 func builtinCurrentSystem(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1573,11 +1591,7 @@ func builtinGenList(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	}
 	out := make([]*Value, n.Int)
 	for i := int64(0); i < n.Int; i++ {
-		el, err := ev.applyCall(f, Int(i), pos)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = el
+		out[i] = ev.deferredApplyCall(f, Int(i), pos)
 	}
 	return List(out...), nil
 }

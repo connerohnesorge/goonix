@@ -129,7 +129,7 @@ func TestDrvDiffHelloGoldenClosure(t *testing.T) {
 	}
 	root := modRoot(t)
 	lay := oracle.MustLayout(t)
-	helloNix := filepath.Join(root, "testdata", "ladder", "hello.nix")
+	helloNix := filepath.Join(root, "testdata", "ladder", "hello_drv.nix")
 	nixPath, err := drvshow.MaterializeNixDrv(lay, helloNix)
 	if err != nil {
 		t.Fatalf("materialize hello: %v", err)

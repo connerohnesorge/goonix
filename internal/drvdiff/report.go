@@ -31,7 +31,7 @@ func AnalyseWithATerm(nixDoc, goDoc drvshow.Document, nixRootKey, goRootKey stri
 	}
 	var byteFirst *ByteCulprit
 	if src != nil {
-		byteFirst, err = CompareBytesBottomUp(nixDoc, goDoc, nixRootKey, goRootKey, src)
+		byteFirst, err = CompareBytesBottomUpNameStdenv(nixDoc, goDoc, nixRootKey, goRootKey, src)
 		if err != nil {
 			return Report{}, err
 		}

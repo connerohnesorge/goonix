@@ -243,6 +243,26 @@ func (ev *Evaluator) InstantiateDerivation(attrs *Value) (string, error) {
 	return drv.DrvPath, nil
 }
 
+// ForceStrictDrvPath returns drvPath from a derivationStrict attribute set.
+func ForceStrictDrvPath(ev *Evaluator, v *Value) (string, error) {
+	fv, err := ev.ForceValue(v)
+	if err != nil {
+		return "", err
+	}
+	if fv.Kind != VKAttrs {
+		return "", fmt.Errorf("not an attribute set")
+	}
+	b, ok := fv.Attrs.Binds[ev.Intern.Intern("drvPath")]
+	if !ok {
+		return "", fmt.Errorf("missing drvPath")
+	}
+	dv, err := ev.ForceAttrBinding(b)
+	if err != nil {
+		return "", err
+	}
+	return ev.forceString(dv)
+}
+
 // ForceDerivationAttrs ensures attrs describe a derivation and returns drvPath.
 func ForceDerivationAttrs(ev *Evaluator, v *Value) (string, error) {
 	fv, err := ev.ForceValue(v)

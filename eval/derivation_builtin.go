@@ -83,7 +83,7 @@ func (ev *Evaluator) lazySelectStrictAttr(strict *Value, attr string, pos parser
 			}
 			b, ok := sv.Attrs.Binds[sym]
 			if !ok {
-				return Null(), nil
+				return nil, evalErr(pos, "attribute %q missing", attr)
 			}
 			return e.attrBindingValue(b)
 		},
@@ -113,7 +113,7 @@ func (ev *Evaluator) derivationOutputOverlayLazy(strict *Value, outputName strin
 						return e.attrBindingValue(b)
 					}
 				}
-				return Null(), nil
+				return nil, evalErr(pos, "attribute %q missing", "outPath")
 			},
 		}
 		overlay.Attrs.Binds[ev.Intern.Intern("outPath")] = &AttrBinding{Value: Deferred(t)}

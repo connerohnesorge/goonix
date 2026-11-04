@@ -27,7 +27,7 @@ func TestDerivationEnvSpaceSeparatedPathsNotInputSrcs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := eval.ForceDerivationAttrs(ev, fv)
+	p, err := eval.ForceStrictDrvPath(ev, fv)
 	if err != nil {
 		t.Fatal(err)
 	}

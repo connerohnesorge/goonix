@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
@@ -26,16 +25,6 @@ func TestExpandResponseParamsATermMatchesNix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var goKey string
-	for k := range goDoc.Derivations {
-		if strings.HasSuffix(k, suffix) {
-			goKey = k
-			break
-		}
-	}
-	if goKey == "" {
-		t.Fatal("missing go expand-response-params")
-	}
 	inst := filepath.Join(root, "eval", "testdata", "stdenv_nocc_inst.nix")
 	nixPath, err := drvshow.MaterializeNixDrv(lay, inst)
 	if err != nil {
@@ -45,12 +34,9 @@ func TestExpandResponseParamsATermMatchesNix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var nixKey string
-	for k := range nixDoc.Derivations {
-		if strings.HasSuffix(k, suffix) {
-			nixKey = k
-			break
-		}
+	nixKey, goKey := pairClosureKeysBySuffix(nixDoc, goDoc, suffix)
+	if goKey == "" {
+		t.Fatal("missing go expand-response-params")
 	}
 	if nixKey == "" {
 		t.Fatal("missing nix expand-response-params")

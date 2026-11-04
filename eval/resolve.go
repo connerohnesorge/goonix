@@ -87,10 +87,8 @@ func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, e
 				return b, true, nil
 			}
 		}
-		if w.Attrs != nil && w.Attrs.MergeLHS != nil {
-			if v, ok := getAttr(&Value{Kind: VKAttrs, Attrs: w.Attrs.MergeLHS}, sym); ok {
-				return &AttrBinding{Value: v}, true, nil
-			}
+		if v, ok := getAttr(w, sym); ok {
+			return &AttrBinding{Value: v}, true, nil
 		}
 		if w.Attrs != nil && w.Attrs.UpdateRHS != nil {
 			if b, ok := w.Attrs.UpdateRHS.Binds[sym]; ok && b != nil {
@@ -100,8 +98,8 @@ func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, e
 				return &AttrBinding{Value: b.Value}, true, nil
 			}
 		}
-		if w.Attrs == nil || w.Attrs.MergeLHS == nil {
-			if v, ok := getAttr(w, sym); ok {
+		if w.Attrs != nil && w.Attrs.MergeLHS != nil {
+			if v, ok := getAttr(&Value{Kind: VKAttrs, Attrs: w.Attrs.MergeLHS}, sym); ok {
 				return &AttrBinding{Value: v}, true, nil
 			}
 		}

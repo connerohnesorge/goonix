@@ -44,7 +44,7 @@ func goDrvPath(t *testing.T, attrs string) string {
 
 func mustForceDrvPath(t *testing.T, ev *eval.Evaluator, v *eval.Value) string {
 	t.Helper()
-	p, err := eval.ForceDerivationAttrs(ev, v)
+	p, err := eval.ForceStrictDrvPath(ev, v)
 	if err != nil {
 		t.Fatal(err)
 	}

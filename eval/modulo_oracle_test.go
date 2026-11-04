@@ -33,7 +33,7 @@ func strictEvalTop(t *testing.T, attrs string) (drvPath string, outPath string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	drvPath, err = ForceDerivationAttrs(ev, fv)
+	drvPath, err = ForceStrictDrvPath(ev, fv)
 	if err != nil {
 		t.Fatal(err)
 	}
