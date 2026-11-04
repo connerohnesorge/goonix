@@ -221,12 +221,6 @@ func (ev *Evaluator) evalExpr(expr parser.Expr, env *Env) (*Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		if attrs != nil && attrs.Kind == VKDeferred && attrs.Deferred != nil && attrs.Deferred.pendingMergeRhs != nil {
-			attrs, err = ev.forceValue(attrs)
-			if err != nil {
-				return nil, err
-			}
-		}
 		child := env.extend()
 		child.With = attrs
 		return ev.evalExpr(e.Body, child)
