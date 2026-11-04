@@ -5,24 +5,16 @@
 package eval_test
 
 import (
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store/drvshow"
 )
 
 func TestFetchurlSRIOutputHashAlgoEmptyMatchesNix(t *testing.T) {
-	if _, err := exec.LookPath("nix-instantiate"); err != nil {
-		t.Skip("nix-instantiate not available")
-	}
-	root := modRoot(t)
-	nixpkgs := filepath.Join(root, "testdata", "nixpkgs")
-	nix := filepath.Join(root, "testdata", "nix")
+	lay := oracle.MustLayout(t)
 	src := `
 let
   fetchurl = import <nix/fetchurl.nix>;
@@ -36,8 +28,8 @@ in (fetchurl {
 		t.Fatal(err)
 	}
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
-	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
-	ev.NixPath.PrependEntries("nix=" + nix)
+	ev.NixPath.PrependEntries("nixpkgs=" + lay.Nixpkgs)
+	ev.NixPath.PrependEntries("nix=" + lay.Nix)
 	ev.SetCurFile("fetchurl_sri_oracle.nix")
 	val, err := ev.EvalWithBuiltins(expr)
 	if err != nil {
@@ -48,6 +40,10 @@ in (fetchurl {
 		t.Fatal(err)
 	}
 	goPath := forceStringOrPath(t, ev, fv)
+	wantPath := lay.EvalStdinRaw(t, src)
+	if goPath != wantPath {
+		t.Fatalf("drvPath go=%q nix=%q", goPath, wantPath)
+	}
 	gd, ok := ev.RegisteredDerivation(goPath)
 	if !ok {
 		t.Fatalf("go drv %q not in strict registry", goPath)
@@ -61,19 +57,6 @@ in (fetchurl {
 	if gd.Env["system"] != "builtin" {
 		t.Fatalf("system=%q", gd.Env["system"])
 	}
-
-	nixCmd := exec.Command("nix-instantiate", "--eval", "--raw", "-")
-	nixCmd.Stdin = strings.NewReader(src)
-	nixCmd.Env = append(os.Environ(), "NIXPATH=nixpkgs="+nixpkgs+":nix="+nix)
-	nixOut, err := nixCmd.Output()
-	if err != nil {
-		t.Fatalf("nix: %v", err)
-	}
-	wantPath := strings.TrimSpace(string(nixOut))
-	if goPath != wantPath {
-		t.Logf("drvPath still differs (remaining fetchurl env): go=%q nix=%q", goPath, wantPath)
-	}
-
 	goDoc, err := ev.DerivationShowClosure(goPath)
 	if err != nil {
 		t.Fatal(err)

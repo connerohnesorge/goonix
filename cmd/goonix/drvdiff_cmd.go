@@ -13,6 +13,7 @@ import (
 
 	"github.com/connerohnesorge/goonix/eval"
 	"github.com/connerohnesorge/goonix/internal/drvdiff"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store/drvshow"
 )
@@ -22,8 +23,12 @@ func cmdDerivationShow(args []string) {
 	goEval := fs.String("go-eval", "", "evaluate FILE and treat result as a .drv path or derivation")
 	nixDrv := fs.String("nix-drv", "", "materialised nix .drv path")
 	nixInst := fs.String("nix-instantiate", "", "nix-instantiate FILE to get nix top .drv")
-	searchPath := fs.String("I", "", "NIXPATH entries (repeatable with comma separation)")
 	_ = fs.Parse(args)
+
+	lay, err := oracle.FindLayout()
+	if err != nil {
+		fatal(err)
+	}
 
 	if *nixDrv != "" {
 		doc, err := drvshow.NixClosure(*nixDrv)
@@ -34,11 +39,7 @@ func cmdDerivationShow(args []string) {
 		return
 	}
 	if *nixInst != "" {
-		env := os.Environ()
-		if *searchPath != "" {
-			env = append(env, "NIXPATH="+*searchPath)
-		}
-		p, err := drvshow.MaterializeNixDrv(*nixInst, env)
+		p, err := drvshow.MaterializeNixDrv(lay, *nixInst)
 		if err != nil {
 			fatal(err)
 		}
@@ -50,7 +51,7 @@ func cmdDerivationShow(args []string) {
 		return
 	}
 	if *goEval != "" {
-		ev, path, err := evalFileDrvPath(*goEval, *searchPath)
+		ev, path, err := evalFileDrvPath(lay, *goEval)
 		if err != nil {
 			fatal(err)
 		}
@@ -70,20 +71,18 @@ func cmdDrvDiff(args []string) {
 	goEval := fs.String("go-eval", "", "goonix eval file returning .drvPath")
 	nixDrv := fs.String("nix-drv", "", "nix top .drv path")
 	nixInst := fs.String("nix-instantiate", "", "nix-instantiate derivation file")
-	searchPath := fs.String("I", "", "NIXPATH for both sides")
 	_ = fs.Parse(args)
 	if *goEval == "" || (*nixDrv == "" && *nixInst == "") {
 		fmt.Fprintln(os.Stderr, "drv-diff requires --go-eval and (--nix-drv or --nix-instantiate)")
 		os.Exit(2)
 	}
-	env := os.Environ()
-	if *searchPath != "" {
-		env = append(env, "NIXPATH="+*searchPath)
+	lay, err := oracle.FindLayout()
+	if err != nil {
+		fatal(err)
 	}
 	var nixPath string
-	var err error
 	if *nixInst != "" {
-		nixPath, err = drvshow.MaterializeNixDrv(*nixInst, env)
+		nixPath, err = drvshow.MaterializeNixDrv(lay, *nixInst)
 	} else {
 		nixPath = *nixDrv
 	}
@@ -94,7 +93,7 @@ func cmdDrvDiff(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	ev, goPath, err := evalFileDrvPath(*goEval, *searchPath)
+	ev, goPath, err := evalFileDrvPath(lay, *goEval)
 	if err != nil {
 		fatal(err)
 	}
@@ -109,17 +108,11 @@ func cmdDrvDiff(args []string) {
 	fmt.Print(drvdiff.FormatReport(report))
 }
 
-func evalFileDrvPath(path, nixPath string) (*eval.Evaluator, string, error) {
+func evalFileDrvPath(lay oracle.Layout, path string) (*eval.Evaluator, string, error) {
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
+	ev.NixPath.PrependEntries("nixpkgs=" + lay.Nixpkgs)
+	ev.NixPath.PrependEntries("nix=" + lay.Nix)
 	ev.SetCurFile(path)
-	if nixPath != "" {
-		for _, part := range strings.FieldsFunc(nixPath, func(r rune) bool { return r == ':' || r == ',' }) {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				ev.NixPath.PrependEntries(part)
-			}
-		}
-	}
 	expr, err := parser.ParseFile(path)
 	if err != nil {
 		return nil, "", err
@@ -136,7 +129,7 @@ func evalFileDrvPath(path, nixPath string) (*eval.Evaluator, string, error) {
 	case eval.VKPath:
 		return ev, fv.Path, nil
 	case eval.VKString:
-		return ev, fv.String, nil
+		return ev, strings.TrimSpace(fv.String), nil
 	case eval.VKAttrs:
 		p, err := eval.ForceDerivationAttrs(ev, fv)
 		return ev, p, err

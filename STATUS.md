@@ -2,6 +2,8 @@
 
 Oracle: **Nix 2.24.9**, nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15.
 
+**Hermetic Nix oracle (`internal/oracle`):** every `nix-instantiate` uses `--option substituters '' --option restrict-eval false -I nixpkgs=$PWD/testdata/nixpkgs -I nix=$PWD/testdata/nix` with `NIX_PATH` stripped from the environment. `testdata/nixpkgs/.pinned-rev` must match `oracle.NixpkgsRev`; `lib.version` must be `24.11*`. Regenerate goldens with `scripts/update-goldens.sh` (same flags). **Note:** `hello.drvPath` golden tracks hermetic `--eval` of `pkgs.hello.drvPath` (unchanged at `gciipqhq…` unless pin or hello changes); goonix hello drvPath still diverges until bootstrap/FOD leaves match.
+
 ```bash
 bash scripts/check-cgo.sh
 go test ./eval/... -run TestBuiltinLazinessAudit -count=1
@@ -67,9 +69,7 @@ NIXPATH=nixpkgs=$PWD/testdata/nixpkgs go run ./cmd/goonix drv-diff \
   -I nixpkgs=$PWD/testdata/nixpkgs
 ```
 
-**Closure export:** `strictDrvs` records every `derivationStrict` result; `DerivationShowClosure` walks `inputDrvs` through that map only (missing registration = error). Do not merge modulo-cache dumps into drv-diff.
-
-**Next leaves:** SRI `fetchurl` uses empty `outputHashAlgo` in env (oracle `TestFetchurlSRIOutputHashAlgoEmptyMatchesNix`). Top `stdenvNoCC.mkDerivation` still differs in `builder` / `inputDrvs` (`bash-5.3p20` + `stdenv-linux-no-cc` vs go `bash-5.2p37` + `stdenv-linux`); bootstrap closure gap (~423 logical names only on nix materialised side) until mkDerivation/stdenv parity.
+**Closure export:** `strictDrvs` records every `derivationStrict`; `DerivationShowClosure` walks `inputDrvs` through that map. Hermetic oracle fixed channel bleed (`bash-5.3p20` ghost); drv-diff **missing** count on stdenv probe **423 → 3**. Deepest leaf: fetchurl FOD (`env.out` / modulo vs `nix derivation show`).
 
 
 - **Hello golden:** `TestHelloDrvPathMatchesGolden` still **red** — hello evaluates end-to-end; remaining gap is **`hashDerivationModulo` / closure inputs** vs Nix (not env `{ ... }` coercion).

@@ -42,6 +42,7 @@ jobs:
           curl -fsSL -o /tmp/nixpkgs.tar.gz https://github.com/NixOS/nixpkgs/archive/50ab793786d9de88ee30ec4e4c24fb4236fc2674.tar.gz
           mkdir -p testdata/nixpkgs
           tar -xzf /tmp/nixpkgs.tar.gz -C testdata/nixpkgs --strip-components=1
+          echo 50ab793786d9de88ee30ec4e4c24fb4236fc2674 > testdata/pinned-nixpkgs-rev
       - name: Ladder tests
         continue-on-error: true
         env:

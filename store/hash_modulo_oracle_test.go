@@ -6,24 +6,18 @@ package store_test
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 )
 
 func nixDrvPath(t *testing.T, expr string) string {
 	t.Helper()
-	if _, err := exec.LookPath("nix-instantiate"); err != nil {
-		t.Skip("nix-instantiate not available")
-	}
-	out, err := exec.Command("nix-instantiate", "--eval", "--raw", "-E", expr).Output()
-	if err != nil {
-		t.Fatalf("nix oracle: %v", err)
-	}
-	return strings.TrimSpace(string(out))
+	lay := oracle.MustLayout(t)
+	return lay.EvalRaw(t, expr)
 }
 
 func goDrvPath(t *testing.T, attrs string) string {
@@ -101,25 +95,12 @@ func TestHashModuloOracleThreeLevelWithFOD(t *testing.T) {
 
 func nixDrvPathStrict(t *testing.T, attrs string) string {
 	t.Helper()
-	if _, err := exec.LookPath("nix-instantiate"); err != nil {
-		t.Skip("nix-instantiate not available")
-	}
-	strictArg := attrs
-	if strings.HasPrefix(strings.TrimSpace(attrs), "let") {
-		strictArg = "(" + attrs + ")"
-	}
-	pathExpr := fmt.Sprintf(`(builtins.derivationStrict %s).drvPath`, strictArg)
-	out, err := exec.Command("nix-instantiate", "--eval", "--raw", "-E", pathExpr).Output()
-	if err != nil {
-		t.Fatalf("nix oracle: %v", err)
-	}
-	return strings.TrimSpace(string(out))
+	lay := oracle.MustLayout(t)
+	return lay.EvalStrictDrvPath(t, attrs)
 }
 
 func TestHashModuloOraclePremiseInputUsesUnmaskedDep(t *testing.T) {
-	if _, err := exec.LookPath("nix-instantiate"); err != nil {
-		t.Skip("nix-instantiate not available")
-	}
+	oracle.MustLayout(t)
 	// Changing a non-output env var on dep must affect top drvPath (dep hashed unmasked).
 	base := `let dep = builtins.derivationStrict { name = "premise-dep"; system = "x86_64-linux"; builder = "/bin/sh"; TAG = "a"; }; in {
 	  name = "premise-top";

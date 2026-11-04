@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/connerohnesorge/goonix/internal/oracle"
 )
 
 // NixClosure runs `nix derivation show` on drvPath and parses JSON.
@@ -30,13 +32,14 @@ func NixClosure(drvPath string) (Document, error) {
 	return doc, nil
 }
 
-// MaterializeNixDrv runs nix-instantiate on a .nix file that evaluates to a derivation.
-func MaterializeNixDrv(nixFile string, env []string) (string, error) {
+// MaterializeNixDrv runs hermetic nix-instantiate on a .nix file (see internal/oracle).
+func MaterializeNixDrv(l oracle.Layout, nixFile string) (string, error) {
 	if _, err := exec.LookPath("nix-instantiate"); err != nil {
 		return "", fmt.Errorf("nix-instantiate not on PATH")
 	}
-	cmd := exec.Command("nix-instantiate", nixFile)
-	cmd.Env = env
+	args := append(append([]string{}, l.InstantiateArgs()...), nixFile)
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
 	b, err := cmd.Output()
 	if err != nil {
 		return "", err

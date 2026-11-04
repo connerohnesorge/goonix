@@ -40,20 +40,21 @@ func computeDerivationPaths(ev *Evaluator, cfg store.Config, drv *DerivationValu
 	if err != nil {
 		return "", nil, err
 	}
+	for k, v := range outPaths {
+		outPaths[k] = cfg.RewriteDefaultStoreDir(v)
+	}
 	for name, path := range outPaths {
 		if o, ok := d.Outputs[name]; ok {
 			o.Path = path
 		}
 		d.Env[name] = path
+		drv.Env[name] = path
 	}
 	drvPath, err = d.DrvPath()
 	if err != nil {
 		return "", nil, err
 	}
 	drvPath = cfg.RewriteDefaultStoreDir(drvPath)
-	for k, v := range outPaths {
-		outPaths[k] = cfg.RewriteDefaultStoreDir(v)
-	}
 	cache.Register(drvPath, d)
 	return drvPath, outPaths, nil
 }

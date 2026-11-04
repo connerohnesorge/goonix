@@ -5,37 +5,23 @@
 package eval_test
 
 import (
-	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 )
 
 func TestStdenvNoCCMkDerivationOracleMatchesNix(t *testing.T) {
-	if _, err := exec.LookPath("nix-instantiate"); err != nil {
-		t.Skip("nix-instantiate not available")
-	}
+	lay := oracle.MustLayout(t)
 	root := modRoot(t)
-	nixpkgs := filepath.Join(root, "testdata", "nixpkgs")
-	if _, err := os.Stat(nixpkgs); err != nil {
-		t.Skip("testdata/nixpkgs not present")
-	}
 	probe := filepath.Join(root, "testdata", "oracle", "stdenv_nocc_mkderivation_probe.nix")
-	cmd := exec.Command("nix-instantiate", "--eval", "--raw", probe)
-	cmd.Env = append(os.Environ(), "NIXPATH=nixpkgs="+nixpkgs)
-	nixOut, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("nix oracle: %v", err)
-	}
-	want := strings.TrimSpace(string(nixOut))
+	want := lay.EvalFileRaw(t, probe)
 
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
-	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
-	ev.NixPath.PrependEntries("nix=" + filepath.Join(root, "testdata", "nix"))
+	ev.NixPath.PrependEntries("nixpkgs=" + lay.Nixpkgs)
+	ev.NixPath.PrependEntries("nix=" + lay.Nix)
 	ev.SetCurFile(probe)
 	expr, err := parser.ParseFile(probe)
 	if err != nil {

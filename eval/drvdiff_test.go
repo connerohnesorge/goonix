@@ -12,6 +12,7 @@ import (
 
 	"github.com/connerohnesorge/goonix/eval"
 	"github.com/connerohnesorge/goonix/internal/drvdiff"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store/drvshow"
 )
@@ -65,10 +66,10 @@ func TestDrvDiffStdenvNoCCProbeReportsDeepest(t *testing.T) {
 		t.Skip("no /nix/store")
 	}
 	root := modRoot(t)
+	lay := oracle.MustLayout(t)
 	inst := filepath.Join(root, "eval", "testdata", "stdenv_nocc_inst.nix")
 	goPath, ev := evalProbeDrvPath(t, filepath.Join(root, "testdata", "oracle", "stdenv_nocc_mkderivation_probe.nix"))
-	nixEnv := []string{"NIXPATH=nixpkgs=" + filepath.Join(root, "testdata", "nixpkgs")}
-	nixPath, err := drvshow.MaterializeNixDrv(inst, append(os.Environ(), nixEnv...))
+	nixPath, err := drvshow.MaterializeNixDrv(lay, inst)
 	if err != nil {
 		t.Fatalf("materialize nix: %v", err)
 	}
@@ -106,16 +107,15 @@ func TestDrvDiffHelloGoldenClosure(t *testing.T) {
 		t.Skip("hello closure is large")
 	}
 	root := modRoot(t)
-	nixpkgs := filepath.Join(root, "testdata", "nixpkgs")
+	lay := oracle.MustLayout(t)
 	helloNix := filepath.Join(root, "testdata", "ladder", "hello.nix")
-	nixEnv := []string{"NIXPATH=nixpkgs=" + nixpkgs + ":nix=" + filepath.Join(root, "testdata", "nix")}
-	nixPath, err := drvshow.MaterializeNixDrv(helloNix, append(os.Environ(), nixEnv...))
+	nixPath, err := drvshow.MaterializeNixDrv(lay, helloNix)
 	if err != nil {
 		t.Fatalf("materialize hello: %v", err)
 	}
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
-	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
-	ev.NixPath.PrependEntries("nix=" + filepath.Join(root, "testdata", "nix"))
+	ev.NixPath.PrependEntries("nixpkgs=" + lay.Nixpkgs)
+	ev.NixPath.PrependEntries("nix=" + lay.Nix)
 	ev.SetCurFile(helloNix)
 	expr, err := parser.ParseFile(helloNix)
 	if err != nil {

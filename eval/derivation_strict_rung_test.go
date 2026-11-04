@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store"
 )
@@ -109,19 +109,8 @@ func assertATermMatchesDrvPath(t *testing.T, wantPath string, aterm []byte) erro
 
 func nixDerivationStrictOracle(t *testing.T, attrs string) (drvPath string, aterm []byte) {
 	t.Helper()
-	if _, err := exec.LookPath("nix-instantiate"); err != nil {
-		t.Skip("nix-instantiate not available")
-	}
-	strictArg := attrs
-	if strings.HasPrefix(strings.TrimSpace(attrs), "let") {
-		strictArg = "(" + attrs + ")"
-	}
-	pathExpr := fmt.Sprintf(`(builtins.derivationStrict %s).drvPath`, strictArg)
-	out, err := exec.Command("nix-instantiate", "--eval", "-E", pathExpr).Output()
-	if err != nil {
-		t.Fatalf("nix drvPath: %v", err)
-	}
-	drvPath = strings.Trim(strings.TrimSpace(string(out)), `"`)
+	lay := oracle.MustLayout(t)
+	drvPath = lay.EvalStrictDrvPath(t, attrs)
 	if raw, err := os.ReadFile(drvPath); err == nil {
 		return drvPath, raw
 	}
