@@ -113,9 +113,7 @@ func (ev *Evaluator) coerceToStringScalarList(fv *Value, cc CoerceContext) (*Val
 			if err != nil {
 				return nil, err
 			}
-			if sv.String != "" {
-				parts = append(parts, sv.String)
-			}
+			parts = append(parts, sv.String)
 			ctx = mergeStringContexts(ctx, sv.Ctx)
 		}
 		return StrWithContext(strings.Join(parts, " "), ctx, pos), nil

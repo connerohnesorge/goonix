@@ -7,6 +7,18 @@ import (
 	"github.com/connerohnesorge/goonix/parser"
 )
 
+func TestCoerceListIncludesEmptyElements(t *testing.T) {
+	ev := NewEvaluator()
+	list := List(Str("/nix/store/x", parser.Pos{}), Str("", parser.Pos{}))
+	sv, err := ev.coerceToString(list, CoerceContext{Mode: CoerceString})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sv.String != "/nix/store/x " {
+		t.Fatalf("got %q want trailing space from empty tail element", sv.String)
+	}
+}
+
 func TestCoerceAttrSetOutPath(t *testing.T) {
 	ev := NewEvaluator()
 	outPath := StrWithContext("/nix/store/abc-out", []StringContextElem{
