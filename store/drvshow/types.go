@@ -36,5 +36,7 @@ type InputDrv struct {
 
 // Output is one derivation output path fingerprint.
 type Output struct {
-	Path string `json:"path"`
+	Path     string `json:"path"`
+	HashAlgo string `json:"hashAlgo,omitempty"`
+	Hash     string `json:"hash,omitempty"`
 }

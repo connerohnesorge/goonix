@@ -208,11 +208,24 @@ func (s *stringsBuilder) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// SerializeGoNixDerivation returns ATerm bytes for a registered go-nix derivation.
+func SerializeGoNixDerivation(d *gonixdrv.Derivation) ([]byte, error) {
+	if d == nil {
+		return nil, fmt.Errorf("nil derivation")
+	}
+	content := &stringsBuilder{}
+	if err := d.WriteDerivation(content); err != nil {
+		return nil, err
+	}
+	return content.Bytes(), nil
+}
+
 func (s *stringsBuilder) String() string {
 	return string(s.b)
 }
 
-// AttrsToDerivation converts a forced attribute set into DerivationValue.
+func (s *stringsBuilder) Bytes() []byte { return s.b }
+
 func (ev *Evaluator) AttrsToDerivation(attrs *Value) (*DerivationValue, error) {
 	return ev.attrsToDerivation(attrs)
 }

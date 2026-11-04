@@ -279,7 +279,7 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 	var b strings.Builder
 	var ctx []StringContextElem
-	cc := CoerceContext{Mode: CoerceString, Pos: s.P}
+	cc := CoerceContext{Mode: CoerceString, Pos: s.P, CopyPaths: true}
 	for _, part := range s.Parts {
 		if part.Interp == nil {
 			b.WriteString(part.Text)
@@ -302,7 +302,7 @@ func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 func (ev *Evaluator) evalIndentedString(s *parser.IndentedString, env *Env) (*Value, error) {
 	var b strings.Builder
 	var ctx []StringContextElem
-	cc := CoerceContext{Mode: CoerceString, Pos: s.P}
+	cc := CoerceContext{Mode: CoerceString, Pos: s.P, CopyPaths: true}
 	for _, part := range s.Parts {
 		if part.Interp == nil {
 			b.WriteString(part.Text)

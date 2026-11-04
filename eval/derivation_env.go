@@ -238,11 +238,6 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 	_ = outputHash
 	_ = outputHashMode
 
-	// Nix fetchurl.nix: SRI outputHash uses an empty outputHashAlgo in the .drv env.
-	if h := drv.Env["outputHash"]; isSRIHashString(h) {
-		drv.Env["outputHashAlgo"] = ""
-	}
-
 	if drv.Builder == "" {
 		return evalErr(pos, "required attribute 'builder' missing")
 	}

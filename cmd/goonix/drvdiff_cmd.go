@@ -106,6 +106,17 @@ func cmdDrvDiff(args []string) {
 		fatal(err)
 	}
 	fmt.Print(drvdiff.FormatReport(report))
+	if report.Deepest != nil {
+		nixEntry := nixDoc.Derivations[report.Deepest.NixKey]
+		goEntry := goDoc.Derivations[report.Deepest.GoonixKey]
+		nixATerm := drvdiff.ReadNixStoreATerm(report.Deepest.NixKey)
+		goFull := "/nix/store/" + report.Deepest.GoonixKey
+		var goATerm []byte
+		if gd, ok := ev.RegisteredDerivation(goFull); ok {
+			goATerm, _ = eval.SerializeGoNixDerivation(gd)
+		}
+		fmt.Print(drvdiff.FormatMismatchDetail(report.Deepest, nixEntry, goEntry, nixATerm, goATerm))
+	}
 }
 
 func evalFileDrvPath(lay oracle.Layout, path string) (*eval.Evaluator, string, error) {

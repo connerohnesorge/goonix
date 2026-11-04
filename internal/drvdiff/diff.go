@@ -140,7 +140,7 @@ func fieldDiffs(n, g drvshow.Entry) []FieldDiff {
 	if n.Name != g.Name {
 		out = append(out, FieldDiff{"name", n.Name, g.Name})
 	}
-	if !reflect.DeepEqual(n.Args, g.Args) {
+	if !reflect.DeepEqual(normalizeStringList(n.Args), normalizeStringList(g.Args)) {
 		out = append(out, FieldDiff{"args", fmt.Sprint(n.Args), fmt.Sprint(g.Args)})
 	}
 	out = append(out, envDiffs(n.Env, g.Env)...)
@@ -165,11 +165,11 @@ func envDiffs(n, g map[string]string) []FieldDiff {
 	sort.Strings(sorted)
 	var out []FieldDiff
 	for _, k := range sorted {
-		nv, gv := n[k], g[k]
+		nv, gv := drvshow.NormalizePathValue(n[k]), drvshow.NormalizePathValue(g[k])
 		if nv == gv {
 			continue
 		}
-		out = append(out, FieldDiff{Path: "env." + k, Nix: nv, Goonix: gv})
+		out = append(out, FieldDiff{Path: "env." + k, Nix: n[k], Goonix: g[k]})
 	}
 	return out
 }
@@ -189,17 +189,35 @@ func outputDiffs(n, g map[string]drvshow.Output) []FieldDiff {
 	sort.Strings(sorted)
 	var out []FieldDiff
 	for _, k := range sorted {
-		nv, gv := n[k].Path, g[k].Path
-		if nv == gv {
-			continue
+		nv, gv := drvshow.NormalizePathValue(n[k].Path), drvshow.NormalizePathValue(g[k].Path)
+		if nv != gv {
+			out = append(out, FieldDiff{Path: "outputs." + k + ".path", Nix: n[k].Path, Goonix: g[k].Path})
 		}
-		out = append(out, FieldDiff{Path: "outputs." + k + ".path", Nix: nv, Goonix: gv})
+		nha, gha := n[k].HashAlgo, g[k].HashAlgo
+		if nha != gha {
+			out = append(out, FieldDiff{Path: "outputs." + k + ".hashAlgo", Nix: nha, Goonix: gha})
+		}
+		nh, gh := n[k].Hash, g[k].Hash
+		if nh != gh {
+			out = append(out, FieldDiff{Path: "outputs." + k + ".hash", Nix: nh, Goonix: gh})
+		}
+	}
+	return out
+}
+
+func normalizeStringList(ss []string) []string {
+	if len(ss) == 0 {
+		return ss
+	}
+	out := append([]string(nil), ss...)
+	for i, s := range out {
+		out[i] = drvshow.NormalizePathValue(s)
 	}
 	return out
 }
 
 func inputSrcDiffs(n, g []string) []FieldDiff {
-	if reflect.DeepEqual(n, g) {
+	if reflect.DeepEqual(normalizeStringList(n), normalizeStringList(g)) {
 		return nil
 	}
 	return []FieldDiff{{Path: "inputs.srcs", Nix: fmt.Sprint(n), Goonix: fmt.Sprint(g)}}

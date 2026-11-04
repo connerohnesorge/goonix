@@ -91,7 +91,15 @@ func TestDrvDiffStdenvNoCCProbeReportsDeepest(t *testing.T) {
 	t.Logf("closure sizes nix=%d go=%d", len(nixDoc.Derivations), len(goDoc.Derivations))
 	t.Log(drvdiff.FormatReport(report))
 	if report.Deepest != nil {
-		t.Fatalf("deepest field mismatch:\n%s", drvdiff.FormatResult(report.Deepest))
+		nixEntry := nixDoc.Derivations[report.Deepest.NixKey]
+		goEntry := goDoc.Derivations[report.Deepest.GoonixKey]
+		nixATerm := drvdiff.ReadNixStoreATerm(report.Deepest.NixKey)
+		goFull := "/nix/store/" + report.Deepest.GoonixKey
+		var goATerm []byte
+		if gd, ok := ev.RegisteredDerivation(goFull); ok {
+			goATerm, _ = eval.SerializeGoNixDerivation(gd)
+		}
+		t.Fatalf("deepest field mismatch:\n%s", drvdiff.FormatMismatchDetail(report.Deepest, nixEntry, goEntry, nixATerm, goATerm))
 	}
 	if len(report.MissingInGo) > 0 {
 		t.Fatalf("go closure missing %d derivations (strict=%d); first missing: %q",

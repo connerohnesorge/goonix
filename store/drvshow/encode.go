@@ -23,7 +23,11 @@ func FromDerivation(d *gonixdrv.Derivation) Entry {
 		if p == "" {
 			p = d.Env[outName]
 		}
-		outs[outName] = Output{Path: StoreFingerprint(p)}
+		outs[outName] = Output{
+			Path:     StoreFingerprint(p),
+			HashAlgo: o.HashAlgorithm,
+			Hash:     o.Hash,
+		}
 	}
 	drvs := make(map[string]InputDrv, len(d.InputDerivations))
 	drvPaths := make([]string, 0, len(d.InputDerivations))

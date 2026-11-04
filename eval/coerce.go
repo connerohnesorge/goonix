@@ -160,6 +160,9 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 	if !copyPaths || strings.HasPrefix(p, storeDir+"/") || p == storeDir {
 		return StrWithContext(p, ctx, pos), nil
 	}
+	if _, err := ev.Effects.Stat(p); err != nil {
+		return StrWithContext(p, ctx, pos), nil
+	}
 	cfg := store.Config{StoreDir: storeDir}
 	name := filepath.Base(p)
 	if name == "" || name == "." || name == "/" {
