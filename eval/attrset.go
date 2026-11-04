@@ -9,19 +9,22 @@ import (
 	"github.com/connerohnesorge/goonix/parser"
 )
 
-func (ev *Evaluator) resolveAttrSym(an parser.AttrName, env *Env, pos parser.Pos) (data.Symbol, error) {
+func (ev *Evaluator) resolveAttrSym(an parser.AttrName, env *Env, pos parser.Pos) (data.Symbol, bool, error) {
 	if an.Expr == nil {
-		return ev.Intern.Intern(an.Name), nil
+		return ev.Intern.Intern(an.Name), true, nil
 	}
 	v, err := ev.evalExpr(an.Expr, env)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	s, err := ev.forceString(v)
 	if err != nil {
-		return 0, evalErr(pos, "dynamic attribute name must be a string")
+		return 0, false, evalErr(pos, "dynamic attribute name must be a string")
 	}
-	return ev.Intern.Intern(s), nil
+	if s == "" {
+		return 0, false, nil
+	}
+	return ev.Intern.Intern(s), true, nil
 }
 
 // insertBinding places bind into av, creating nested attrsets for multi-segment paths.
@@ -29,9 +32,12 @@ func (ev *Evaluator) insertBinding(av *Value, bindEnv *Env, bind parser.Binding,
 	if len(bind.Path) == 0 {
 		return nil
 	}
-	sym, err := ev.resolveAttrSym(bind.Path[0], bindEnv, bind.Pos)
+	sym, ok, err := ev.resolveAttrSym(bind.Path[0], bindEnv, bind.Pos)
 	if err != nil {
 		return err
+	}
+	if !ok {
+		return nil
 	}
 	t := ev.newThunk(bind.Value, bindEnv, bind.Pos)
 	if len(bind.Path) == 1 {
@@ -63,9 +69,12 @@ func (ev *Evaluator) insertBindingInto(av *Value, bindEnv *Env, path []parser.At
 	if len(path) == 0 {
 		return nil
 	}
-	sym, err := ev.resolveAttrSym(path[0], bindEnv, t.pos)
+	sym, ok, err := ev.resolveAttrSym(path[0], bindEnv, t.pos)
 	if err != nil {
 		return err
+	}
+	if !ok {
+		return nil
 	}
 	if len(path) == 1 {
 		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
