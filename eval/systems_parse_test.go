@@ -141,6 +141,28 @@ in {
 	}
 }
 
+func TestParseMkSystemFromSkeletonDirect(t *testing.T) {
+	_, nixpkgs, libNix, parseNix := nixpkgsRoot(t)
+	src := fmt.Sprintf(`
+let
+  lib = import %q;
+  parse = import %q { inherit lib; };
+  sk = { cpu = "x86_64"; kernel = "linux"; };
+in parse.mkSystemFromSkeleton sk
+`, libNix, parseNix)
+	expr, err := parser.ParseString(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
+	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
+	val, err := ev.EvalWithBuiltins(expr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev.ForceValue(val)
+}
+
 func TestMkSystemFromStringX8664Linux(t *testing.T) {
 	_, nixpkgs, libNix, parseNix := nixpkgsRoot(t)
 

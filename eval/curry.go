@@ -57,6 +57,10 @@ func (ev *Evaluator) applyCallable(f *Value, arg *Value, pos parser.Pos) (*Value
 	}
 }
 
+func (ev *Evaluator) isCallableValue(fv *Value, pos parser.Pos) bool {
+	return ev.isFunctionValue(fv, pos)
+}
+
 func (ev *Evaluator) hasFunctor(v *Value) bool {
 	if v == nil || v.Kind != VKAttrs || v.Attrs == nil {
 		return false

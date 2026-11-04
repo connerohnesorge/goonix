@@ -60,6 +60,9 @@ func (e *Env) lookup(sym data.Symbol) (*AttrBinding, bool) {
 func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool) {
 	for cur := env; cur != nil; cur = cur.Parent {
 		if b, ok := cur.Vars[sym]; ok {
+			if ev.forceHideSym != 0 && sym == ev.forceHideSym {
+				continue
+			}
 			return b, true
 		}
 		if cur.With != nil {

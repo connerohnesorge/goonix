@@ -1,3 +1,4 @@
 /testdata/nixpkgs/
 *.tar.gz
 .DS_Store
+eval.test

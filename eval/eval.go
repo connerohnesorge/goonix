@@ -53,6 +53,8 @@ type Evaluator struct {
 	curFile     string
 	importDepth int
 	importCache map[string]*Value
+	forceHideSym data.Symbol // hide attr name from lookup while forcing its thunk
+	selfMergeThunk *Thunk     // while forcing, propagate // self-reference through let bodies
 }
 
 type storeConfig struct {
@@ -256,6 +258,9 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 	}
 	sym := ev.Intern.Intern(v.Name)
 	if bind, ok := ev.lookupEnv(env, sym); ok {
+		if bind.Thunk != nil && ev.selfMergeThunk != nil && bind.Thunk == ev.selfMergeThunk && ev.selfMergeThunk.memo != nil {
+			return ev.selfMergeThunk.memo, nil
+		}
 		if bind.Thunk != nil {
 		 if bind.Thunk.locked && bind.Thunk.memo != nil {
 				return bind.Thunk.memo, nil
@@ -344,13 +349,32 @@ func (ev *Evaluator) evalAttrSet(a *parser.AttrSet, env *Env, fromLet bool) (*Va
 func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) error {
 	bindEnv := env.extend()
 
-	for _, bind := range a.Binds {
+	applyInherit := func(inh parser.Inherit) error {
+		return ev.bindAttrInherit(inh, env, bindEnv, av, a.Recursive)
+	}
+	applyBind := func(bind parser.Binding) {
 		ev.insertBinding(av, bindEnv, bind, a.Recursive)
 	}
 
-	for _, inh := range a.Inherit {
-		if err := ev.bindAttrInherit(inh, bindEnv, av, a.Recursive); err != nil {
-			return err
+	if len(a.Members) > 0 {
+		for _, m := range a.Members {
+			if m.Inherit != nil {
+				if err := applyInherit(*m.Inherit); err != nil {
+					return err
+				}
+			}
+			if m.Binding != nil {
+				applyBind(*m.Binding)
+			}
+		}
+	} else {
+		for _, bind := range a.Binds {
+			applyBind(bind)
+		}
+		for _, inh := range a.Inherit {
+			if err := applyInherit(inh); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -360,7 +384,7 @@ func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) err
 	return nil
 }
 
-func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, env *Env, av *Value, recursive bool) error {
+func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, populateEnv, bindEnv *Env, av *Value, recursive bool) error {
 	for _, n := range inh.Names {
 		name := n.Name
 		if n.Expr != nil {
@@ -377,14 +401,19 @@ func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, env *Env, av *Value, re
 		} else {
 			expr = &parser.Var{P: inh.Pos, Name: name}
 		}
-		t := ev.newThunk(expr, env, inh.Pos)
-		if recursive {
-			env.bindThunk(sym, t)
+		lookupEnv := populateEnv
+		if inh.From != nil {
+			lookupEnv = bindEnv
 		}
+		t := ev.newThunk(expr, lookupEnv, inh.Pos)
 		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
+		if inh.From != nil {
+			bindEnv.bindThunk(sym, t)
+		}
 	}
 	return nil
 }
+
 
 func (ev *Evaluator) bindingSym(b parser.Binding) data.Symbol {
 	if len(b.Path) != 1 || b.Path[0].Expr != nil {
@@ -461,18 +490,43 @@ func (ev *Evaluator) evalInherit(inh parser.Inherit, env *Env, av *Value) error 
 func (ev *Evaluator) evalLet(l *parser.Let, env *Env) (*Value, error) {
 	child := env.extend()
 	if l.Attrs != nil {
-		for _, inh := range l.Attrs.Inherit {
-			if err := ev.bindLetInherit(inh, child); err != nil {
-				return nil, err
+		seen := make(map[data.Symbol]struct{})
+		bindOne := func(bind parser.Binding) {
+			sym := ev.bindingSym(bind)
+			if sym == 0 {
+				return
+			}
+			if _, ok := seen[sym]; ok {
+				return
+			}
+			seen[sym] = struct{}{}
+			child.bindThunk(sym, ev.newThunk(bind.Value, child, bind.Pos))
+		}
+		if len(l.Attrs.Members) > 0 {
+			for _, m := range l.Attrs.Members {
+				if m.Inherit != nil {
+					if err := ev.bindLetInherit(*m.Inherit, child); err != nil {
+						return nil, err
+					}
+				}
+				if m.Binding != nil {
+					bindOne(*m.Binding)
+				}
+			}
+		} else {
+			for _, inh := range l.Attrs.Inherit {
+				if err := ev.bindLetInherit(inh, child); err != nil {
+					return nil, err
+				}
 			}
 		}
 		for _, bind := range l.Attrs.Binds {
-			sym := ev.bindingSym(bind)
-			if sym == 0 {
-				continue
-			}
-			child.bindThunk(sym, ev.newThunk(bind.Value, child, bind.Pos))
+			bindOne(bind)
 		}
+	}
+	self := ev.selfMergeThunk
+	if self != nil {
+		return ev.evalWithSelfMerge(l.Body, child, self)
 	}
 	return ev.evalExpr(l.Body, child)
 }
@@ -495,7 +549,8 @@ func (ev *Evaluator) bindLetInherit(inh parser.Inherit, env *Env) error {
 		} else {
 			expr = &parser.Var{P: inh.Pos, Name: name}
 		}
-		env.bindThunk(sym, ev.newThunk(expr, env, inh.Pos))
+		t := ev.newThunk(expr, env, inh.Pos)
+		env.bindThunk(sym, t)
 	}
 	return nil
 }
@@ -516,25 +571,10 @@ func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
 			return nil, err
 		}
 	}
-	switch ff.Kind {
-	case VKLambda:
-		result := ff
-		for _, arg := range args {
-			r, err := ev.applyCallable(result, arg, c.P)
-			if err != nil {
-				return nil, err
-			}
-			result, err = ev.forceValue(r)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return result, nil
-	case VKBuiltin, VKPartialBuiltin:
+	if ev.isCallableValue(ff, c.P) {
 		return ev.applyCallableN(ff, args, c.P)
-	default:
-		return nil, evalErr(c.P, "attempt to call non-function")
 	}
+	return nil, evalErr(c.P, "attempt to call non-function")
 }
 
 func (ev *Evaluator) applyLambda(l *LambdaValue, args []*Value, pos parser.Pos) (*Value, error) {
@@ -1022,8 +1062,14 @@ func (ev *Evaluator) evalWithSelfMerge(expr parser.Expr, env *Env, self *Thunk) 
 		if err != nil {
 			return nil, err
 		}
-		self.memo = lv
-		rv, err := ev.evalExpr(bo.Right, env)
+		if self != nil {
+			flv, err := ev.forceValue(lv)
+			if err != nil {
+				return nil, err
+			}
+			self.memo = flv
+		}
+		rv, err := ev.evalWithSelfMerge(bo.Right, env, self)
 		if err != nil {
 			return nil, err
 		}
@@ -1031,9 +1077,11 @@ func (ev *Evaluator) evalWithSelfMerge(expr parser.Expr, env *Env, self *Thunk) 
 	}
 	if as, ok := expr.(*parser.AttrSet); ok {
 		av := Attrs(as.Recursive)
-		self.memo = av
 		if err := ev.populateAttrSet(as, env, av); err != nil {
 			return nil, err
+		}
+		if self != nil {
+			self.memo = av
 		}
 		return av, nil
 	}
@@ -1057,8 +1105,18 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		return blackholeAttrs(), nil
 	}
 	t.locked = true
+	prevHide := ev.forceHideSym
+	if t.selfHideSym != 0 {
+		ev.forceHideSym = t.selfHideSym
+	}
+	defer func() {
+		ev.forceHideSym = prevHide
+	}()
 	var v *Value
 	var err error
+	prevSelf := ev.selfMergeThunk
+	ev.selfMergeThunk = t
+	defer func() { ev.selfMergeThunk = prevSelf }()
 	if t.lazy != nil {
 		v, err = t.lazy(ev)
 	} else {

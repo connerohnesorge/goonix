@@ -136,6 +136,14 @@ type AttrSet struct {
 	Recursive bool
 	Binds     []Binding
 	Inherit   []Inherit
+	// Members preserves source order of inherit and bind entries.
+	Members []AttrSetMember
+}
+
+// AttrSetMember is one inherit or bind in an attribute set, in source order.
+type AttrSetMember struct {
+	Inherit *Inherit
+	Binding *Binding
 }
 
 type Inherit struct {

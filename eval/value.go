@@ -109,6 +109,10 @@ type Thunk struct {
 	env  *Env
 	pos  parser.Pos
 
+	// selfHideSym, when set, is omitted from env lookup while this thunk is forcing
+	// so `name = name // { }` can refer to an outer binding of the same name.
+	selfHideSym data.Symbol
+
 	// lazy, when set, is invoked instead of expr (used for lazy builtins like mapAttrs).
 	lazy func(*Evaluator) (*Value, error)
 

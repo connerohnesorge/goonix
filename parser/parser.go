@@ -192,7 +192,9 @@ func (p *Parser) parseLetBinds() (*AttrSet, error) {
 			if err != nil {
 				return nil, err
 			}
-			set.Inherit = append(set.Inherit, *inh)
+			inhc := *inh
+			set.Inherit = append(set.Inherit, inhc)
+			set.Members = append(set.Members, AttrSetMember{Inherit: &inhc})
 			continue
 		}
 		path, err := p.parseAttrPath()
@@ -209,12 +211,15 @@ func (p *Parser) parseLetBinds() (*AttrSet, error) {
 		if _, err := p.expect(tokenSemi); err != nil {
 			return nil, err
 		}
-		set.Binds = append(set.Binds, Binding{
+		bind := Binding{
 			Pos:   path[0].pos(),
 			Path:  path,
 			Value: val,
 			Kind:  BindPlain,
-		})
+		}
+		set.Binds = append(set.Binds, bind)
+		b := bind
+		set.Members = append(set.Members, AttrSetMember{Binding: &b})
 	}
 	return set, nil
 }
@@ -718,7 +723,9 @@ func (p *Parser) parseBindsInner() (*AttrSet, error) {
 			if err != nil {
 				return nil, err
 			}
-			set.Inherit = append(set.Inherit, *inh)
+			inhc := *inh
+			set.Inherit = append(set.Inherit, inhc)
+			set.Members = append(set.Members, AttrSetMember{Inherit: &inhc})
 			continue
 		}
 		path, err := p.parseAttrPath()
@@ -735,12 +742,15 @@ func (p *Parser) parseBindsInner() (*AttrSet, error) {
 		if _, err := p.expect(tokenSemi); err != nil {
 			return nil, err
 		}
-		set.Binds = append(set.Binds, Binding{
+		bind := Binding{
 			Pos:   path[0].pos(),
 			Path:  path,
 			Value: val,
 			Kind:  BindPlain,
-		})
+		}
+		set.Binds = append(set.Binds, bind)
+		b := bind
+		set.Members = append(set.Members, AttrSetMember{Binding: &b})
 	}
 	return set, nil
 }

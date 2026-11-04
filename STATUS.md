@@ -12,37 +12,53 @@ go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 
 | Issue | Title (short) | Status | Evidence |
 |-------|----------------|--------|----------|
-| #2 | Eval core / laziness | **partial** | Lazy `mapAttrs`, lazy `with`, `//` self-merge, blackhole `or` defaults; hello still blocked on xorg scope |
+| #2 | Eval core / laziness | **partial** | Lazy `mapAttrs`, lazy `with`, `//` self-merge through `let`, blackhole `or`; hello blocked on `lib/systems/parse.nix` |
 | #3 | Value / data model | **done** | `eval/value.go`, `data/` used across eval + store |
-| #4 | Parser | **partial** | Hand-written parser; 3 vendored `parse-okay-*` cases skipped in `lang/` (CRLF, indented strings, subversion) |
-| #5 | Builtins | **partial** | Large builtin set; `readDir` fixed to attrset; `zipAttrsWith`; `__functor` calls |
-| #6 | NIX_PATH / import | **partial** | `eval/nixpath.go`, `import` cache, `testdata/nix/fetchurl.nix` |
-| #7 | Builder | **stub** | `build/doc.go` — not required for drvPath eval |
-| #8 | Substituter | **stub** | `substitute/doc.go` — not required for drvPath eval |
-| #9 | CLI / integration | **partial** | `cmd/goonix` parse/eval/instantiate; ladder drives hello |
+| #4 | Parser | **partial** | Hand-written parser; attrset `Members` source order; 3 vendored `parse-okay-*` skipped in `lang/` |
+| #5 | Builtins | **partial** | Large builtin set; `readDir` attrset; `__functor` / `applyCallableN` |
+| #6 | NIX_PATH / import | **partial** | `eval/nixpath.go`, `import` cache |
+| #7 | Builder | **stub** | `build/doc.go` |
+| #8 | Substituter | **stub** | `substitute/doc.go` |
+| #9 | CLI / integration | **partial** | `cmd/goonix`; ladder drives hello |
 | #10 | CI | **done** | `.github/workflows/ci.yml`, `scripts/check-cgo.sh` green |
-| #11 | go-nix decision | **done** | `docs/decisions/go-nix.md`, `store/` wraps pure go-nix |
-| #12 | Store 4a | **partial** | Path/hash/NAR in `store/`; used for derivation text |
-| #13 | Ladder / goldens | **partial** | `TestHelloDrvPathMatchesGolden` **fails** at `all-packages.nix:13754` (`makeScopeWithSplicing'` / xorg); golden path unchanged |
-| #14 | Docs / tracking | **partial** | README updated; this file replaces missing GitHub issue comments |
+| #11 | go-nix decision | **done** | `docs/decisions/go-nix.md` |
+| #12 | Store 4a | **partial** | `store/` path/hash/NAR |
+| #13 | Ladder / goldens | **partial** | Hello golden **fails** in `parse.nix` (not xorg call stack) |
+| #14 | Docs / tracking | **partial** | README; this file |
 
 ## Hello golden (primary v0 gate)
 
 - **Target:** `/nix/store/gciipqhqkdlqqn803zd4a389v86ran45-hello-2.12.1.drv`
-- **Nix reference:** `nix-instantiate --eval -E 'with import ./testdata/nixpkgs { ... }; hello.drvPath'` matches golden.
-- **goonix:** fails during `pkgs.xorg` (`makeScopeWithSplicing'` / `lib.extends` / `callPackageWith` chain). Prior fixes: lazy aliases (`mapAttrs`), `readDir` attrset, `__functor`, lazy `with` for fixpoint `callPackage`.
+- **Nix reference:** `nix-instantiate --eval` on pinned nixpkgs matches golden.
+- **goonix:** `TestHelloDrvPathMatchesGolden` fails at `testdata/nixpkgs/lib/systems/parse.nix:915` (`undefined variable "parsed"` in `mkSystemFromSkeleton` let body). Same module fails earlier on `mkSystemFromString` / `kernels.darwin` at **line 570** (`undefined variable "darwin"` in `families = { inherit darwin; }`) when `types.kernel` / `attrValues kernels` forces alias merge paths.
+
+### Eval fixes landed this iteration
+
+- `evalCall` uses `applyCallableN` / `__functor` (unblocks `pkgs.xorg` attrset shape vs “attempt to call non-function”).
+- Parser attrset **`Members`** preserves `inherit` before binds (nixpkgs `all-packages.nix` ordering).
+- **`//` self-merge:** `selfMergeThunk` through `let` bodies; `self.memo` after left operand is forced; attrset `self.memo` after populate.
+- Plain **`inherit`** in attrsets: lookup env = populate env; `inherit (from)` still binds into inner `bindEnv`.
+- **`forceHideSym`** on attr bindings for `name = name // …` fixpoint patterns.
+- Lazy **`builtins.mapAttrs`**, **`readDir`** attrset, lazy **`with`**.
+
+### Remaining parse.nix scoping (blocker)
+
+- `parse.kernels.macos` / `.ios` evaluate; `parse.kernels.darwin` (merge alias `darwin = kernels.macos`) and `builtins.attrValues parse.kernels` fail at inherit `darwin` (570).
+- `parse.mkSystemFromSkeleton` / hello path fails at `parsed` in let body (915) once platform checks run.
+
+Regression tests: `eval/merge_alias_test.go`, `eval/parse_kernels_test.go`, `eval/inherit_scope_test.go`, `eval/parsed_self_test.go`.
 
 ## Ladder rungs (no network build)
 
 | Rung | Status |
 |------|--------|
-| hello `.drvPath` | **blocked** (see above) |
-| dependent / toFile / stdenvNoCC / curl | **not started** — depends on hello path |
-| rungs needing `nix-build` / substituters | **skipped** (documented) |
+| hello `.drvPath` | **blocked** (`parse.nix` above) |
+| dependent / toFile / stdenvNoCC / curl | **not started** — blocked on hello eval |
+| rungs needing `nix-build` / substituters | **skipped** (no network build in CI) |
 
 ## Tests
 
 - `bash scripts/check-cgo.sh`: **green**
-- `go test ./eval/...`: **green** (incl. lazy `mapAttrs`, `readDir`)
-- `go test ./lang/...`: **green** (in-scope parse-okay files only)
+- `go test ./eval/...`: **red** — nixpkgs integration tests (`TestHelloDrvPathMatchesGolden` path, `TestPkgsXorgIsAttrset`, `TestMkSystemFromStringX8664Linux`, kernel alias tests)
+- `go test ./lang/...`: **green** (in-scope parse-okay files)
 - `go test ./ladder/...`: **red** (hello golden)

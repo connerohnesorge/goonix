@@ -19,10 +19,9 @@ func (ev *Evaluator) insertBinding(av *Value, bindEnv *Env, bind parser.Binding,
 	t := ev.newThunk(bind.Value, bindEnv, bind.Pos)
 	if len(bind.Path) == 1 {
 		sym := ev.Intern.Intern(bind.Path[0].Name)
-		if recursive {
-			bindEnv.bindThunk(sym, t)
-		}
+		t.selfHideSym = sym
 		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
+		bindEnv.bindThunk(sym, t)
 		return
 	}
 	nested := ev.ensureNestedAttr(av, bind.Path[0].Name, recursive, bindEnv)
