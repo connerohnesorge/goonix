@@ -206,6 +206,11 @@ func pairClosureByNameStdenv(nixDoc, goDoc drvshow.Document) map[string]keyPair 
 	nixBy := make(map[string]string)
 	for k, e := range nixDoc.Derivations {
 		id := drvshow.NameStdenvPairID(e)
+		if prev, ok := nixBy[id]; ok {
+			if stdenvDNBIScore(nixDoc.Derivations[prev]) >= stdenvDNBIScore(e) {
+				continue
+			}
+		}
 		nixBy[id] = k
 	}
 	out := make(map[string]keyPair)
@@ -215,9 +220,22 @@ func pairClosureByNameStdenv(nixDoc, goDoc drvshow.Document) map[string]keyPair 
 		if !ok {
 			continue
 		}
+		if prev, ok := out[id]; ok {
+			if stdenvDNBIScore(goDoc.Derivations[prev.goKey]) >= stdenvDNBIScore(e) {
+				continue
+			}
+		}
 		out[id] = keyPair{nixKey: nk, goKey: k}
 	}
 	return out
+}
+
+func stdenvDNBIScore(e drvshow.Entry) int {
+	s := e.Env["defaultNativeBuildInputs"]
+	if strings.Contains(s, "gcc-wrapper") {
+		return 1000000 + len(s)
+	}
+	return len(s)
 }
 
 // topoLeavesFirstByDepth sorts by max input-chain depth (leaves first), stable by name.

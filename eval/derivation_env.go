@@ -114,40 +114,7 @@ func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *de
 		return "", nil, err
 	}
 	col.mergeValueContext(sv)
-	s := normalizeDerivationEnvStorePathList(sv.String)
-	return s, copyStringContext(sv.Ctx), nil
-}
-
-func normalizeDerivationEnvStorePathList(s string) string {
-	if s == "" {
-		return s
-	}
-	if !strings.ContainsAny(s, " \t\n") {
-		return normalizeDerivationEnvStorePath(s)
-	}
-	parts := strings.Fields(s)
-	for i, p := range parts {
-		parts[i] = normalizeDerivationEnvStorePath(p)
-	}
-	return strings.Join(parts, " ")
-}
-
-// normalizeDerivationEnvStorePath adds /nix/store/ when a coerced env value is a bare store fingerprint.
-func normalizeDerivationEnvStorePath(s string) string {
-	if s == "" || strings.ContainsAny(s, " \t\n") {
-		return s
-	}
-	storeDir := store.DefaultStoreDir
-	if strings.HasPrefix(s, storeDir+"/") {
-		return s
-	}
-	if strings.HasPrefix(s, "/") && !strings.HasPrefix(s, storeDir+"/") {
-		return s
-	}
-	if i := strings.Index(s, "-"); i == 32 && i+1 < len(s) {
-		return storeDir + "/" + s
-	}
-	return s
+	return sv.String, copyStringContext(sv.Ctx), nil
 }
 
 func parseOutputNamesFromEnv(s string) (map[string]struct{}, error) {
