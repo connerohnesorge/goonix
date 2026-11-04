@@ -207,25 +207,17 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 			return Path(fa.Path + fb.Path), nil
 		}
 		if fa.Kind == VKPath {
-			as, err := ev.coerceToString(fa, CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true})
-			if err != nil {
-				return nil, err
-			}
 			bs, err := ev.coerceToString(fb, cc)
 			if err != nil {
 				return nil, err
 			}
-			return StrWithContext(as.String+bs.String, mergeStringContexts(as.Ctx, bs.Ctx), pos), nil
+			return Path(fa.Path + bs.String), nil
 		}
 		as, err := ev.coerceToString(fa, cc)
 		if err != nil {
 			return nil, err
 		}
-		bs, err := ev.coerceToString(fb, CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true})
-		if err != nil {
-			return nil, err
-		}
-		return StrWithContext(as.String+bs.String, mergeStringContexts(as.Ctx, bs.Ctx), pos), nil
+		return Path(as.String + fb.Path), nil
 	}
 	as, err := ev.coerceToString(fa, cc)
 	if err != nil {
