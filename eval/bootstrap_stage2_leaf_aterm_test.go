@@ -8,5 +8,5 @@ func TestBootstrapStage2XgccATermMatchesNix(t *testing.T) {
 }
 
 func TestBootstrapStage2BinutilsWrapperATermMatchesNix(t *testing.T) {
-	bootstrapATermOracleLogical(t, "-binutils-wrapper-2.43.1.drv")
+	bootstrapATermOracleLogical(t, "binutils-wrapper-2.43.1")
 }

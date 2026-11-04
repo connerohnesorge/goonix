@@ -27,25 +27,6 @@ func bootstrapStageStdenvATerm(t *testing.T, stage string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	suffix := "bootstrap-" + stage + "-stdenv-linux.drv"
-	var goKey string
-	for k := range goDoc.Derivations {
-		if strings.HasSuffix(k, suffix) {
-			goKey = k
-			break
-		}
-	}
-	if goKey == "" {
-		t.Fatalf("go closure missing %s", suffix)
-	}
-	gd, ok := ev.RegisteredDerivation("/nix/store/" + goKey)
-	if !ok {
-		t.Fatal("not registered")
-	}
-	goATerm, err := eval.SerializeGoNixDerivation(gd)
-	if err != nil {
-		t.Fatal(err)
-	}
 	inst := filepath.Join(root, "eval", "testdata", "stdenv_nocc_inst.nix")
 	nixPath, err := drvshow.MaterializeNixDrv(lay, inst)
 	if err != nil {
@@ -55,15 +36,21 @@ func bootstrapStageStdenvATerm(t *testing.T, stage string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var nixKey string
-	for k := range nixDoc.Derivations {
-		if strings.HasSuffix(k, suffix) {
-			nixKey = k
-			break
-		}
+	suffix := "bootstrap-" + stage + "-stdenv-linux.drv"
+	nixKey, goKey := pairClosureKeysBySuffix(nixDoc, goDoc, suffix)
+	if goKey == "" {
+		t.Fatalf("go closure missing %s", suffix)
 	}
 	if nixKey == "" {
 		t.Fatalf("nix closure missing %s", suffix)
+	}
+	gd, ok := ev.RegisteredDerivation("/nix/store/" + goKey)
+	if !ok {
+		t.Fatal("not registered")
+	}
+	goATerm, err := eval.SerializeGoNixDerivation(gd)
+	if err != nil {
+		t.Fatal(err)
 	}
 	nixATerm, err := os.ReadFile("/nix/store/" + nixKey)
 	if err != nil {

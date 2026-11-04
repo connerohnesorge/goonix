@@ -26,18 +26,6 @@ func bootstrapATermOracleLogical(t *testing.T, logicalSuffix string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var goKey, logical string
-	for k := range goDoc.Derivations {
-		ln := drvshow.LogicalName(k)
-		if strings.HasSuffix(ln, logicalSuffix) {
-			goKey = k
-			logical = ln
-			break
-		}
-	}
-	if goKey == "" {
-		t.Fatalf("go closure missing logical suffix %s", logicalSuffix)
-	}
 	inst := filepath.Join(root, "eval", "testdata", "stdenv_nocc_inst.nix")
 	nixPath, err := drvshow.MaterializeNixDrv(lay, inst)
 	if err != nil {
@@ -47,17 +35,68 @@ func bootstrapATermOracleLogical(t *testing.T, logicalSuffix string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var nixKey string
+	var goKey, nixKey, logical string
+	var nixCandidates []string
 	for k := range nixDoc.Derivations {
-		if drvshow.LogicalName(k) == logical {
-			nixKey = k
+		ln := drvshow.LogicalName(k)
+		if ln == logicalSuffix || strings.HasSuffix(ln, logicalSuffix) {
+			nixCandidates = append(nixCandidates, k)
+		}
+	}
+	sort.Strings(nixCandidates)
+	for _, nk := range nixCandidates {
+		ne := nixDoc.Derivations[nk]
+		pid := drvshow.NameStdenvPairID(ne)
+		for gk, ge := range goDoc.Derivations {
+			if drvshow.NameStdenvPairID(ge) == pid {
+				nixKey = nk
+				goKey = gk
+				logical = drvshow.LogicalName(nk)
+				break
+			}
+		}
+		if goKey != "" {
 			break
 		}
+	}
+	if goKey == "" {
+		t.Fatalf("go closure missing logical suffix %s (pair with nix)", logicalSuffix)
 	}
 	if nixKey == "" {
 		t.Fatalf("nix closure missing logical %q", logical)
 	}
 	bootstrapATermOracleKeys(t, nixKey, goKey, ev)
+}
+
+func pairClosureKeysBySuffix(nixDoc, goDoc drvshow.Document, suffix string) (nixKey, goKey string) {
+	var nixCandidates []string
+	for k := range nixDoc.Derivations {
+		if strings.HasSuffix(k, suffix) {
+			nixCandidates = append(nixCandidates, k)
+		}
+	}
+	sort.Strings(nixCandidates)
+	for _, nk := range nixCandidates {
+		pid := drvshow.NameStdenvPairID(nixDoc.Derivations[nk])
+		for gk, ge := range goDoc.Derivations {
+			if !strings.HasSuffix(gk, suffix) {
+				continue
+			}
+			if drvshow.NameStdenvPairID(ge) == pid {
+				return nk, gk
+			}
+		}
+	}
+	if len(nixCandidates) > 0 {
+		nixKey = nixCandidates[0]
+	}
+	for k := range goDoc.Derivations {
+		if strings.HasSuffix(k, suffix) {
+			goKey = k
+			break
+		}
+	}
+	return nixKey, goKey
 }
 
 func bootstrapATermOracle(t *testing.T, drvSuffix string) {

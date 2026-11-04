@@ -4,34 +4,28 @@ Oracle: **Nix 2.24.9**, nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. 
 
 ```bash
 bash scripts/check-cgo.sh
-go test ./eval -run 'TestImportNixpkgsLibVersion|TestNullDynamic|TestBootstrapXgcc|TestBootstrapTools|TestBootstrapStage2GCCWrapper|TestStdenvDrvPath' -count=1
+go test ./eval -run 'TestPathPlusOracle|TestBootstrapXgcc|TestBootstrapStage2Binutils|TestBootstrapStage2GCCWrapper|TestImportNixpkgsLibVersion' -count=1
+go test ./ladder -run Hello -count=1
 ```
 
 ## Fixes (recent)
 
-- **`builtins.toString`** keeps string context (gcc `env = mapAttrs (_: v: toString v)` for `CPATH` / `LIBRARY_PATH`).
-- **`builtins.concatStringsSep`** merges per-element string context (Nix `__concatStringsSep`).
-- **`derivationStrict` + `__ignoreNulls`**: force attr values before dropping nulls (no empty `libcCross` / `targetConfig` env keys).
-- **xgcc drvAttrs oracles** (`xgcc_drvattrs_oracle.nix`, strict env / inputDrvs / `getContext` on `LIBRARY_PATH`).
-- **`equalValues`**: `drvPath` shortcut only when **both** sides are derivations (`type == "derivation"`).
-- **Duplicate stdenv pairing** in topo byte diff: **BFS order from closure root**, not longest `defaultNativeBuildInputs`.
-- **Path/string `+`**: string result with merged context (no silent `Path` concat drop).
-- **Null dynamic attr names**, list empty elements, stage0/1 env invariants, placeholder, strict memo (unchanged from prior notes).
+- **Path `+`**: path-left stays `path` (no context); path + store-context string errors; string-left copies path to store (`eval/testdata/path_plus_oracle.nix`).
+- **`getContext`** rejects path values like Nix.
+- **`builtins.toString` / `concatStringsSep`**: preserve string context (xgcc `LIBRARY_PATH`, zlib `inputDrvs`).
+- **Closure pairing**: `NameStdenvPairID` when matching logical drv names (binutils-wrapper duplicate instances).
+- **xgcc**, **stage2 gcc-wrapper**, **binutils-wrapper** byte ATerm oracles **green** (with pairing).
+- **Duplicate stdenv** topo pairing: BFS from closure root.
 
 ## Bootstrap ATerm ladder
 
 | Node | Status |
 |------|--------|
-| bootstrap-tools, stage0/1 stdenv env bytes | **green** |
-| stage2 cc / ERP stdenv oracles | **green** |
-| texinfo, xgcc byte ATerm (topo name+stdenv) | **green** |
-| gcc-wrapper (stage2) | **green** |
-| binutils-wrapper, stage2 stdenv | **red** (closure pairing / upstream drv) |
-| stdenvNoCC, hello, curl | **red** |
-
-## Import / contexts
-
-- **`TestImportNixpkgsLibVersionOnly`**, path interp oracles, **`TestStringContextAuditMatchesNix`** (incl. `toString`) **green**.
+| bootstrap-tools, stage0/1 env bytes | **green** |
+| xgcc, gcc-wrapper, binutils-wrapper | **green** |
+| bootstrap-stage2-stdenv-linux | **red** (go `defaultNativeBuildInputs` env lists extra `bootstrap-stage2-gcc-wrapper` path vs Nix) |
+| stdenvNoCC probe / hello ladder drvPath | **green** (golden) |
+| curl | **red** (large closure; not re-run this turn) |
 
 ## CGO
 
