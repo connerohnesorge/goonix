@@ -1118,6 +1118,20 @@ func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk
 	return &Thunk{eval: ev, expr: expr, env: env, pos: pos}
 }
 
+// deferredApplyCall returns a lazy list element / map result without applying f yet (Nix map/genList laziness).
+func (ev *Evaluator) deferredApplyCall(f, arg *Value, pos parser.Pos) *Value {
+	fCap, argCap := f, arg
+	posCap := pos
+	t := &Thunk{
+		eval: ev,
+		pos:  posCap,
+		lazy: func(ev *Evaluator) (*Value, error) {
+			return ev.applyCallable(fCap, argCap, posCap)
+		},
+	}
+	return Deferred(t)
+}
+
 func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 	if t == nil {
 		return Null(), nil

@@ -99,6 +99,7 @@ func TestBuiltinLazinessAudit(t *testing.T) {
 		{name: "with self attrset literal deferred", expr: `((self: with self; { probe = 1; z = ` + throwVal + `; }) { }).probe`},
 		{name: "with self user fixpoint", expr: `let s = (self: with self; { a = f 1; f = x: x; z = ` + throwVal + `; }) s; in s.a`},
 		{name: "makeScope self merge callPackage", expr: `let f = self: with self; { got = callPackage 0; }; self = f self // { callPackage = x: x; z = ` + throwVal + `; }; in self.got`},
+		{name: "extends overlay mapNames super", expr: `let extends = o: f: final: let prev = f final; in prev // o final prev; gen = self: { pkg = self.cp ({ stdenv }: stdenv.mkDerivation { name = "p"; builder = "builtin:derivation"; }); cp = fn: a: gen self // { }; }; setLicense = n: super: super.${n}.overrideAttrs (o: o); mapNTA = f: ns: builtins.listToAttrs (map (n: { name = n; value = f n; }) ns); overlay = self: super: { } // (mapNTA (setLicense super) [ "pkg" ]); self = (extends overlay gen) self // { ok = 1; z = ` + throwVal + `; }; in self.ok`},
 	}
 
 	for _, tc := range cases {
