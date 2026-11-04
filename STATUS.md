@@ -32,7 +32,7 @@ go test ./ladder/... -count=1
 
 - **Leaf-first ATerm byte compare:** `CompareBytesBottomUp` + `FormatByteCulprit` (first paired node whose raw `.drv` bytes differ while input `.drv` bytes all match). Use `AnalyseWithATerm` / `goonix drv-diff`.
 - Normalized field diff retained (`FormatMismatchDetail`) for debugging only.
-- **Byte culprit (stdenvNoCC inst):** `bootstrap-stage0-binutils-wrapper-` (glibc-bootstrapFiles + bootstrap-stage0-stdenv-linux ATerm oracles **green**).
+- **Byte culprit (stdenvNoCC inst):** `bootstrap-stage0-binutils-wrapper-` — `installPhase` / `postFixup` still embed **source paths** instead of copied store paths for `${./…-wrapper.sh}` (path→string / string context). glibc-bootstrapFiles + bootstrap-stage0-stdenv-linux ATerm oracles **green**; vendored `eval-okay-ind-string` **green**.
 
 ## Fixes (bootstrap chain)
 
@@ -48,7 +48,7 @@ go test ./ladder/... -count=1
 | toFile | `TestToFileLadderMatchesGolden` | **green** |
 | hello | `TestHelloDrvPathMatchesGolden` | **red** (full hello closure) |
 | stdenvNoCC | `TestStdenvNoCCLadderMatchesGolden` | **red** |
-| curl | `TestCurlLadderMatchesGolden` | **red** (large; skip `-short`) |
+| curl | `TestCurlLadderMatchesGolden` | **red** — reaches `lib.throw` on apple-sdk (linux host SDK major); not missing `throw` attr |
 
 ## Still red
 
