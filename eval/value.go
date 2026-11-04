@@ -121,6 +121,9 @@ type Thunk struct {
 
 	// pendingMergeRhs holds the right-hand attrset of `let self = lhs // rhs` while lhs is evaluated.
 	pendingMergeRhs *Value
+
+	// fixPublish accumulates attr bindings during lib.fix-style f x while locked.
+	fixPublish bool
 }
 
 func (v *Value) force(e *Evaluator) (*Value, error) {

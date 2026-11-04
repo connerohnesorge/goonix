@@ -10,35 +10,33 @@ go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
-| #2 | Eval core / laziness | **partial** — `with self` + pending `//` merge fixed; hello at `callPackageWith` auto-arg pool |
-| #13 | Ladder / goldens | **partial** — import reaches `lib.customisation.callPackageWith` (missing auto args) |
+| #2 | Eval core / laziness | **partial** — fixpoint sibling pool for `intersectAttrs` **done**; hello at xorg `with self` / `callPackage` |
+| #13 | Ladder / goldens | **partial** — import past `fetchurl` auto-args; xorg generated `default.nix` |
 
-## Callable / `with self` + `let self = lhs // rhs` — **done (this turn)**
+## Fixpoint sibling visibility (this turn) — **done**
 
-While `self` is forcing `f self // { callPackage = … }`, locked thunks now expose **`lhs // rhs` keys** via `pendingMergeRhs` (including when `memo` is only the LHS). `with self` on a deferred self-merge argument materializes that merged view before body lookup.
+While a **`lib.fix` / `let x = f x`** thunk is locked (`fixPublish`), attribute names are **published incrementally** into `memo` as bindings are inserted (not only when the attrset finishes). `attrsBindingMap` / `intersectAttrs` read that pool for deferred fixpoint `self` / `__splicedPackages` without forcing every value. `forceValue` on a locked fixpoint deferred returns the in-progress `memo` instead of blackhole or re-entering the force.
 
-Regression tests: `eval/with_self_callpackage_test.go`, `eval/makeoverridable_self_test.go`.
+Regression tests: `eval/fixpoint_sibling_test.go`, `eval/fixpoint_callpackage_test.go`.
 
-Also: **`builtins.sort`**, **`unsafeGetAttrPos`** returns null for bool `functionArgs` maps (error paths use `fn` location); lazy **`intersectAttrs`** binding maps.
+Also unchanged: **`with self` + `let self = lhs // rhs`** (`pendingMergeRhs`, `mergeAttrBindMaps`), **`builtins.sort`**, **`unsafeGetAttrPos`**.
 
 ## Hello golden (gate)
 
 - **Target:** `/nix/store/gciipqhqkdlqqn803zd4a389v86ran45-hello-2.12.1.drv`
-- **goonix:** past xorg / `recurseIntoAttrs`; fails importing `pkgs` with  
-  `lib.customisation.callPackageWith: Function called without required argument "fetchurl"`  
-  (auto-args from `__splicedPackages` / fixpoint `self` while locked — next: fixpoint sibling visibility for `intersectAttrs` / `callPackageWith`).
+- **goonix:** past **`callPackageWith` / `fetchurl` auto-args**; fails in xorg generated `default.nix` with **`undefined variable "callPackage"`** (`self: with self;` inside `makeScopeWithSplicing'` while `self = f self // { callPackage = … }` is still forcing — next: RHS merge siblings visible in `with` without polluting fixpoint `memo`).
 
 ## Tests
 
 - `bash scripts/check-cgo.sh`: **green**
 - `go test ./lang/...`: **green**
 - `go test ./eval/...`: **green** except full-`pkgs` import / xorg integration (4 tests)
-- `go test ./ladder/... -run TestHelloDrvPathMatchesGolden`: **red** (same `callPackageWith` abort)
+- `go test ./ladder/... -run TestHelloDrvPathMatchesGolden`: **red** (same xorg `callPackage` abort)
 
 ## Ladder rungs
 
 | Rung | Status |
 |------|--------|
-| hello `.drvPath` | **blocked** (`callPackageWith` auto pool / fixpoint) |
+| hello `.drvPath` | **blocked** (xorg scope `callPackage` in `with self`) |
 | dependent / toFile / stdenvNoCC / curl | **not started** |
 | network `nix-build` rungs | **skipped** |

@@ -571,21 +571,15 @@ func (ev *Evaluator) attrsBindingMap(v *Value, pos parser.Pos) (map[data.Symbol]
 				continue
 			}
 			if t.locked {
+				if t.fixPublish && t.memo != nil && t.memo.Kind == VKAttrs && t.memo.Attrs != nil {
+					return t.memo.Attrs.Binds, nil
+				}
 				if t.pendingMergeRhs != nil {
-					left := t.memo
-					if left == nil {
-						left = Attrs(false)
-					}
-					m, err := ev.updateAttrSet(left, t.pendingMergeRhs, t.pos)
-					if err != nil {
-						return nil, err
-					}
-					cur = m
+					cur = mergeAttrBindMaps(t.memo, t.pendingMergeRhs)
 					continue
 				}
-				if t.memo != nil {
-					cur = t.memo
-					continue
+				if t.memo != nil && t.memo.Kind == VKAttrs && t.memo.Attrs != nil {
+					return t.memo.Attrs.Binds, nil
 				}
 				return make(map[data.Symbol]*AttrBinding), nil
 			}
