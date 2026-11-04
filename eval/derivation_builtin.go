@@ -57,38 +57,75 @@ func (ev *Evaluator) derivationOutputNames(drvAttrs *Value, pos parser.Pos) ([]s
 	return names, nil
 }
 
-func (ev *Evaluator) derivationOutputOverlay(strict *Value, outputName string, pos parser.Pos) *Value {
-	if strict == nil || strict.Kind != VKAttrs {
-		return Attrs(false)
+func (ev *Evaluator) lazyStrictDerivation(drvAttrs *Value, pos parser.Pos) *Value {
+	strictThunk := &Thunk{
+		eval: ev,
+		pos:  pos,
+		lazy: func(e *Evaluator) (*Value, error) {
+			return builtinDerivationStrict(e, pos, []*Value{drvAttrs})
+		},
 	}
+	return Deferred(strictThunk)
+}
+
+func (ev *Evaluator) lazySelectStrictAttr(strict *Value, attr string, pos parser.Pos) *Value {
+	sym := ev.Intern.Intern(attr)
+	t := &Thunk{
+		eval: ev,
+		pos:  pos,
+		lazy: func(e *Evaluator) (*Value, error) {
+			sv, err := e.forceValue(strict)
+			if err != nil {
+				return nil, err
+			}
+			if sv == nil || sv.Kind != VKAttrs {
+				return Null(), nil
+			}
+			b, ok := sv.Attrs.Binds[sym]
+			if !ok {
+				return Null(), nil
+			}
+			return e.attrBindingValue(b)
+		},
+	}
+	return Deferred(t)
+}
+
+func (ev *Evaluator) derivationOutputOverlayLazy(strict *Value, outputName string, pos parser.Pos) *Value {
 	overlay := Attrs(false)
-	set := func(name string, v *Value) {
-		overlay.Attrs.Binds[ev.Intern.Intern(name)] = &AttrBinding{Value: v}
-	}
-	set("type", Str("derivation", pos))
-	set("outputName", Str(outputName, pos))
-	drvSym := ev.Intern.Intern("drvPath")
-	if b, ok := strict.Attrs.Binds[drvSym]; ok {
-		overlay.Attrs.Binds[drvSym] = b
-	}
-	outSym := ev.Intern.Intern(outputName)
-	if b, ok := strict.Attrs.Binds[outSym]; ok {
-		// Nix: outPath = getAttr outputName strict (path lives under output name on strict)
-		overlay.Attrs.Binds[ev.Intern.Intern("outPath")] = b
-	} else if outputName == "out" {
-		if b, ok := strict.Attrs.Binds[ev.Intern.Intern("outPath")]; ok {
-			overlay.Attrs.Binds[ev.Intern.Intern("outPath")] = b
+	overlay.Attrs.Binds[ev.Intern.Intern("type")] = &AttrBinding{Value: Str("derivation", pos)}
+	overlay.Attrs.Binds[ev.Intern.Intern("outputName")] = &AttrBinding{Value: Str(outputName, pos)}
+	overlay.Attrs.Binds[ev.Intern.Intern("drvPath")] = &AttrBinding{Value: ev.lazySelectStrictAttr(strict, "drvPath", pos)}
+	if outputName == "out" {
+		t := &Thunk{
+			eval: ev,
+			pos:  pos,
+			lazy: func(e *Evaluator) (*Value, error) {
+				sv, err := e.forceValue(strict)
+				if err != nil {
+					return nil, err
+				}
+				if sv == nil || sv.Kind != VKAttrs {
+					return Null(), nil
+				}
+				for _, name := range []string{"outPath", "out"} {
+					if b, ok := sv.Attrs.Binds[e.Intern.Intern(name)]; ok {
+						return e.attrBindingValue(b)
+					}
+				}
+				return Null(), nil
+			},
 		}
+		overlay.Attrs.Binds[ev.Intern.Intern("outPath")] = &AttrBinding{Value: Deferred(t)}
+	} else {
+		overlay.Attrs.Binds[ev.Intern.Intern("outPath")] = &AttrBinding{Value: ev.lazySelectStrictAttr(strict, outputName, pos)}
 	}
 	return overlay
 }
 
 // buildNixDerivation implements Nix primops/derivation.nix (2.24.9).
 func (ev *Evaluator) buildNixDerivation(drvAttrs *Value, pos parser.Pos) (*Value, error) {
-	strict, err := builtinDerivationStrict(ev, pos, []*Value{drvAttrs})
-	if err != nil {
-		return nil, err
-	}
+	strict := ev.lazyStrictDerivation(drvAttrs, pos)
 	outputNames, err := ev.derivationOutputNames(drvAttrs, pos)
 	if err != nil {
 		return nil, err
@@ -100,11 +137,12 @@ func (ev *Evaluator) buildNixDerivation(drvAttrs *Value, pos parser.Pos) (*Value
 	outputValues := make([]*Value, len(outputNames))
 	for i, oname := range outputNames {
 		oname := oname
+		strictCapture := strict
 		t := &Thunk{
 			eval: ev,
 			pos:  pos,
 			lazy: func(e *Evaluator) (*Value, error) {
-				ov := e.derivationOutputOverlay(strict, oname, pos)
+				ov := e.derivationOutputOverlayLazy(strictCapture, oname, pos)
 				return mergeAttrBindMaps(common, ov), nil
 			},
 		}
@@ -114,6 +152,6 @@ func (ev *Evaluator) buildNixDerivation(drvAttrs *Value, pos parser.Pos) (*Value
 	}
 	common.Attrs.Binds[ev.Intern.Intern("all")] = &AttrBinding{Value: List(outputValues...)}
 
-	headOverlay := ev.derivationOutputOverlay(strict, outputNames[0], pos)
+	headOverlay := ev.derivationOutputOverlayLazy(strict, outputNames[0], pos)
 	return mergeAttrBindMaps(common, headOverlay), nil
 }

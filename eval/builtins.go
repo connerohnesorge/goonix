@@ -996,6 +996,10 @@ func builtinDerivation(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 
 func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 	pos := parser.Pos{}
+	if ev.forceTrace {
+		ev.forceFrames = append(ev.forceFrames, "derivationStrict")
+		defer func() { ev.forceFrames = ev.forceFrames[:len(ev.forceFrames)-1] }()
+	}
 	getS := func(name string) (string, error) {
 		sym := ev.Intern.Intern(name)
 		b, ok := attrs.Attrs.Binds[sym]
@@ -1017,12 +1021,13 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 		return nil, err
 	}
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
-	drvPath, outPaths, err := computeDerivationPaths(cfg, drv)
+	drvPath, outPaths, err := computeDerivationPaths(ev, cfg, drv)
 	if err != nil {
 		return nil, err
 	}
 	drv.DrvPath = drvPath
 	drv.OutPaths = outPaths
+	ev.rememberStrictDerivation(drv)
 	return drv, nil
 }
 
@@ -1038,10 +1043,11 @@ func (ev *Evaluator) derivationValueToAttrs(drv *DerivationValue) *Value {
 	set("drvPath", Path(drv.DrvPath))
 	if drv.OutPaths != nil {
 		for outName, p := range drv.OutPaths {
-			set(outName, Path(p))
+			ctx := []StringContextElem{{DrvPath: drv.DrvPath, Output: outName}}
+			set(outName, StrWithContext(p, ctx, parser.Pos{}))
 		}
 		if p, ok := drv.OutPaths["out"]; ok {
-			set("outPath", Path(p))
+			set("outPath", StrWithContext(p, []StringContextElem{{DrvPath: drv.DrvPath, Output: "out"}}, parser.Pos{}))
 		}
 	}
 	args := make([]*Value, len(drv.Args))
@@ -1242,7 +1248,7 @@ func builtinFetchurl(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 		drv.Env["outputHashAlgo"] = "sha256"
 	}
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
-	drvPath, outPaths, err := computeDerivationPaths(cfg, drv)
+	drvPath, outPaths, err := computeDerivationPaths(ev, cfg, drv)
 	if err != nil {
 		return nil, err
 	}

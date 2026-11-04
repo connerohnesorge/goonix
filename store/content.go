@@ -16,12 +16,14 @@ package store
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/nix-community/go-nix/pkg/nixbase32"
 	"github.com/nix-community/go-nix/pkg/nixhash"
+	"github.com/nix-community/go-nix/pkg/storepath"
 )
 
 // TextHash returns the nixbase32 SHA-256 digest of s (text store object fingerprint).
@@ -37,9 +39,20 @@ func (c Config) MakeStorePath(name string, digest []byte) (string, error) {
 
 // StorePathForText builds the store path for a text file with the given name and contents.
 func (c Config) StorePathForText(name, contents string) (string, error) {
-	h := sha256.Sum256([]byte(contents))
-	digest := nixhash.CompressHash(h[:], 20)
+	contentHash := sha256.Sum256([]byte(contents))
+	hexHash := hex.EncodeToString(contentHash[:])
+	storeDir := c.storeDir()
+	if storeDir == "" {
+		storeDir = storepath.StoreDir
+	}
+	payload := "text:sha256:" + hexHash + ":" + storeDir + ":" + name
+	digest := nixhash.CompressHash(sha256Sum([]byte(payload)), 20)
 	return c.MakeStorePath(name, digest)
+}
+
+func sha256Sum(b []byte) []byte {
+	h := sha256.Sum256(b)
+	return h[:]
 }
 
 // StorePathForFilesystemPath computes the store path for copying path into the store.

@@ -57,6 +57,8 @@ type Evaluator struct {
 
 	forceTrace  bool
 	forceFrames []string
+
+	drvStrictByPath map[string]*DerivationValue
 }
 
 type storeConfig struct {

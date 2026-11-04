@@ -45,6 +45,34 @@ func (c *derivationInputCollector) addSrc(path string) {
 	c.srcs[path] = struct{}{}
 }
 
+func (c *derivationInputCollector) mergeValueContext(v *Value) {
+	if v == nil {
+		return
+	}
+	switch v.Kind {
+	case VKString:
+		if v.String != "" {
+			c.addSrc(v.String)
+		}
+	case VKPath:
+		if v.Path != "" {
+			c.addSrc(v.Path)
+		}
+	}
+	for _, elem := range v.Ctx {
+		if elem.DrvPath != "" {
+			out := elem.Output
+			if out == "" {
+				out = "out"
+			}
+			c.addDrv(elem.DrvPath, out)
+		}
+		if elem.StorePath != "" {
+			c.addSrc(elem.StorePath)
+		}
+	}
+}
+
 func (c *derivationInputCollector) merge(other *derivationInputCollector) {
 	if other == nil {
 		return
@@ -112,10 +140,10 @@ func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *de
 	case VKFloat:
 		return strconv.FormatFloat(fv.Float, 'g', -1, 64), nil
 	case VKString:
-		col.addSrc(fv.String)
+		col.mergeValueContext(fv)
 		return fv.String, nil
 	case VKPath:
-		col.addSrc(fv.Path)
+		col.mergeValueContext(fv)
 		return fv.Path, nil
 	case VKList:
 		var parts []string

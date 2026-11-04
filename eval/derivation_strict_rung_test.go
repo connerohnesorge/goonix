@@ -28,7 +28,6 @@ func TestDerivationStrictRung03ExtraEnv(t *testing.T) {
 }
 
 func TestDerivationStrictRung04MultiOutput(t *testing.T) {
-	t.Skip("goonix multi-output drvPath vs Nix 2.24.9: env outputs ordering under investigation")
 	assertDerivationStrictRung(t, `{ name = "rung04-multi"; system = "x86_64-linux"; builder = "/bin/sh"; outputs = [ "out" "dev" ]; }`)
 }
 
@@ -52,12 +51,11 @@ func TestDerivationStrictRung07PathInput(t *testing.T) {
 }
 
 func TestDerivationStrictRung08ToFile(t *testing.T) {
-	t.Skip("builtins.toFile store path hash must match Nix for inputSrcs fingerprint")
 	assertDerivationStrictRung(t, `{ name = "rung08-tofile"; system = "x86_64-linux"; builder = "/bin/sh"; doc = builtins.toFile "rung08-doc" "hello store"; }`)
 }
 
 func TestDerivationStrictRung09InputDrv(t *testing.T) {
-	t.Skip("inputDrvs fingerprint: dep.out string context vs Nix (after rung09-dep path match)")
+	t.Skip("inputDrvs: replacement must be pathDerivationModulo masked hash (go-nix CalculateDrvReplacement uses unmasked ATerm)")
 	assertDerivationStrictRung(t, `let dep = builtins.derivationStrict { name = "rung09-dep"; system = "x86_64-linux"; builder = "/bin/sh"; }; in {
 	  name = "rung09-top";
 	  system = "x86_64-linux";
@@ -67,7 +65,6 @@ func TestDerivationStrictRung09InputDrv(t *testing.T) {
 }
 
 func TestDerivationStrictRung10FixedOutput(t *testing.T) {
-	t.Skip("fixed-output: SRI outputHash → go-nix Output hash fields")
 	assertDerivationStrictRung(t, `{
 	  name = "rung10-fixed";
 	  system = "x86_64-linux";

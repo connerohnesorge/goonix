@@ -18,15 +18,23 @@ import (
 	"fmt"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
+	"github.com/nix-community/go-nix/pkg/nixhash"
 	"github.com/connerohnesorge/goonix/store"
 )
 
-func computeDerivationPaths(cfg store.Config, drv *DerivationValue) (drvPath string, outPaths map[string]string, err error) {
+func computeDerivationPaths(ev *Evaluator, cfg store.Config, drv *DerivationValue) (drvPath string, outPaths map[string]string, err error) {
 	d, err := derivationValueToGoNix(drv)
 	if err != nil {
 		return "", nil, err
 	}
-	outPaths, err = d.CalculateOutputPaths(nil)
+	var replacements map[string]string
+	if ev != nil {
+		replacements, err = ev.inputDrvReplacements(d, nil)
+		if err != nil {
+			return "", nil, err
+		}
+	}
+	outPaths, err = d.CalculateOutputPaths(replacements)
 	if err != nil {
 		return "", nil, err
 	}
@@ -45,6 +53,58 @@ func computeDerivationPaths(cfg store.Config, drv *DerivationValue) (drvPath str
 		outPaths[k] = cfg.RewriteDefaultStoreDir(v)
 	}
 	return drvPath, outPaths, nil
+}
+
+func (ev *Evaluator) rememberStrictDerivation(drv *DerivationValue) {
+	if ev == nil || drv == nil || drv.DrvPath == "" {
+		return
+	}
+	if ev.drvStrictByPath == nil {
+		ev.drvStrictByPath = make(map[string]*DerivationValue)
+	}
+	ev.drvStrictByPath[drv.DrvPath] = drv
+}
+
+func (ev *Evaluator) inputDrvReplacements(d *gonixdrv.Derivation, memo map[string]string) (map[string]string, error) {
+	if memo == nil {
+		memo = make(map[string]string)
+	}
+	out := make(map[string]string, len(d.InputDerivations))
+	for drvPath := range d.InputDerivations {
+		if rep, ok := memo[drvPath]; ok {
+			out[drvPath] = rep
+			continue
+		}
+		child, ok := ev.drvStrictByPath[drvPath]
+		if !ok {
+			return nil, fmt.Errorf("unknown input derivation %q (not in strict cache)", drvPath)
+		}
+		childD, err := derivationValueToGoNix(child)
+		if err != nil {
+			return nil, err
+		}
+		stripDerivationOutputPaths(childD)
+		childSubs, err := ev.inputDrvReplacements(childD, memo)
+		if err != nil {
+			return nil, err
+		}
+		rep, err := childD.CalculateDrvReplacement(childSubs)
+		if err != nil {
+			return nil, err
+		}
+		memo[drvPath] = rep
+		out[drvPath] = rep
+	}
+	return out, nil
+}
+
+func stripDerivationOutputPaths(d *gonixdrv.Derivation) {
+	for _, o := range d.Outputs {
+		o.Path = ""
+	}
+	for name := range d.Outputs {
+		d.Env[name] = ""
+	}
 }
 
 func derivationValueToGoNix(drv *DerivationValue) (*gonixdrv.Derivation, error) {
@@ -72,19 +132,30 @@ func derivationValueToGoNix(drv *DerivationValue) (*gonixdrv.Derivation, error) 
 	hash := drv.Env["outputHash"]
 	hashMode := drv.Env["outputHashMode"]
 	_ = hashMode
+	var parsedFixed *nixhash.Hash
+	if hash != "" {
+		if hw, err := store.ParseHash(hash); err == nil {
+			parsedFixed = &hw.Hash
+			if hashAlgo == "" {
+				hashAlgo = string(hw.Hash.Algo())
+			}
+		}
+	}
 	for out := range outputs {
 		o := &gonixdrv.Output{Path: ""}
-		if hash != "" && out == "out" {
+		if parsedFixed != nil && out == "out" {
 			if hashAlgo == "" {
 				hashAlgo = "sha256"
 			}
 			o.HashAlgorithm = hashAlgo
-			o.Hash = hash
+			o.Hash = parsedFixed.Format(nixhash.Base16, false)
 		}
 		d.Outputs[out] = o
 	}
-	if _, ok := d.Env["out"]; !ok {
-		d.Env["out"] = ""
+	for out := range outputs {
+		if _, ok := d.Env[out]; !ok {
+			d.Env[out] = ""
+		}
 	}
 	return d, nil
 }
@@ -93,7 +164,7 @@ func derivationValueToGoNix(drv *DerivationValue) (*gonixdrv.Derivation, error) 
 func WriteDerivation(cfg store.Config, drv *DerivationValue) error {
 	if drv.DrvPath == "" {
 		var err error
-		drv.DrvPath, drv.OutPaths, err = computeDerivationPaths(cfg, drv)
+		drv.DrvPath, drv.OutPaths, err = computeDerivationPaths(nil, cfg, drv)
 		if err != nil {
 			return err
 		}
@@ -121,7 +192,7 @@ func WriteDerivation(cfg store.Config, drv *DerivationValue) error {
 func SerializeDerivation(cfg store.Config, drv *DerivationValue) ([]byte, error) {
 	if drv.DrvPath == "" {
 		var err error
-		drv.DrvPath, drv.OutPaths, err = computeDerivationPaths(cfg, drv)
+		drv.DrvPath, drv.OutPaths, err = computeDerivationPaths(nil, cfg, drv)
 		if err != nil {
 			return nil, err
 		}

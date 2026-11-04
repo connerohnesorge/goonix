@@ -41,6 +41,13 @@ const (
 	VKDeferred // unevaluated let binding / lazy reference
 )
 
+// StringContextElem is one entry in a Nix string context (see getContext / appendContext).
+type StringContextElem struct {
+	DrvPath   string // non-empty → !<drvPath>!output
+	Output    string // defaults to "out"
+	StorePath string // non-empty → opaque store path reference
+}
+
 // Value is a runtime Nix value.
 type Value struct {
 	Kind ValueKind
@@ -51,6 +58,9 @@ type Value struct {
 	String string
 	Path   string
 	Pos    parser.Pos
+
+	// Ctx holds Nix string-context elements (derivation outputs, store path refs).
+	Ctx []StringContextElem
 
 	List []*Value
 	Attrs *AttrSet
@@ -205,6 +215,10 @@ func Float(f float64) *Value {
 
 func Str(s string, pos parser.Pos) *Value {
 	return &Value{Kind: VKString, String: s, Pos: pos}
+}
+
+func StrWithContext(s string, ctx []StringContextElem, pos parser.Pos) *Value {
+	return &Value{Kind: VKString, String: s, Pos: pos, Ctx: ctx}
 }
 
 func Path(p string) *Value {
