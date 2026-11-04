@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	stdsort "sort"
 	"strings"
 
 	"github.com/connerohnesorge/goonix/data"
@@ -50,6 +51,7 @@ func (ev *Evaluator) registerBuiltins() {
 	register("map", builtinMap)
 	register("concatMap", builtinConcatMap)
 	register("filter", builtinFilter)
+	register("sort", builtinSort)
 	register("foldl'", builtinFoldlPrime)
 	register("attrNames", builtinAttrNames)
 	register("catAttrs", builtinCatAttrs)
@@ -321,6 +323,36 @@ func builtinFilter(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	return List(out...), nil
 }
 
+func builtinSort(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	comp, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	list, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if list.Kind != VKList {
+		return nil, evalErr(pos, "sort expects a list")
+	}
+	items := append([]*Value{}, list.List...)
+	stdsort.SliceStable(items, func(i, j int) bool {
+		r, err := ev.applyCall2(comp, items[i], items[j], pos)
+		if err != nil {
+			return false
+		}
+		b, err := ev.forceBool(ev, r, nil)
+		if err != nil {
+			return false
+		}
+		return b
+	})
+	return List(items...), nil
+}
+
 func builtinFoldlPrime(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 3); err != nil {
 		return nil, err
@@ -508,24 +540,72 @@ func builtinIntersectAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	left, err := ev.forceValue(args[0])
+	lbinds, err := ev.attrsBindingMap(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
-	right, err := ev.forceValue(args[1])
+	rbinds, err := ev.attrsBindingMap(args[1], pos)
 	if err != nil {
 		return nil, err
-	}
-	if left.Kind != VKAttrs || right.Kind != VKAttrs {
-		return nil, evalErr(pos, "intersectAttrs expects two attribute sets")
 	}
 	out := Attrs(false)
-	for sym := range left.Attrs.Binds {
-		if bind, ok := right.Attrs.Binds[sym]; ok {
+	for sym := range lbinds {
+		if bind, ok := rbinds[sym]; ok {
 			out.Attrs.Binds[sym] = bind
 		}
 	}
 	return out, nil
+}
+
+// attrsBindingMap returns attr bindings without forcing every attribute value.
+func (ev *Evaluator) attrsBindingMap(v *Value, pos parser.Pos) (map[data.Symbol]*AttrBinding, error) {
+	cur := v
+	for depth := 0; depth < 64; depth++ {
+		if cur == nil {
+			return nil, evalErr(pos, "intersectAttrs expects two attribute sets")
+		}
+		if cur.Kind == VKDeferred && cur.Deferred != nil {
+			t := cur.Deferred
+			if t.memo != nil {
+				cur = t.memo
+				continue
+			}
+			if t.locked {
+				if t.pendingMergeRhs != nil {
+					left := t.memo
+					if left == nil {
+						left = Attrs(false)
+					}
+					m, err := ev.updateAttrSet(left, t.pendingMergeRhs, t.pos)
+					if err != nil {
+						return nil, err
+					}
+					cur = m
+					continue
+				}
+				if t.memo != nil {
+					cur = t.memo
+					continue
+				}
+				return make(map[data.Symbol]*AttrBinding), nil
+			}
+			fv, err := ev.forceThunk(t)
+			if err != nil {
+				return nil, err
+			}
+			cur = fv
+			continue
+		}
+		if cur.Kind == VKAttrs && cur.Attrs != nil {
+			return cur.Attrs.Binds, nil
+		}
+		fv, err := ev.forceValue(cur)
+		if err != nil {
+			return nil, err
+		}
+		cur = fv
+	}
+	return nil, evalErr(pos, "intersectAttrs expects two attribute sets")
 }
 
 func builtinListToAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -2066,7 +2146,14 @@ func builtinUnsafeGetAttrPos(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 	if _, ok := set.Attrs.Binds[sym]; !ok {
 		return Null(), nil
 	}
-	return Int(0), nil
+	// functionArgs / __functionArgs maps formal names to bool; no position metadata.
+	for _, bind := range set.Attrs.Binds {
+		if bind.Value != nil && bind.Value.Kind == VKBool {
+			return Null(), nil
+		}
+		break
+	}
+	return Null(), nil
 }
 
 func builtinGenericClosure(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {

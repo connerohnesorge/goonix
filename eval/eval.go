@@ -221,6 +221,12 @@ func (ev *Evaluator) evalExpr(expr parser.Expr, env *Env) (*Value, error) {
 		if err != nil {
 			return nil, err
 		}
+		if attrs != nil && attrs.Kind == VKDeferred && attrs.Deferred != nil && attrs.Deferred.pendingMergeRhs != nil {
+			attrs, err = ev.forceValue(attrs)
+			if err != nil {
+				return nil, err
+			}
+		}
 		child := env.extend()
 		child.With = attrs
 		return ev.evalExpr(e.Body, child)
@@ -1124,19 +1130,26 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 	if t == nil {
 		return Null(), nil
 	}
-	if t.memo != nil {
-		return t.memo, nil
-	}
 	if t.locked {
-		if t.memo != nil && t.pendingMergeRhs != nil {
-			if merged, err := ev.updateAttrSet(t.memo, t.pendingMergeRhs, t.pos); err == nil {
+		if t.pendingMergeRhs != nil {
+			left := t.memo
+			if left == nil {
+				left = Attrs(false)
+			}
+			if merged, err := ev.updateAttrSet(left, t.pendingMergeRhs, t.pos); err == nil {
 				return merged, nil
 			}
+		}
+		if t.memo != nil {
+			return t.memo, nil
 		}
 		if ev.thunkIsDirectSelfRef(t) {
 			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 		}
 		return blackholeAttrs(), nil
+	}
+	if t.memo != nil {
+		return t.memo, nil
 	}
 	t.locked = true
 	prevHide := ev.forceHideSym
@@ -1165,6 +1178,7 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 	}
 	if v != nil && v.Kind == VKAttrs {
 		t.memo = v
+		t.pendingMergeRhs = nil
 		t.locked = false
 		return v, nil
 	}
