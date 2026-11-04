@@ -115,6 +115,7 @@ func (ev *Evaluator) registerBuiltins() {
 	register("genList", builtinGenList)
 	register("mapAttrs", builtinMapAttrs)
 	register("attrValues", builtinAttrValues)
+	register("zipAttrsWith", builtinZipAttrsWith)
 	register("genericClosure", builtinGenericClosure)
 	register("isBool", builtinIsBool)
 	register("bitAnd", builtinBitAnd)

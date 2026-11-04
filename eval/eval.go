@@ -261,18 +261,18 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 	if v.Name == "null" {
 		return Null(), nil
 	}
-	if b, ok := ev.Builtins[v.Name]; ok {
-		return &Value{Kind: VKBuiltin, Builtin: b}, nil
-	}
 	sym := ev.Intern.Intern(v.Name)
 	if bind, ok := env.lookup(sym); ok {
 		if bind.Thunk != nil {
-			if bind.Thunk.locked && bind.Thunk.memo != nil {
+		 if bind.Thunk.locked && bind.Thunk.memo != nil {
 				return bind.Thunk.memo, nil
 			}
 			return Deferred(bind.Thunk), nil
 		}
 		return bind.Value, nil
+	}
+	if b, ok := ev.Builtins[v.Name]; ok {
+		return &Value{Kind: VKBuiltin, Builtin: b}, nil
 	}
 	return nil, evalErr(v.P, "undefined variable %q", v.Name)
 }
@@ -642,6 +642,9 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 		if fb.Kind == VKAttrs {
 			b, ok := fb.Attrs.Binds[sym]
 			if !ok {
+				if fb.Attrs.Blackhole {
+					return blackholeAttrs(), nil
+				}
 				if hasDefault {
 					return ev.evalExpr(defaultExpr, env)
 				}
@@ -814,7 +817,7 @@ func (ev *Evaluator) evalBinary(b *parser.BinaryOp, env *Env) (*Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		return ev.concatValues(l, r)
+		return ev.concatValues(l, r, b.P)
 	case "//":
 		l, err := ev.evalExpr(b.Left, env)
 		if err != nil {
@@ -1055,7 +1058,7 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		if ev.thunkIsDirectSelfRef(t) {
 			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 		}
-		return Null(), nil
+		return blackholeAttrs(), nil
 	}
 	t.locked = true
 	v, err := ev.evalWithSelfMerge(t.expr, t.env, t)
@@ -1100,7 +1103,7 @@ func (ev *Evaluator) forceValue(v *Value) (*Value, error) {
 			if ev.thunkIsDirectSelfRef(v.Deferred) {
 				return nil, evalErr(v.Deferred.pos, "infinite recursion encountered at %s:%d:%d", v.Deferred.pos.File, v.Deferred.pos.Line, v.Deferred.pos.Col)
 			}
-			return Null(), nil
+			return blackholeAttrs(), nil
 		}
 		return ev.forceThunk(v.Deferred)
 	}
@@ -1157,7 +1160,7 @@ func (ev *Evaluator) forceString(v *Value) (string, error) {
 	return fv.DisplayString(ev, ev.Intern), nil
 }
 
-func (ev *Evaluator) concatValues(a, b *Value) (*Value, error) {
+func (ev *Evaluator) concatValues(a, b *Value, pos parser.Pos) (*Value, error) {
 	fa, err := ev.forceValue(a)
 	if err != nil {
 		return nil, err
@@ -1170,12 +1173,18 @@ func (ev *Evaluator) concatValues(a, b *Value) (*Value, error) {
 		out := append(append([]*Value{}, fa.List...), fb.List...)
 		return List(out...), nil
 	}
-	if fa.Kind == VKString || fb.Kind == VKString {
-		as, _ := ev.forceString(fa)
-		bs, _ := ev.forceString(fb)
-		return Str(as+bs, parser.Pos{}), nil
+	if fa.Kind == VKString || fb.Kind == VKString || fa.Kind == VKPath || fb.Kind == VKPath {
+		as, err := ev.forceString(fa)
+		if err != nil {
+			return nil, err
+		}
+		bs, err := ev.forceString(fb)
+		if err != nil {
+			return nil, err
+		}
+		return Str(as+bs, pos), nil
 	}
-	return nil, evalErr(parser.Pos{}, "cannot concatenate values")
+	return nil, evalErr(pos, "cannot concatenate values")
 }
 
 func (ev *Evaluator) updateAttrSet(l, r *Value, pos parser.Pos) (*Value, error) {

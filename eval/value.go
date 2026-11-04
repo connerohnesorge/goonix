@@ -69,6 +69,7 @@ type Value struct {
 // AttrSet holds attribute bindings, optionally lazy/recursive.
 type AttrSet struct {
 	Recursive bool
+	Blackhole bool // in-progress fixpoint placeholder
 	Binds     map[data.Symbol]*AttrBinding
 }
 
@@ -219,6 +220,16 @@ func Attrs(recursive bool) *Value {
 		Kind: VKAttrs,
 		Attrs: &AttrSet{
 			Recursive: recursive,
+			Binds:     make(map[data.Symbol]*AttrBinding),
+		},
+	}
+}
+
+func blackholeAttrs() *Value {
+	return &Value{
+		Kind: VKAttrs,
+		Attrs: &AttrSet{
+			Blackhole: true,
 			Binds:     make(map[data.Symbol]*AttrBinding),
 		},
 	}

@@ -51,9 +51,6 @@ func (ev *Evaluator) insertBindingInto(av *Value, bindEnv *Env, path []parser.At
 	}
 	if len(path) == 1 {
 		sym := ev.Intern.Intern(path[0].Name)
-		if recursive {
-			bindEnv.bindThunk(sym, t)
-		}
 		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
 		return
 	}
