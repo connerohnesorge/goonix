@@ -996,10 +996,7 @@ func builtinPlaceholder(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, e
 	if err != nil {
 		return nil, err
 	}
-	if out == "" {
-		out = "out"
-	}
-	return StrWithContext(placeholderText, []StringContextElem{{Output: out}}, pos), nil
+	return Str(store.OutputPlaceholder(out), pos), nil
 }
 
 func builtinDerivationStrict(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1076,8 +1073,7 @@ func (ev *Evaluator) computeAttrsToDerivation(attrs *Value) (*DerivationValue, e
 		return nil, err
 	}
 	drv := &DerivationValue{Name: name}
-	envCtx, err := ev.fillDerivationFromAttrs(attrs, drv, pos)
-	if err != nil {
+	if err := ev.fillDerivationFromAttrs(attrs, drv, pos); err != nil {
 		return nil, err
 	}
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
@@ -1087,10 +1083,6 @@ func (ev *Evaluator) computeAttrsToDerivation(attrs *Value) (*DerivationValue, e
 	}
 	drv.DrvPath = drvPath
 	drv.OutPaths = outPaths
-	ev.materializeDerivationEnvPlaceholders(drv, envCtx)
-	if err := ev.verifyDerivationEnvContext(drv, envCtx); err != nil {
-		return nil, err
-	}
 	ev.rememberStrictDerivation(drv)
 	if attrs != nil && attrs.Kind == VKAttrs && attrs.Attrs != nil && ev.drvStrictByAttrs != nil {
 		ev.drvStrictByAttrs[attrs.Attrs] = drv
