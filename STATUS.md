@@ -56,7 +56,19 @@ Oracle per rung: `nix-instantiate --eval -E '(builtins.derivationStrict …).drv
 
 **Strict cache:** `Evaluator.moduloCache` + `drvStrictByPath` register strict derivations for chained `let` bindings and modulo recursion.
 
-## Hello / stdenvNoCC
+## Recursive drv diff (new)
+
+`store/drvshow` emits the same JSON shape as `nix derivation show --recursive`. `internal/drvdiff` walks paired input derivations by **logical name** (suffix after store hash) and reports the deepest node whose own fields differ while matched inputs agree, plus **missing go closure nodes**.
+
+```bash
+NIXPATH=nixpkgs=$PWD/testdata/nixpkgs go run ./cmd/goonix drv-diff \
+  --nix-instantiate eval/testdata/stdenv_nocc_inst.nix \
+  --go-eval testdata/oracle/stdenv_nocc_mkderivation_probe.nix \
+  -I nixpkgs=$PWD/testdata/nixpkgs
+```
+
+**Stdenv probe finding:** goonix registers only the **top** derivation in the modulo cache (`inputDrvs=0` on the top `.drv`); env still contains `stdenv="{ ... }"` / `builder="{ ... }/bin/bash"` instead of store paths with string context, so the bootstrap closure is not built and `.drvPath` diverges. Next fix: mkDerivation env coercion (`inherit stdenv`, `stdenv.shell` builder) before chasing individual bootstrap leaves.
+
 
 - **Hello golden:** `TestHelloDrvPathMatchesGolden` still **red** (goonix vs Nix oracle); golden file matches Nix. Remaining gap is real `mkDerivation` / stdenv dependency graph beyond the strict ladder.
 - **stdenvNoCC:** `testdata/oracle/stdenv_nocc_mkderivation_probe.nix` + `TestStdenvNoCCMkDerivationOracleMatchesNix` — **red** (simple `stdenvNoCC.mkDerivation` drvPath); boot bisect + import still green.
