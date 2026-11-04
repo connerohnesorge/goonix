@@ -69,7 +69,7 @@ NIXPATH=nixpkgs=$PWD/testdata/nixpkgs go run ./cmd/goonix drv-diff \
   -I nixpkgs=$PWD/testdata/nixpkgs
 ```
 
-**Closure export:** `strictDrvs` records every `derivationStrict`; `DerivationShowClosure` walks `inputDrvs` through that map. Hermetic oracle fixed channel bleed (`bash-5.3p20` ghost); drv-diff **missing** count on stdenv probe **423 → 3** (still **gcc-wrapper-13.3.0**, **binutils-wrapper-2.43.1**, **binutils-patchelfed-ld-wrapper-2.43.1**). **Root cause (wrappers):** bootstrap `cc-wrapper` / `bintools-wrapper` build with empty `ccName` / `bintoolsName` → env `name` = `-wrapper-*` (go `pkgs.stdenv.cc.name` = `-wrapper-13.3.0` vs Nix `gcc-wrapper-13.3.0`; oracle `TestStdenvCcWrapperNameMatchesNix`). Nix stdenv `inputDrvs` reference real wrapper drvPaths; go registers `--wrapper-*` drvs instead. **String context:** `builtins.getContext` + `replaceStrings` / `substring` preserve ctx (`eval/string_context_audit_test.go`).
+**Closure export:** `strictDrvs` records every `derivationStrict`; `DerivationShowClosure` walks `inputDrvs` through that map. Hermetic oracle fixed channel bleed (`bash-5.3p20` ghost); drv-diff **missing** count **0** (225=225). **Wrapper fix:** `builtins.substring` with negative length (Nix `removePrefix` uses `substring preLen (-1) str`); empty prefix no longer zeroes `ccName`. Oracle: `TestStdenvCcWrapperNameMatchesNix`, `eval/getname_substring_oracle_test.go`. **Remaining deepest diff:** fetchurl FOD leaves (e.g. `pkg-config-0.29.2.tar.gz` path/hash); hello / stdenv probe drvPaths still differ from Nix.
 
 
 - **Hello golden:** `TestHelloDrvPathMatchesGolden` still **red** — hello evaluates end-to-end; remaining gap is **`hashDerivationModulo` / closure inputs** vs Nix (not env `{ ... }` coercion).

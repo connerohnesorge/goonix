@@ -1054,12 +1054,6 @@ func (ev *Evaluator) derivationValueToAttrs(drv *DerivationValue) *Value {
 	}
 	set("type", Str("derivation", parser.Pos{}))
 	set("name", Str(drv.Name, parser.Pos{}))
-	if p := drv.Env["pname"]; p != "" {
-		set("pname", Str(p, parser.Pos{}))
-	}
-	if v := drv.Env["version"]; v != "" {
-		set("version", Str(v, parser.Pos{}))
-	}
 	set("system", Str(drv.System, parser.Pos{}))
 	set("builder", Str(drv.Builder, parser.Pos{}))
 	set("drvPath", Path(drv.DrvPath))
@@ -1844,9 +1838,15 @@ func builtinSubstring(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 	if start > len(runes) {
 		start = len(runes)
 	}
-	end := start + length
-	if end > len(runes) {
+	var end int
+	if length < 0 {
+		// Nix: negative length means "until end of string" (removePrefix uses substring preLen (-1) str).
 		end = len(runes)
+	} else {
+		end = start + length
+		if end > len(runes) {
+			end = len(runes)
+		}
 	}
 	if end < start {
 		end = start
