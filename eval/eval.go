@@ -54,8 +54,9 @@ type Evaluator struct {
 	StoreCfg storeConfig
 
 	curFile     string
-	importDepth int
 	importCache map[string]*Value
+
+	copyPathTrace []CopyPathTraceEvent
 
 	forceTrace  bool
 	forceFrames []string
@@ -65,7 +66,14 @@ type Evaluator struct {
 	moduloCache     *store.ModuloCache
 
 	materializeStorePaths bool // true while coercing derivation env strings (path → store)
-	inStringInterpolation bool // "${path}" in double/indented strings at importDepth 0
+	inStringInterpolation bool // "${path}" / string+path string contexts
+}
+
+// CopyPathTraceEvent records a store copy during evaluation (testing/diagnostics).
+type CopyPathTraceEvent struct {
+	SourcePath string
+	Pos        parser.Pos
+	Reason     string // "interp" | "derivation-env"
 }
 
 type storeConfig struct {
@@ -280,9 +288,6 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 	var b strings.Builder
 	var ctx []StringContextElem
-	prevInterp := ev.inStringInterpolation
-	ev.inStringInterpolation = ev.importDepth == 0
-	defer func() { ev.inStringInterpolation = prevInterp }()
 	cc := CoerceContext{Mode: CoerceString, Pos: s.P, CopyPaths: true}
 	for _, part := range s.Parts {
 		if part.Interp == nil {
@@ -293,7 +298,10 @@ func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 		if err != nil {
 			return nil, err
 		}
+		prevInterp := ev.inStringInterpolation
+		ev.inStringInterpolation = true
 		sv, err := ev.coerceToString(v, cc)
+		ev.inStringInterpolation = prevInterp
 		if err != nil {
 			return nil, err
 		}

@@ -129,6 +129,11 @@ func inputsRecursivelyEqual(nixDoc, goDoc drvshow.Document, n, g drvshow.Entry, 
 	return true
 }
 
+// FieldDiffs reports all scalar/env/output/input differences between two entries.
+func FieldDiffs(n, g drvshow.Entry) []FieldDiff {
+	return fieldDiffs(n, g)
+}
+
 func fieldDiffs(n, g drvshow.Entry) []FieldDiff {
 	var out []FieldDiff
 	if n.Builder != g.Builder {

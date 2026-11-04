@@ -164,8 +164,6 @@ func builtinImport(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 		path = filepath.Join(filepath.Dir(ev.curFile), path)
 	}
 	path = resolveImportPath(path)
-	ev.importDepth++
-	defer func() { ev.importDepth-- }()
 	moduleVal, err := ev.importModule(path)
 	if err != nil {
 		return nil, err

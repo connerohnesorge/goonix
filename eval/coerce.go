@@ -145,6 +145,19 @@ func (ev *Evaluator) coerceAttrSetToString(fv *Value, cc CoerceContext) (*Value,
 		if err != nil {
 			return nil, err
 		}
+		sv, err := ev.coerceToString(tv, cc)
+		if err != nil {
+			return nil, err
+		}
+		if sv.String != "" || cc.Mode != CoerceString || !ev.materializeStorePaths {
+			return sv, nil
+		}
+	}
+	if b := fv.Attrs.Binds[intern.Intern("out")]; b != nil {
+		tv, err := ev.attrsBindingForce(b)
+		if err != nil {
+			return nil, err
+		}
 		return ev.coerceToString(tv, cc)
 	}
 	return nil, evalErr(cc.Pos, "cannot coerce %s to a string", valueKindName(VKAttrs))
@@ -180,6 +193,11 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 	}
 	ctx = []StringContextElem{{StorePath: storePath}}
 	if ev.materializeStorePaths || ev.inStringInterpolation {
+		reason := "interp"
+		if ev.materializeStorePaths {
+			reason = "derivation-env"
+		}
+		ev.recordCopyPathTrace(p, pos, reason)
 		err = ev.Effects.RealiseStorePath(storePath, func() error {
 			return store.CopyPathToStore(p, storePath)
 		})
@@ -188,6 +206,17 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 		}
 	}
 	return StrWithContext(storePath, ctx, pos), nil
+}
+
+func (ev *Evaluator) recordCopyPathTrace(sourcePath string, pos parser.Pos, reason string) {
+	if ev == nil {
+		return
+	}
+	ev.copyPathTrace = append(ev.copyPathTrace, CopyPathTraceEvent{
+		SourcePath: sourcePath,
+		Pos:        pos,
+		Reason:     reason,
+	})
 }
 
 func pathStringContext(p, storeDir string) []StringContextElem {
@@ -221,9 +250,7 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 	}
 	if fb.Kind == VKPath {
 		prevInterp := ev.inStringInterpolation
-		if ev.importDepth == 0 {
-			ev.inStringInterpolation = true
-		}
+		ev.inStringInterpolation = true
 		defer func() { ev.inStringInterpolation = prevInterp }()
 		cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true}
 		as, err := ev.coerceToString(fa, cc)
