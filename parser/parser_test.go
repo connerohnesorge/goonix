@@ -185,7 +185,7 @@ func TestParseMultilineIndentedString(t *testing.T) {
 }
 
 func TestParseNixpkgsDefaultNix(t *testing.T) {
-	b, err := os.ReadFile("../testdata/nixpkgs/default.nix")
+	b, err := os.ReadFile("../testdata/nixpkgs-default-head.nix")
 	if err != nil {
 		t.Skip(err)
 	}

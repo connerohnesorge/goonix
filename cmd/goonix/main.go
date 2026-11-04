@@ -86,6 +86,7 @@ func cmdEval(args []string) {
 		os.Exit(2)
 	}
 	ev := eval.NewEvaluator()
+	ev.SetCurFile(rest[0])
 	if !*pure {
 		ev = ev.WithEffects(eval.IOEffects{})
 	}
@@ -126,6 +127,7 @@ func cmdInstantiate(args []string) {
 		os.Exit(2)
 	}
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{Root: *storeDir})
+	ev.SetCurFile(rest[0])
 	expr, err := parser.ParseFile(rest[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
