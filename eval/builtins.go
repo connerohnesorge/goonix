@@ -239,11 +239,7 @@ func builtinMap(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	}
 	out := make([]*Value, len(list))
 	for i, el := range list {
-		r, err := ev.applyCall(f, el, pos)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = r
+		out[i] = ev.deferredApplyCall(f, el, pos)
 	}
 	return List(out...), nil
 }
@@ -262,10 +258,7 @@ func builtinConcatMap(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 	}
 	var out []*Value
 	for _, el := range list {
-		r, err := ev.applyCall(f, el, pos)
-		if err != nil {
-			return nil, err
-		}
+		r := ev.deferredApplyCall(f, el, pos)
 		sub, err := forceList(ev, pos, r)
 		if err != nil {
 			return nil, err
@@ -987,8 +980,23 @@ func builtinDerivationStrict(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 }
 
 func builtinDerivation(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-	// Lazy wrapper: for now same as strict.
-	return builtinDerivationStrict(ev, pos, args)
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	drvAttrs, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	if drvAttrs.Kind != VKAttrs {
+		return nil, evalErr(pos, "derivation expects attribute set")
+	}
+	strict, err := builtinDerivationStrict(ev, pos, []*Value{drvAttrs})
+	if err != nil {
+		return nil, err
+	}
+	// Nix `derivation` (primops/derivation.nix) is not `derivationStrict`: argument
+	// attributes such as stdenv's `shell` remain on the result attrset.
+	return mergeAttrBindMaps(drvAttrs, strict), nil
 }
 
 func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
