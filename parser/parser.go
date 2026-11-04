@@ -95,6 +95,14 @@ func (p *Parser) expect(typ TokenType) (Token, error) {
 	return p.advance(), nil
 }
 
+func (p *Parser) expectArgName() (Token, error) {
+	t := p.cur()
+	if t.Type != tokenID && t.Type != tokenArgID {
+		return t, p.errorf("expected id, got %s", t.Type)
+	}
+	return p.advance(), nil
+}
+
 func (p *Parser) parseExpression() (Expr, error) {
 	return p.parseExprFunction()
 }
@@ -274,7 +282,7 @@ func (p *Parser) tryParseFunction() (Expr, bool, error) {
 		}
 		if p.cur().Type == tokenAt {
 			p.advance()
-			argTok, err := p.expect(tokenID)
+			argTok, err := p.expectArgName()
 			if err != nil {
 				return nil, true, err
 			}

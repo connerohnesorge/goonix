@@ -670,6 +670,7 @@ func scanURI(src []byte, i int) (int, bool) {
 		return 0, false
 	}
 	j++
+	uriBodyStart := j
 	for j < len(src) {
 		c = src[j]
 		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
@@ -680,6 +681,9 @@ func scanURI(src []byte, i int) (int, bool) {
 			continue
 		}
 		break
+	}
+	if j == uriBodyStart {
+		return 0, false
 	}
 	if j > i+1 {
 		return j, true
