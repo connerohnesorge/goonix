@@ -164,6 +164,8 @@ func builtinImport(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 		path = filepath.Join(filepath.Dir(ev.curFile), path)
 	}
 	path = resolveImportPath(path)
+	ev.importDepth++
+	defer func() { ev.importDepth-- }()
 	moduleVal, err := ev.importModule(path)
 	if err != nil {
 		return nil, err
@@ -219,7 +221,7 @@ func builtinToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	sv, err := ev.coerceToString(args[0], CoerceContext{Mode: CoerceString, Pos: pos})
+	sv, err := ev.coerceToString(args[0], CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false})
 	if err != nil {
 		return nil, err
 	}
@@ -1111,12 +1113,16 @@ func builtinGetContext(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 		if key == "" {
 			continue
 		}
-		out := elem.Output
-		if out == "" {
-			out = "out"
-		}
 		entry := Attrs(false)
-		entry.Attrs.Binds[ev.Intern.Intern("outputs")] = &AttrBinding{Value: List(Str(out, pos))}
+		if elem.StorePath != "" && elem.DrvPath == "" {
+			entry.Attrs.Binds[ev.Intern.Intern("path")] = &AttrBinding{Value: Bool(true)}
+		} else {
+			out := elem.Output
+			if out == "" {
+				out = "out"
+			}
+			entry.Attrs.Binds[ev.Intern.Intern("outputs")] = &AttrBinding{Value: List(Str(out, pos))}
+		}
 		av.Attrs.Binds[ev.Intern.Intern(key)] = &AttrBinding{Value: entry}
 	}
 	return av, nil

@@ -64,7 +64,8 @@ type Evaluator struct {
 	strictDrvs      map[string]*gonixdrv.Derivation // every derivationStrict result, keyed by drvPath
 	moduloCache     *store.ModuloCache
 
-	coerceEnvStrings bool // true while coercing derivation env strings (path → store)
+	materializeStorePaths bool // true while coercing derivation env strings (path → store)
+	inStringInterpolation bool // "${path}" in double/indented strings at importDepth 0
 }
 
 type storeConfig struct {
@@ -279,7 +280,10 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 	var b strings.Builder
 	var ctx []StringContextElem
-	cc := CoerceContext{Mode: CoerceString, Pos: s.P, CopyPaths: ev.coerceEnvStrings}
+	prevInterp := ev.inStringInterpolation
+	ev.inStringInterpolation = ev.importDepth == 0
+	defer func() { ev.inStringInterpolation = prevInterp }()
+	cc := CoerceContext{Mode: CoerceString, Pos: s.P, CopyPaths: true}
 	for _, part := range s.Parts {
 		if part.Interp == nil {
 			b.WriteString(part.Text)
@@ -289,11 +293,7 @@ func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		ccCopy := cc
-		if ev.coerceEnvStrings {
-			ccCopy.CopyPaths = true
-		}
-		sv, err := ev.coerceToString(v, ccCopy)
+		sv, err := ev.coerceToString(v, cc)
 		if err != nil {
 			return nil, err
 		}
@@ -1087,23 +1087,15 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 		}
 		return Int(sum), nil
 	}
-	var b strings.Builder
-	var ctx []StringContextElem
-	cc := CoerceContext{Mode: CoerceString, Pos: c.P}
-	for i, fv := range vals {
-		partCC := cc
-		partCC.Pos = c.Parts[i].Pos()
-		if ev.coerceEnvStrings {
-			partCC.CopyPaths = true
-		}
-		sv, err := ev.coerceToString(fv, partCC)
+	acc := vals[0]
+	var err error
+	for i := 1; i < len(vals); i++ {
+		acc, err = ev.concatCoercedStrings(acc, vals[i], c.P)
 		if err != nil {
 			return nil, err
 		}
-		b.WriteString(sv.String)
-		ctx = mergeStringContexts(ctx, sv.Ctx)
 	}
-	return StrWithContext(b.String(), ctx, c.P), nil
+	return acc, nil
 }
 
 func (ev *Evaluator) evalOpUpdate(b *parser.BinaryOp, env *Env) (*Value, error) {

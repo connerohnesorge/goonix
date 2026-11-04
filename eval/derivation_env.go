@@ -106,9 +106,9 @@ func isSRIHashString(h string) bool {
 }
 
 func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *derivationInputCollector) (string, error) {
-	prev := ev.coerceEnvStrings
-	ev.coerceEnvStrings = true
-	defer func() { ev.coerceEnvStrings = prev }()
+	prev := ev.materializeStorePaths
+	ev.materializeStorePaths = true
+	defer func() { ev.materializeStorePaths = prev }()
 	sv, err := ev.coerceToString(v, CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true})
 	if err != nil {
 		return "", err

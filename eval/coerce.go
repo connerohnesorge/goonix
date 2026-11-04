@@ -157,7 +157,13 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 		storeDir = store.DefaultStoreDir
 	}
 	ctx := pathStringContext(p, storeDir)
-	if !copyPaths || strings.HasPrefix(p, storeDir+"/") || p == storeDir {
+	if strings.HasPrefix(p, storeDir+"/") || p == storeDir {
+		return StrWithContext(p, ctx, pos), nil
+	}
+	if !copyPaths {
+		return StrWithContext(p, ctx, pos), nil
+	}
+	if !(ev.materializeStorePaths || ev.inStringInterpolation) {
 		return StrWithContext(p, ctx, pos), nil
 	}
 	if _, err := ev.Effects.Stat(p); err != nil {
@@ -172,13 +178,15 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 	if err != nil {
 		return nil, evalErr(pos, "%s", err.Error())
 	}
-	err = ev.Effects.RealiseStorePath(storePath, func() error {
-		return store.CopyPathToStore(p, storePath)
-	})
-	if err != nil {
-		return nil, err
-	}
 	ctx = []StringContextElem{{StorePath: storePath}}
+	if ev.materializeStorePaths || ev.inStringInterpolation {
+		err = ev.Effects.RealiseStorePath(storePath, func() error {
+			return store.CopyPathToStore(p, storePath)
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	return StrWithContext(storePath, ctx, pos), nil
 }
 
@@ -193,7 +201,6 @@ func pathStringContext(p, storeDir string) []StringContextElem {
 }
 
 func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, error) {
-	cc := CoerceContext{Mode: CoerceString, Pos: pos}
 	fa, err := ev.forceValue(a)
 	if err != nil {
 		return nil, err
@@ -202,23 +209,34 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 	if err != nil {
 		return nil, err
 	}
-	if fa.Kind == VKPath || fb.Kind == VKPath {
-		if fa.Kind == VKPath && fb.Kind == VKPath {
-			return Path(fa.Path + fb.Path), nil
+	if fa.Kind == VKPath && fb.Kind == VKPath {
+		return Path(fa.Path + fb.Path), nil
+	}
+	if fa.Kind == VKPath {
+		bs, err := ev.coerceToString(fb, CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false})
+		if err != nil {
+			return nil, err
 		}
-		if fa.Kind == VKPath {
-			bs, err := ev.coerceToString(fb, cc)
-			if err != nil {
-				return nil, err
-			}
-			return Path(fa.Path + bs.String), nil
+		return Path(fa.Path + bs.String), nil
+	}
+	if fb.Kind == VKPath {
+		prevInterp := ev.inStringInterpolation
+		if ev.importDepth == 0 {
+			ev.inStringInterpolation = true
 		}
+		defer func() { ev.inStringInterpolation = prevInterp }()
+		cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true}
 		as, err := ev.coerceToString(fa, cc)
 		if err != nil {
 			return nil, err
 		}
-		return Path(as.String + fb.Path), nil
+		bs, err := ev.coerceToString(fb, cc)
+		if err != nil {
+			return nil, err
+		}
+		return StrWithContext(as.String+bs.String, mergeStringContexts(as.Ctx, bs.Ctx), pos), nil
 	}
+	cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false}
 	as, err := ev.coerceToString(fa, cc)
 	if err != nil {
 		return nil, err
