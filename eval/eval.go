@@ -53,10 +53,7 @@ type Evaluator struct {
 	curFile     string
 	importDepth int
 	importCache map[string]*Value
-	forceHideSym     data.Symbol // hide self attr only while forcing its own thunk
-	currentForce     *Thunk      // thunk currently being forceThunk'd
-	inMergeLeft      bool        // true while evaluating left operand of // under force
-	selfMergeThunk   *Thunk      // while forcing, propagate // self-reference through let bodies
+	currentForce *Thunk // thunk currently being forceThunk'd (blackhole target)
 }
 
 type storeConfig struct {
@@ -261,15 +258,6 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 	sym := ev.Intern.Intern(v.Name)
 	if bind, ok := ev.lookupEnv(env, sym); ok {
 		if bind.Thunk != nil {
-			if bind.Thunk.locked && bind.Thunk.pendingMergeRhs != nil {
-				return Deferred(bind.Thunk), nil
-			}
-			if bind.Thunk.locked && bind.Thunk.fixPublish {
-				return Deferred(bind.Thunk), nil
-			}
-			if bind.Thunk.locked && bind.Thunk.memo != nil {
-				return bind.Thunk.memo, nil
-			}
 			return Deferred(bind.Thunk), nil
 		}
 		return bind.Value, nil
@@ -348,8 +336,20 @@ func (ev *Evaluator) evalAttrSet(a *parser.AttrSet, env *Env, fromLet bool) (*Va
 	if err := ev.populateAttrSet(a, env, av); err != nil {
 		return nil, err
 	}
-	ev.publishUnderConstruction(av)
+	ev.publishAttrSetIfForcing(av)
 	return av, nil
+}
+
+// publishAttrSetIfForcing merges av's bindings into the fixpoint thunk currently
+// being forced, so nested lookups (with self, inherit (self.customisation), …)
+// see the attr names before the force completes.
+func (ev *Evaluator) publishAttrSetIfForcing(av *Value) {
+	t := ev.currentForce
+	// Only extend fixpoint overlays (memo primed by // RHS or fix') during blackhole force.
+	if t == nil || !t.locked || t.memo == nil || av == nil || av.Kind != VKAttrs {
+		return
+	}
+	t.memo = mergeAttrBindMaps(t.memo, av)
 }
 
 func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) error {
@@ -360,7 +360,6 @@ func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) err
 	}
 	applyBind := func(bind parser.Binding) {
 		ev.insertBinding(av, bindEnv, bind, a.Recursive)
-		ev.publishUnderConstruction(av)
 	}
 
 	if len(a.Members) > 0 {
@@ -388,7 +387,6 @@ func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) err
 	if a.Recursive {
 		ev.syncRecTopLevel(av, bindEnv)
 	}
-	ev.publishUnderConstruction(av)
 	return nil
 }
 
@@ -418,7 +416,6 @@ func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, populateEnv, bindEnv *E
 		if inh.From != nil && recursive {
 			bindEnv.bindThunk(sym, t)
 		}
-		ev.publishUnderConstruction(av)
 	}
 	return nil
 }
@@ -510,9 +507,6 @@ func (ev *Evaluator) evalLet(l *parser.Let, env *Env) (*Value, error) {
 			}
 			seen[sym] = struct{}{}
 			t := ev.newThunk(bind.Value, child, bind.Pos)
-			if bo, ok := bind.Value.(*parser.BinaryOp); ok && bo.Op == "//" {
-				t.selfHideSym = sym
-			}
 			child.bindThunk(sym, t)
 		}
 		if len(l.Attrs.Members) > 0 {
@@ -536,10 +530,6 @@ func (ev *Evaluator) evalLet(l *parser.Let, env *Env) (*Value, error) {
 		for _, bind := range l.Attrs.Binds {
 			bindOne(bind)
 		}
-	}
-	self := ev.selfMergeThunk
-	if self != nil {
-		return ev.evalWithSelfMerge(l.Body, child, self)
 	}
 	return ev.evalExpr(l.Body, child)
 }
@@ -594,11 +584,7 @@ func (ev *Evaluator) applyLambda(l *LambdaValue, args []*Value, pos parser.Pos) 
 	if l == nil {
 		return nil, evalErr(pos, "invalid lambda")
 	}
-	if len(args) == 1 {
-		ev.markFixPublishArg(args[0])
-	}
 	child := l.Env.extend()
-	// Simple arg: x: body
 	if l.Formals == nil && l.SimpleArg != "" {
 		if len(args) != 1 {
 			return nil, evalErr(pos, "function expects 1 argument, got %d", len(args))
@@ -613,21 +599,6 @@ func (ev *Evaluator) applyLambda(l *LambdaValue, args []*Value, pos parser.Pos) 
 	return nil, evalErr(pos, "invalid lambda formals")
 }
 
-func (ev *Evaluator) markFixPublishArg(arg *Value) {
-	if ev.currentForce == nil || !ev.currentForce.locked {
-		return
-	}
-	if ev.currentForce.selfHideSym != 0 || ev.currentForce.pendingMergeRhs != nil {
-		return
-	}
-	if arg != nil && arg.Kind == VKDeferred && arg.Deferred != nil && arg.Deferred == ev.currentForce {
-		ev.currentForce.fixPublish = true
-		if ev.currentForce.memo == nil {
-			ev.currentForce.memo = Attrs(false)
-		}
-	}
-}
-
 func (ev *Evaluator) applyFormals(l *LambdaValue, args []*Value, child *Env, pos parser.Pos) (*Value, error) {
 	if l.SimpleArg != "" && len(args) == 1 {
 		child.bind(ev.Intern.Intern(l.SimpleArg), args[0])
@@ -635,7 +606,7 @@ func (ev *Evaluator) applyFormals(l *LambdaValue, args []*Value, child *Env, pos
 	named := make(map[string]*Value)
 	var rest []*Value
 	if len(args) == 1 {
-		fa, err := ev.forceValue(args[0])
+		fa, err := ev.forceAttrs(args[0], pos)
 		if err != nil {
 			return nil, err
 		}
@@ -685,7 +656,7 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 	if err != nil {
 		return nil, err
 	}
-	fb, err := ev.forceValue(base)
+	fb, err := ev.forceValueDeep(base)
 	if err != nil {
 		return nil, err
 	}
@@ -714,14 +685,16 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 				}
 				return nil, evalErr(s.P, "attribute %q missing", name)
 			}
+			var next *Value
 			if b.Thunk != nil {
-				fb, err = ev.forceThunk(b.Thunk)
+				next, err = ev.forceValueDeep(Deferred(b.Thunk))
 			} else {
-				fb = b.Value
+				next, err = ev.forceValueDeep(b.Value)
 			}
 			if err != nil {
 				return nil, err
 			}
+			fb = next
 			continue
 		}
 		if hasDefault {
@@ -769,9 +742,9 @@ func (ev *Evaluator) evalHasAttr(h *parser.HasAttr, env *Env) (*Value, error) {
 			return Bool(true), nil
 		}
 		if b.Thunk != nil {
-			fb, err = ev.forceThunk(b.Thunk)
+			fb, err = ev.forceValueDeep(Deferred(b.Thunk))
 		} else {
-			fb = b.Value
+			fb, err = ev.forceValueDeep(b.Value)
 		}
 		if err != nil {
 			return Bool(false), nil
@@ -886,15 +859,7 @@ func (ev *Evaluator) evalBinary(b *parser.BinaryOp, env *Env) (*Value, error) {
 		}
 		return ev.concatValues(l, r, b.P)
 	case "//":
-		l, err := ev.evalExpr(b.Left, env)
-		if err != nil {
-			return nil, err
-		}
-		r, err := ev.evalExpr(b.Right, env)
-		if err != nil {
-			return nil, err
-		}
-		return ev.updateAttrSet(l, r, b.P)
+		return ev.evalOpUpdate(b, env)
 	case "==", "!=":
 		l, err := ev.evalExpr(b.Left, env)
 		if err != nil {
@@ -1080,6 +1045,58 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 	return Str(b.String(), c.P), nil
 }
 
+func (ev *Evaluator) evalOpUpdate(b *parser.BinaryOp, env *Env) (*Value, error) {
+	var r *Value
+	var err error
+	if ev.shouldPrimeUpdateLHS(b, env) {
+		r, err = ev.evalAttrs(b.Right, env, b.P)
+		if err != nil {
+			return nil, err
+		}
+		ev.currentForce.memo = mergeAttrBindMaps(ev.currentForce.memo, r)
+	}
+	l, err := ev.evalAttrs(b.Left, env, b.P)
+	if err != nil {
+		return nil, err
+	}
+	if r == nil {
+		r, err = ev.evalAttrs(b.Right, env, b.P)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return mergeAttrBindMaps(l, r), nil
+}
+
+func (ev *Evaluator) shouldPrimeUpdateLHS(b *parser.BinaryOp, env *Env) bool {
+	t := ev.currentForce
+	if t == nil || !t.locked {
+		return false
+	}
+	expr := b.Left
+	for {
+		p, ok := expr.(*parser.Parens)
+		if !ok {
+			break
+		}
+		expr = p.Expr
+	}
+	v, ok := expr.(*parser.Var)
+	if !ok {
+		return false
+	}
+	sym := ev.Intern.Intern(v.Name)
+	if bind, ok := ev.lookupEnv(env, sym); ok {
+		if bind.Thunk == t {
+			return true
+		}
+		if bind.Value != nil && bind.Value.Kind == VKDeferred && bind.Value.Deferred == t {
+			return true
+		}
+	}
+	return false
+}
+
 func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk {
 	if pos.File == "" && expr != nil {
 		pos = expr.Pos()
@@ -1087,172 +1104,65 @@ func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk
 	return &Thunk{eval: ev, expr: expr, env: env, pos: pos}
 }
 
-func (ev *Evaluator) evalWithSelfMerge(expr parser.Expr, env *Env, self *Thunk) (*Value, error) {
-	if bo, ok := expr.(*parser.BinaryOp); ok && bo.Op == "//" {
-		if self != nil {
-			if rhsAttr, ok := ev.selfMergeRHSAttrSet(bo.Right, env); ok {
-				self.pendingMergeRhs = rhsAttr
-			}
-		}
-		lv, err := func() (*Value, error) {
-			if self != nil && self.selfHideSym != 0 {
-				ev.inMergeLeft = true
-				defer func() { ev.inMergeLeft = false }()
-			}
-			return ev.evalWithSelfMerge(bo.Left, env, self)
-		}()
-		if err != nil {
-			return nil, err
-		}
-		if self != nil {
-			flv, err := ev.forceValue(lv)
-			if err != nil {
-				return nil, err
-			}
-			if self.fixPublish {
-				ev.publishUnderConstruction(flv)
-			} else {
-				self.memo = flv
-			}
-		}
-		rv, err := ev.evalWithSelfMerge(bo.Right, env, self)
-		if err != nil {
-			return nil, err
-		}
-		return ev.updateAttrSet(lv, rv, bo.P)
+func (ev *Evaluator) primeUpdateRhsMemo(t *Thunk) {
+	if t == nil || t.memo != nil {
+		return
 	}
-	if as, ok := expr.(*parser.AttrSet); ok {
-		av := Attrs(as.Recursive)
-		if err := ev.populateAttrSet(as, env, av); err != nil {
-			return nil, err
-		}
-		if self != nil {
-			if self.fixPublish {
-				ev.publishUnderConstruction(av)
-			} else {
-				self.memo = av
-			}
-		}
-		return av, nil
-	}
-	if p, ok := expr.(*parser.Parens); ok {
-		return ev.evalWithSelfMerge(p.Expr, env, self)
-	}
-	return ev.evalExpr(expr, env)
-}
-
-func (ev *Evaluator) selfMergeRHSAttrSet(expr parser.Expr, env *Env) (*Value, bool) {
+	expr := t.expr
 	for {
-		if p, ok := expr.(*parser.Parens); ok {
-			expr = p.Expr
-			continue
+		p, ok := expr.(*parser.Parens)
+		if !ok {
+			break
 		}
-		break
+		expr = p.Expr
 	}
-	as, ok := expr.(*parser.AttrSet)
-	if !ok {
-		return nil, false
+	bo, ok := expr.(*parser.BinaryOp)
+	if !ok || bo.Op != "//" {
+		return
 	}
-	av := Attrs(as.Recursive)
-	if err := ev.populateAttrSet(as, env, av); err != nil {
-		return nil, false
+	rhs, err := ev.evalAttrs(bo.Right, t.env, bo.P)
+	if err != nil {
+		return
 	}
-	return av, true
+	t.memo = rhs
 }
 
 func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 	if t == nil {
 		return Null(), nil
 	}
-	if t.locked {
-		if t.pendingMergeRhs != nil {
-			left := t.memo
-			return mergeAttrBindMaps(left, t.pendingMergeRhs), nil
-		}
-		if t.memo != nil {
-			return t.memo, nil
-		}
-		if ev.thunkIsDirectSelfRef(t) {
-			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
-		}
-		return blackholeAttrs(), nil
-	}
 	if t.memo != nil && !t.locked {
 		return t.memo, nil
 	}
-	t.locked = true
-	if ev.thunkExprIsFixApply(t) {
-		t.fixPublish = true
-		if t.memo == nil {
-			t.memo = Attrs(false)
+	if t.locked {
+		if t.memo != nil {
+			return t.memo, nil
 		}
+		return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 	}
-	prevHide := ev.forceHideSym
-	prevForce := ev.currentForce
+	t.locked = true
+	prev := ev.currentForce
 	ev.currentForce = t
-	if t.selfHideSym != 0 {
-		ev.forceHideSym = t.selfHideSym
-	}
+	ev.primeUpdateRhsMemo(t)
 	defer func() {
-		ev.forceHideSym = prevHide
-		ev.currentForce = prevForce
+		ev.currentForce = prev
+		t.locked = false
 	}()
 	var v *Value
 	var err error
-	prevSelf := ev.selfMergeThunk
-	ev.selfMergeThunk = t
-	defer func() { ev.selfMergeThunk = prevSelf }()
 	if t.lazy != nil {
 		v, err = t.lazy(ev)
 	} else {
-		v, err = ev.evalWithSelfMerge(t.expr, t.env, t)
+		v, err = ev.evalExpr(t.expr, t.env)
 	}
 	if err != nil {
-		t.locked = false
 		return nil, err
 	}
-	if v != nil && v.Kind == VKAttrs {
-		t.memo = v
-		t.pendingMergeRhs = nil
-		t.locked = false
-		return v, nil
+	if v != nil && v.Kind == VKDeferred && v.Deferred == t {
+		return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 	}
-	fv, err := ev.forceValue(v)
-	if err != nil {
-		t.locked = false
-		return nil, err
-	}
-	t.memo = fv
-	t.locked = false
-	return fv, nil
-}
-
-func (ev *Evaluator) thunkIsDirectSelfRef(t *Thunk) bool {
-	v, ok := t.expr.(*parser.Var)
-	if !ok {
-		return false
-	}
-	sym := ev.Intern.Intern(v.Name)
-	bind, ok := t.env.lookup(sym)
-	if !ok || bind.Thunk == nil {
-		return false
-	}
-	return bind.Thunk == t
-}
-
-// thunkExprIsFixApply reports `let x = f x`-style fixpoint bindings.
-func (ev *Evaluator) thunkExprIsFixApply(t *Thunk) bool {
-	call, ok := t.expr.(*parser.Call)
-	if !ok || len(call.Args) != 1 {
-		return false
-	}
-	v, ok := call.Args[0].(*parser.Var)
-	if !ok {
-		return false
-	}
-	sym := ev.Intern.Intern(v.Name)
-	bind, ok := t.env.lookup(sym)
-	return ok && bind.Thunk == t
+	t.memo = v
+	return v, nil
 }
 
 func (ev *Evaluator) forceValue(v *Value) (*Value, error) {
@@ -1261,16 +1171,31 @@ func (ev *Evaluator) forceValue(v *Value) (*Value, error) {
 	}
 	if v.Kind == VKDeferred && v.Deferred != nil {
 		t := v.Deferred
-		if t.locked && t.fixPublish && t.memo != nil {
-			return t.memo, nil
-		}
-		if t.locked && t.memo == nil {
-			if ev.thunkIsDirectSelfRef(t) {
-				return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
+		if t.locked {
+			if t.memo != nil {
+				return t.memo, nil
 			}
-			return blackholeAttrs(), nil
+			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 		}
 		return ev.forceThunk(t)
+	}
+	return v, nil
+}
+
+func (ev *Evaluator) forceValueDeep(v *Value) (*Value, error) {
+	const maxSteps = 64
+	seen := make(map[*Thunk]struct{})
+	for step := 0; step < maxSteps && v != nil && v.Kind == VKDeferred && v.Deferred != nil; step++ {
+		t := v.Deferred
+		if _, ok := seen[t]; ok {
+			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
+		}
+		seen[t] = struct{}{}
+		var err error
+		v, err = ev.forceValue(v)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return v, nil
 }
@@ -1352,30 +1277,7 @@ func (ev *Evaluator) concatValues(a, b *Value, pos parser.Pos) (*Value, error) {
 	return nil, evalErr(pos, "cannot concatenate values")
 }
 
-func (ev *Evaluator) updateAttrSet(l, r *Value, pos parser.Pos) (*Value, error) {
-	fl, err := ev.forceValue(l)
-	if err != nil {
-		return nil, err
-	}
-	fr, err := ev.forceValue(r)
-	if err != nil {
-		return nil, err
-	}
-	if fl.Kind != VKAttrs || fr.Kind != VKAttrs {
-		return nil, evalErr(pos, "// expects attribute sets")
-	}
-	out := Attrs(false)
-	for sym, bind := range fl.Attrs.Binds {
-		out.Attrs.Binds[sym] = bind
-	}
-	for sym, bind := range fr.Attrs.Binds {
-		out.Attrs.Binds[sym] = bind
-	}
-	ev.publishUnderConstruction(out)
-	return out, nil
-}
-
-// mergeAttrBindMaps returns lhs // rhs attribute bindings without forcing values or publishing.
+// mergeAttrBindMaps returns lhs // rhs attribute bindings without forcing values.
 func mergeAttrBindMaps(lhs, rhs *Value) *Value {
 	left := lhs
 	if left == nil || left.Kind != VKAttrs {
@@ -1393,24 +1295,6 @@ func mergeAttrBindMaps(lhs, rhs *Value) *Value {
 		out.Attrs.Binds[sym] = bind
 	}
 	return out
-}
-
-// publishUnderConstruction merges av's attribute bindings into the thunk currently
-// being forced, so fixpoint/rec siblings stay visible while the set is still computing.
-func (ev *Evaluator) publishUnderConstruction(av *Value) {
-	t := ev.currentForce
-	if t == nil || !t.locked || !t.fixPublish || av == nil || av.Kind != VKAttrs || av.Attrs == nil {
-		return
-	}
-	if t.memo == nil {
-		t.memo = Attrs(false)
-	}
-	if t.memo.Kind != VKAttrs || t.memo.Attrs == nil {
-		return
-	}
-	for sym, bind := range av.Attrs.Binds {
-		t.memo.Attrs.Binds[sym] = bind
-	}
 }
 
 func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {

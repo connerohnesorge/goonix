@@ -559,47 +559,14 @@ func builtinIntersectAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value
 
 // attrsBindingMap returns attr bindings without forcing every attribute value.
 func (ev *Evaluator) attrsBindingMap(v *Value, pos parser.Pos) (map[data.Symbol]*AttrBinding, error) {
-	cur := v
-	for depth := 0; depth < 64; depth++ {
-		if cur == nil {
-			return nil, evalErr(pos, "intersectAttrs expects two attribute sets")
-		}
-		if cur.Kind == VKDeferred && cur.Deferred != nil {
-			t := cur.Deferred
-			if t.locked {
-				if t.fixPublish && t.memo != nil && t.memo.Kind == VKAttrs && t.memo.Attrs != nil {
-					return t.memo.Attrs.Binds, nil
-				}
-				if t.pendingMergeRhs != nil {
-					cur = mergeAttrBindMaps(t.memo, t.pendingMergeRhs)
-					continue
-				}
-				if t.memo != nil && t.memo.Kind == VKAttrs && t.memo.Attrs != nil {
-					return t.memo.Attrs.Binds, nil
-				}
-				return make(map[data.Symbol]*AttrBinding), nil
-			}
-			if t.memo != nil {
-				cur = t.memo
-				continue
-			}
-			fv, err := ev.forceThunk(t)
-			if err != nil {
-				return nil, err
-			}
-			cur = fv
-			continue
-		}
-		if cur.Kind == VKAttrs && cur.Attrs != nil {
-			return cur.Attrs.Binds, nil
-		}
-		fv, err := ev.forceValue(cur)
-		if err != nil {
-			return nil, err
-		}
-		cur = fv
+	av, err := ev.forceAttrs(v, pos)
+	if err != nil {
+		return nil, err
 	}
-	return nil, evalErr(pos, "intersectAttrs expects two attribute sets")
+	if av.Attrs == nil {
+		return make(map[data.Symbol]*AttrBinding), nil
+	}
+	return av.Attrs.Binds, nil
 }
 
 func builtinListToAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1371,7 +1338,7 @@ func getAttrString(ev *Evaluator, set *Value, name string) (string, error) {
 }
 
 func forceList(ev *Evaluator, pos parser.Pos, v *Value) ([]*Value, error) {
-	fv, err := ev.forceValue(v)
+	fv, err := ev.forceValueDeep(v)
 	if err != nil {
 		return nil, err
 	}
@@ -1396,7 +1363,7 @@ func builtinIsList(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	fv, err := ev.forceValue(args[0])
+	fv, err := ev.forceValueDeep(args[0])
 	if err != nil {
 		return nil, err
 	}

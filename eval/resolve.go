@@ -62,35 +62,18 @@ func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool) {
 		return nil, false
 	}
 	if b, ok := env.Vars[sym]; ok {
-		if ev.forceHideSym != 0 && sym == ev.forceHideSym && ev.inMergeLeft &&
-			b.Thunk != nil && ev.currentForce != nil && b.Thunk == ev.currentForce {
-			return &AttrBinding{Value: Deferred(ev.currentForce)}, true
-		}
 		return b, true
 	}
 	if b, ok := ev.lookupEnv(env.Parent, sym); ok {
 		return b, true
 	}
 	if env.With != nil {
-		var w *Value
-		var err error
-		if env.With.Kind == VKDeferred && env.With.Deferred != nil {
-			t := env.With.Deferred
-			if t.locked && t.pendingMergeRhs != nil && !t.fixPublish {
-				w = mergeAttrBindMaps(t.memo, t.pendingMergeRhs)
-			} else {
-				w, err = ev.forceValue(env.With)
-			}
-		} else {
-			w, err = ev.forceValue(env.With)
-		}
+		w, err := ev.forceAttrs(env.With, parser.Pos{})
 		if err != nil {
 			return nil, false
 		}
-		if w != nil && w.Kind == VKAttrs {
-			if v, ok := getAttr(w, sym); ok {
-				return &AttrBinding{Value: v}, true
-			}
+		if v, ok := getAttr(w, sym); ok {
+			return &AttrBinding{Value: v}, true
 		}
 	}
 	return nil, false

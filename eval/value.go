@@ -109,21 +109,11 @@ type Thunk struct {
 	env  *Env
 	pos  parser.Pos
 
-	// selfHideSym, when set, is omitted from env lookup while this thunk is forcing
-	// so `name = name // { }` can refer to an outer binding of the same name.
-	selfHideSym data.Symbol
-
 	// lazy, when set, is invoked instead of expr (used for lazy builtins like mapAttrs).
 	lazy func(*Evaluator) (*Value, error)
 
 	memo   *Value
-	locked bool // blackhole marker while forcing
-
-	// pendingMergeRhs holds the right-hand attrset of `let self = lhs // rhs` while lhs is evaluated.
-	pendingMergeRhs *Value
-
-	// fixPublish accumulates attr bindings during lib.fix-style f x while locked.
-	fixPublish bool
+	locked bool // true while this thunk is being forced (blackhole)
 }
 
 func (v *Value) force(e *Evaluator) (*Value, error) {

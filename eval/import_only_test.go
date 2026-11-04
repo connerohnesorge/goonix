@@ -10,7 +10,7 @@ import (
 func TestImportNixpkgsOnly(t *testing.T) {
 	root := modRoot(t)
 	nixpkgs := filepath.Join(root, "testdata", "nixpkgs")
-	src := `import "` + filepath.Join(nixpkgs, "default.nix") + `" { system = "x86_64-linux"; config = { }; overlays = [ ]; }`
+	src := `import "` + filepath.Join(nixpkgs, "default.nix") + `" { localSystem = { system = "x86_64-linux"; }; config = { }; overlays = [ ]; }`
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
 	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
 	ev.NixPath.PrependEntries("nix=" + filepath.Join(root, "testdata", "nix"))
