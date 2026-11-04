@@ -229,27 +229,21 @@ func builtinMap(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	f, err := ev.forceValue(args[0])
+	f, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
-	list, err := ev.forceValue(args[1])
+	list, err := forceList(ev, pos, args[1])
 	if err != nil {
 		return nil, err
 	}
-	if list.Kind != VKList {
-		return nil, evalErr(pos, "map expects a list")
-	}
-	out := make([]*Value, len(list.List))
-	for i, el := range list.List {
+	out := make([]*Value, len(list))
+	for i, el := range list {
 		r, err := ev.applyCall(f, el, pos)
 		if err != nil {
 			return nil, err
 		}
-		out[i], err = ev.forceValue(r)
-		if err != nil {
-			return nil, err
-		}
+		out[i] = r
 	}
 	return List(out...), nil
 }
@@ -258,19 +252,16 @@ func builtinConcatMap(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	f, err := ev.forceValue(args[0])
+	f, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
-	list, err := ev.forceValue(args[1])
+	list, err := forceList(ev, pos, args[1])
 	if err != nil {
 		return nil, err
-	}
-	if list.Kind != VKList {
-		return nil, evalErr(pos, "concatMap expects a list")
 	}
 	var out []*Value
-	for _, el := range list.List {
+	for _, el := range list {
 		r, err := ev.applyCall(f, el, pos)
 		if err != nil {
 			return nil, err
@@ -292,22 +283,24 @@ func builtinFilter(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	pred, err := ev.forceValue(args[0])
+	pred, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
-	list, err := ev.forceValue(args[1])
+	lv, err := ev.mustWHNF(args[1], pos)
 	if err != nil {
 		return nil, err
 	}
-	if list.Kind == VKNull {
-		list = List()
-	}
-	if list.Kind != VKList {
+	var elems []*Value
+	if lv.Kind == VKNull {
+		elems = nil
+	} else if lv.Kind != VKList {
 		return nil, evalErr(pos, "filter expects a list")
+	} else {
+		elems = lv.List
 	}
 	var out []*Value
-	for _, el := range list.List {
+	for _, el := range elems {
 		r, err := ev.applyCall(pred, el, pos)
 		if err != nil {
 			return nil, err
@@ -327,18 +320,15 @@ func builtinSort(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	comp, err := ev.forceValue(args[0])
+	comp, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
-	list, err := ev.forceValue(args[1])
+	list, err := forceList(ev, pos, args[1])
 	if err != nil {
 		return nil, err
 	}
-	if list.Kind != VKList {
-		return nil, evalErr(pos, "sort expects a list")
-	}
-	items := append([]*Value{}, list.List...)
+	items := append([]*Value{}, list...)
 	stdsort.SliceStable(items, func(i, j int) bool {
 		r, err := ev.applyCall2(comp, items[i], items[j], pos)
 		if err != nil {
@@ -357,19 +347,16 @@ func builtinFoldlPrime(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 	if err := arity(pos, args, 3); err != nil {
 		return nil, err
 	}
-	op, err := ev.forceValue(args[0])
+	op, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
 	acc := args[1]
-	list, err := ev.forceValue(args[2])
+	list, err := forceList(ev, pos, args[2])
 	if err != nil {
 		return nil, err
 	}
-	if list.Kind != VKList {
-		return nil, evalErr(pos, "foldl' expects a list")
-	}
-	for _, el := range list.List {
+	for _, el := range list {
 		r, err := ev.applyCall2(op, acc, el, pos)
 		if err != nil {
 			return nil, err
@@ -426,19 +413,16 @@ func builtinCatAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	sym := ev.Intern.Intern(name)
 	var out []*Value
 	for _, el := range list {
-		set, err := ev.forceValue(el)
+		set, err := ev.forceAttrs(el, pos)
 		if err != nil {
-			return nil, err
-		}
-		if set.Kind != VKAttrs {
 			continue
 		}
 		if b := set.Attrs.Binds[sym]; b != nil {
-			val, err := ev.attrBindingValue(b)
-			if err != nil {
-				return nil, err
+			if b.Thunk != nil {
+				out = append(out, Deferred(b.Thunk))
+			} else {
+				out = append(out, b.Value)
 			}
-			out = append(out, val)
 		}
 	}
 	return List(out...), nil
@@ -458,7 +442,7 @@ func builtinGetAttr(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	set, err := ev.forceValue(args[0])
+	set, err := ev.forceAttrs(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -467,15 +451,12 @@ func builtinGetAttr(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 		return nil, err
 	}
 	sym := ev.Intern.Intern(name)
-	if set.Kind != VKAttrs {
-		return nil, evalErr(pos, "getAttr expects attribute set")
-	}
 	b, ok := set.Attrs.Binds[sym]
 	if !ok {
 		return nil, evalErr(pos, "attribute %q missing", name)
 	}
 	if b.Thunk != nil {
-		return ev.forceThunk(b.Thunk)
+		return Deferred(b.Thunk), nil
 	}
 	return b.Value, nil
 }
@@ -488,12 +469,9 @@ func builtinHasAttr(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err != nil {
 		return nil, err
 	}
-	set, err := ev.forceValue(args[1])
+	set, err := ev.forceAttrs(args[1], pos)
 	if err != nil {
 		return nil, err
-	}
-	if set.Kind != VKAttrs {
-		return Bool(false), nil
 	}
 	sym := ev.Intern.Intern(name)
 	_, ok := set.Attrs.Binds[sym]
@@ -504,22 +482,19 @@ func builtinRemoveAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, e
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	set, err := ev.forceValue(args[0])
+	set, err := ev.forceAttrs(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
-	list, err := ev.forceValue(args[1])
+	names, err := forceList(ev, pos, args[1])
 	if err != nil {
 		return nil, err
-	}
-	if set.Kind != VKAttrs || list.Kind != VKList {
-		return nil, evalErr(pos, "removeAttrs expects set and list")
 	}
 	out := Attrs(false)
 removeLoop:
 	for sym, bind := range set.Attrs.Binds {
 		name := ev.Intern.Lookup(sym)
-		for _, el := range list.List {
+		for _, el := range names {
 			s, err := ev.forceString(el)
 			if err != nil {
 				return nil, err
@@ -570,21 +545,15 @@ func builtinListToAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, e
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	list, err := ev.forceValue(args[0])
+	list, err := forceList(ev, pos, args[0])
 	if err != nil {
 		return nil, err
 	}
-	if list.Kind != VKList {
-		return nil, evalErr(pos, "listToAttrs expects a list")
-	}
 	out := Attrs(false)
-	for _, el := range list.List {
-		item, err := ev.forceValue(el)
+	for _, el := range list {
+		item, err := ev.forceAttrs(el, pos)
 		if err != nil {
 			return nil, err
-		}
-		if item.Kind != VKAttrs {
-			return nil, evalErr(pos, "listToAttrs element must be attribute set")
 		}
 		nameSym := ev.Intern.Intern("name")
 		valSym := ev.Intern.Intern("value")
@@ -596,11 +565,24 @@ func builtinListToAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, e
 		if !ok {
 			return nil, evalErr(pos, "missing value attribute")
 		}
-		ns, err := ev.forceString(nb.Value)
+		var ns string
+		if nb.Thunk != nil {
+			nv, err := ev.forceThunk(nb.Thunk)
+			if err != nil {
+				return nil, err
+			}
+			ns, err = ev.forceString(nv)
+		} else {
+			ns, err = ev.forceString(nb.Value)
+		}
 		if err != nil {
 			return nil, err
 		}
-		out.Attrs.Binds[ev.Intern.Intern(ns)] = &AttrBinding{Value: vb.Value}
+		if vb.Thunk != nil {
+			out.Attrs.Binds[ev.Intern.Intern(ns)] = &AttrBinding{Thunk: vb.Thunk}
+		} else {
+			out.Attrs.Binds[ev.Intern.Intern(ns)] = &AttrBinding{Value: vb.Value}
+		}
 	}
 	return out, nil
 }
@@ -1468,7 +1450,7 @@ func builtinAll(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	pred, err := ev.forceValue(args[0])
+	pred, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -1496,7 +1478,7 @@ func builtinAny(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	pred, err := ev.forceValue(args[0])
+	pred, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -1524,7 +1506,7 @@ func builtinGenList(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	f, err := ev.forceValue(args[0])
+	f, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -1541,10 +1523,7 @@ func builtinGenList(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 		if err != nil {
 			return nil, err
 		}
-		out[i], err = ev.forceValue(r)
-		if err != nil {
-			return nil, err
-		}
+		out[i] = r
 	}
 	return List(out...), nil
 }
@@ -1599,12 +1578,9 @@ func builtinAttrValues(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	set, err := ev.forceValue(args[0])
+	set, err := ev.forceAttrs(args[0], pos)
 	if err != nil {
 		return nil, err
-	}
-	if set.Kind != VKAttrs {
-		return nil, evalErr(pos, "attrValues expects attribute set")
 	}
 	var names []string
 	for sym := range set.Attrs.Binds {
@@ -1619,11 +1595,7 @@ func builtinAttrValues(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 			continue
 		}
 		if b.Thunk != nil {
-			v, err := ev.forceThunk(b.Thunk)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, v)
+			out = append(out, Deferred(b.Thunk))
 		} else {
 			out = append(out, b.Value)
 		}
@@ -2119,7 +2091,7 @@ func builtinGenericClosure(ev *Evaluator, pos parser.Pos, args []*Value) (*Value
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	cfg, err := ev.forceValue(args[0])
+	cfg, err := ev.forceAttrs(args[0], pos)
 	if err != nil {
 		return nil, err
 	}

@@ -123,10 +123,6 @@ func (ev *Evaluator) applyCallableN(f *Value, args []*Value, pos parser.Pos) (*V
 		if err != nil {
 			return nil, err
 		}
-		cur, err = ev.forceValue(cur)
-		if err != nil {
-			return nil, err
-		}
 	}
 	return cur, nil
 }

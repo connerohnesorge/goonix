@@ -68,51 +68,13 @@ func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool) {
 		return b, true
 	}
 	if env.With != nil {
-		if val, ok := ev.lookupWithAttr(env.With, sym); ok {
-			return &AttrBinding{Value: val}, true
+		w, err := ev.forceWHNF(env.With, parser.Pos{})
+		if err != nil || w == nil || w.Kind != VKAttrs {
+			return nil, false
 		}
-	}
-	return nil, false
-}
-
-// lookupWithAttr resolves name in a `with` attrset without forcing a fixpoint LHS of `//`.
-func (ev *Evaluator) lookupWithAttr(v *Value, sym data.Symbol) (*Value, bool) {
-	if v == nil {
-		return nil, false
-	}
-	if val, ok := ev.pendingUpdateAttr(v, sym); ok {
-		return val, true
-	}
-	w, err := ev.forceWHNF(v, parser.Pos{})
-	if err != nil || w == nil || w.Kind != VKAttrs {
-		return nil, false
-	}
-	return getAttr(w, sym)
-}
-
-// pendingUpdateAttr returns attr from the RHS of `lhs // rhs` when v is still an unevaluated update.
-func (ev *Evaluator) pendingUpdateAttr(v *Value, sym data.Symbol) (*Value, bool) {
-	if v == nil || v.Kind != VKDeferred || v.Deferred == nil {
-		return nil, false
-	}
-	t := v.Deferred
-	if t.lazy != nil {
-		return nil, false
-	}
-	bin, ok := t.expr.(*parser.BinaryOp)
-	if !ok || bin.Op != "//" {
-		return nil, false
-	}
-	rhs, err := ev.evalExpr(bin.Right, t.env)
-	if err != nil {
-		return nil, false
-	}
-	fr, err := ev.forceAttrs(rhs, bin.P)
-	if err != nil {
-		return nil, false
-	}
-	if val, ok := getAttr(fr, sym); ok {
-		return val, true
+		if v, ok := getAttr(w, sym); ok {
+			return &AttrBinding{Value: v}, true
+		}
 	}
 	return nil, false
 }

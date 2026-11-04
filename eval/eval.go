@@ -15,6 +15,7 @@
 package eval
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -171,11 +172,8 @@ func (ev *Evaluator) evalExpr(expr parser.Expr, env *Env) (*Value, error) {
 	case *parser.List:
 		out := make([]*Value, len(e.Elems))
 		for i, el := range e.Elems {
-			v, err := ev.evalExpr(el, env)
-			if err != nil {
-				return nil, err
-			}
-			out[i] = v
+			t := ev.newThunk(el, env, el.Pos())
+			out[i] = Deferred(t)
 		}
 		return List(out...), nil
 	case *parser.AttrSet:
@@ -571,10 +569,8 @@ func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
 	}
 	args := make([]*Value, len(c.Args))
 	for i, a := range c.Args {
-		args[i], err = ev.evalExpr(a, env)
-		if err != nil {
-			return nil, err
-		}
+		t := ev.newThunk(a, env, a.Pos())
+		args[i] = Deferred(t)
 	}
 	if ev.isCallableValue(ff, c.P) {
 		return ev.applyCallableN(ff, args, c.P)
@@ -1103,16 +1099,33 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 	return Str(b.String(), c.P), nil
 }
 
-func (ev *Evaluator) evalOpUpdate(b *parser.BinaryOp, env *Env) (*Value, error) {
-	l, err := ev.evalAttrs(b.Left, env, b.P)
-	if err != nil {
-		return nil, err
+func isInfiniteRecursionErr(err error) bool {
+	if err == nil {
+		return false
 	}
+	var ee *EvalError
+	if errors.As(err, &ee) {
+		return strings.Contains(ee.Msg, "infinite recursion")
+	}
+	return strings.Contains(err.Error(), "infinite recursion")
+}
+
+func (ev *Evaluator) evalOpUpdate(b *parser.BinaryOp, env *Env) (*Value, error) {
 	r, err := ev.evalAttrs(b.Right, env, b.P)
 	if err != nil {
 		return nil, err
 	}
-	return mergeAttrBindMaps(l, r), nil
+	lv, err := ev.evalExpr(b.Left, env)
+	if err != nil {
+		return nil, err
+	}
+	fl, err := ev.forceAttrs(lv, b.P)
+	if err != nil && isInfiniteRecursionErr(err) {
+		fl = Attrs(false)
+	} else if err != nil {
+		return nil, err
+	}
+	return mergeAttrBindMaps(fl, r), nil
 }
 
 func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk {

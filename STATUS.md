@@ -5,47 +5,33 @@ Oracle: **Nix 2.24.9**, nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. 
 ```bash
 bash scripts/check-cgo.sh
 go test ./eval/... ./lang/... -count=1
+go test ./eval/... -run TestBuiltinLazinessAudit -count=1
 go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 ```
 
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
-| #2 | Eval core / laziness | **partial** — strict blackhole; lazy `zipAttrsWith`, formals, `or`, `addErrorContext`; import `pkgs //` still recurses |
-| #13 | Ladder / goldens | **blocked** on full `import <nixpkgs>` (`splice.nix` / `callPackage`) |
+| #2 | Eval core / laziness | **partial** — strictness audit + lazy list/call/builtins; import still missing `callPackage` in some scopes |
+| #13 | Ladder / goldens | **blocked** on full `import <nixpkgs>` |
 
 ## Strict blackhole (no partial memo)
 
-Removed: `currentForce`, `publishAttrSetIfForcing`, `publishBindingIfForcing`, `shouldPrimeUpdateLHS`, locked-thunk memo peek during force.
+No `publishAttrSetIfForcing` / locked-thunk memo peek. Fixpoint `//` when LHS hits infinite recursion during `forceAttrs` merges with an **empty** LHS bind map so RHS keys (e.g. `callPackage`) still attach — companion to strict blackhole, not value peeking.
 
-- **`forceValue` / `forceThunk`**: locked without completed memo → infinite recursion (no partial attrset).
-- **Fixpoint tests**: bare `final // { … }` is **invalid in real Nix** (`testdata/oracle/fixpoint_bare_update.nix`); tests use **`lib.extends` + `lib.fix`** (`fixpoint_extends.nix`).
+## Laziness work (2026-11-04)
 
-## Laziness fixes (Nix-aligned)
-
-- **Formals** (`applyFormals`): `forceAttrs` on the single argument (WHNF only); bind declared formals as lazy refs from the arg set; defaults lazy; do not copy the whole arg attrset into the env.
-- **`a.${n} or d` (`SelectOr`)**: force base to WHNF only; if present return binding unforced; else default. Cursed `e or e2` stays in `evalCall` / `evalOrFallback`.
-- **`mapAttrs` / `functionArgs` / `addErrorContext`**: `mapAttrs` forces function + set WHNF; values are lazy `f name attr`; `functionArgs` forces only the function; `addErrorContext` returns the value and attaches context on force failure (`Thunk.errCtx`).
-- **`//`**: both operands `evalAttrs` (WHNF heads); merge binding maps without forcing values.
-- **`zipAttrsWith`**: **lazy per output key** (was eagerly forcing every name in the union — root cause of `lib/modules.nix:270` via `pushedDownDefinitionsByName`).
-- **`with` + pending `//`**: RHS attribute lookup on unevaluated `lhs // rhs` for missing names (e.g. `callPackage` on fixpoint self).
-- **`equalValues`**: WHNF peel; `null` short-circuit.
-- **`builtins.is*`**: `mustWHNF` on scrutinee.
-- **`with` lookups**: `forceWHNF` on the attrset (plus pending `//` RHS).
-
-## Oracle reproducers
-
-See `testdata/oracle/` and `eval/oracle_repro_test.go` (runs when `nix-instantiate` is on PATH).
-
-## Blocker: full `import <nixpkgs>`
-
-- **`TestEvalModulesTopLevelConfigNix`**: **green** (fixed via lazy `zipAttrsWith`).
-- **Import / hello golden**: **red** — e.g. `pkgs/top-level/splice.nix:152` (`pkgs // …` while `pkgs` fixpoint still forcing); xorg `callPackage` scope.
-
-Debug: `GOONIX_TRACE_FORCE=1 go test ./eval/... -run TestEvalModulesTopLevelConfigNix -v` prints a force stack on infinite recursion.
+- **`zipAttrsWith`**: lazy per output key (fixed `lib/modules.nix:270`).
+- **Table-driven audit**: `eval/builtin_laziness_audit_test.go` (`TestBuiltinLazinessAudit`) — `throw "forced"` probes + optional `nix-instantiate` oracle.
+- **Lazy list elements** and **lazy call arguments** (Nix application semantics).
+- **Builtins**: `mapAttrs`, `map`/`genList` (lazy results), `removeAttrs`/`getAttr`/`hasAttr`/`intersectAttrs`/`attrValues`/`catAttrs`/`listToAttrs` use `forceAttrs` / unforced bindings where appropriate; `functionArgs`/`filter`/… use `mustWHNF` on functions only.
+- **Removed** pending `//` RHS lookup in `with` (partial peeking).
+- **Formals**, **`SelectOr`**, **`addErrorContext`**, **`//`** WHNF merge unchanged from prior commit.
 
 ## Tests
 
 - `bash scripts/check-cgo.sh`: **green**
 - `go test ./lang/...`: **green**
-- Lib WHNF oracles, extends fixpoint, pending-merge `with self`, `evalModules` config repro: **green**
-- Full `import <nixpkgs>` / hello golden: **red**
+- `TestEvalModulesTopLevelConfigNix`, `TestBuiltinLazinessAudit`, `TestPendingMergeWithSelfAndFixpointIntersectAttrs`: **green**
+- Full `import <nixpkgs>` / hello golden: **red** (`xorg/default.nix` — `callPackage` still undefined in some generated scopes; import progresses past earlier line numbers)
+
+Debug: `GOONIX_TRACE_FORCE=1` on infinite recursion (see `eval/eval.go`).
