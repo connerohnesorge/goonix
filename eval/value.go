@@ -37,6 +37,7 @@ const (
 	VKLambda
 	VKBuiltin
 	VKDerivation
+	VKDeferred // unevaluated let binding / lazy reference
 )
 
 // Value is a runtime Nix value.
@@ -58,6 +59,9 @@ type Value struct {
 
 	// Derivation metadata (type = "derivation").
 	Derivation *DerivationValue
+
+	// Deferred is a lazy let binding referenced before full evaluation.
+	Deferred *Thunk
 }
 
 // AttrSet holds attribute bindings, optionally lazy/recursive.
@@ -149,6 +153,8 @@ func (v *Value) DisplayString(e *Evaluator, intern *data.Interner) string {
 		return "<lambda>"
 	case VKBuiltin:
 		return "<builtin>"
+	case VKDeferred:
+		return "<deferred>"
 	case VKDerivation:
 		if v.Derivation != nil && v.Derivation.OutPaths != nil {
 			if p, ok := v.Derivation.OutPaths["out"]; ok {
@@ -199,6 +205,11 @@ func Path(p string) *Value {
 
 func List(elems ...*Value) *Value {
 	return &Value{Kind: VKList, List: elems}
+}
+
+// Deferred wraps a lazy binding without forcing it.
+func Deferred(t *Thunk) *Value {
+	return &Value{Kind: VKDeferred, Deferred: t}
 }
 
 func Attrs(recursive bool) *Value {

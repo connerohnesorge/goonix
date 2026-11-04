@@ -267,7 +267,7 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 	sym := ev.Intern.Intern(v.Name)
 	if bind, ok := env.lookup(sym); ok {
 		if bind.Thunk != nil {
-			return ev.forceThunk(bind.Thunk)
+			return Deferred(bind.Thunk), nil
 		}
 		return bind.Value, nil
 	}
@@ -526,7 +526,19 @@ func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
 	}
 	switch ff.Kind {
 	case VKLambda:
-		return ev.applyLambda(ff.Lambda, args, c.P)
+		result := ff
+		for _, arg := range args {
+			r, err := ev.applyLambda(result.Lambda, []*Value{arg}, c.P)
+			if err != nil {
+				return nil, err
+			}
+			fr, err := ev.forceValue(r)
+			if err != nil {
+				return nil, err
+			}
+			result = fr
+		}
+		return result, nil
 	case VKBuiltin:
 		return ff.Builtin.Fn(ev, c.P, args)
 	default:
@@ -560,7 +572,7 @@ func (ev *Evaluator) applyFormals(l *LambdaValue, args []*Value, child *Env, pos
 	}
 	named := make(map[string]*Value)
 	var rest []*Value
-	if len(args) == 1 && args[0].Kind == VKAttrs {
+	if len(args) == 1 {
 		fa, err := ev.forceValue(args[0])
 		if err != nil {
 			return nil, err
@@ -568,14 +580,11 @@ func (ev *Evaluator) applyFormals(l *LambdaValue, args []*Value, child *Env, pos
 		if fa.Kind == VKAttrs {
 			for sym, bind := range fa.Attrs.Binds {
 				name := ev.Intern.Lookup(sym)
+				formalSym := ev.Intern.Intern(name)
 				if bind.Thunk != nil {
-					v, err := ev.forceThunk(bind.Thunk)
-					if err != nil {
-						return nil, err
-					}
-					named[name] = v
+					child.bindThunk(formalSym, bind.Thunk)
 				} else {
-					named[name] = bind.Value
+					child.bind(formalSym, bind.Value)
 				}
 			}
 		}
@@ -583,8 +592,12 @@ func (ev *Evaluator) applyFormals(l *LambdaValue, args []*Value, child *Env, pos
 		rest = args
 	}
 	for _, f := range l.Formals.Params {
+		formalSym := ev.Intern.Intern(f.Name)
+		if _, ok := child.lookup(formalSym); ok {
+			continue
+		}
 		if v, ok := named[f.Name]; ok {
-			child.bind(ev.Intern.Intern(f.Name), v)
+			child.bind(formalSym, v)
 			delete(named, f.Name)
 			continue
 		}
@@ -593,11 +606,11 @@ func (ev *Evaluator) applyFormals(l *LambdaValue, args []*Value, child *Env, pos
 			if err != nil {
 				return nil, err
 			}
-			child.bind(ev.Intern.Intern(f.Name), dv)
+			child.bind(formalSym, dv)
 			continue
 		}
 		if len(rest) > 0 {
-			child.bind(ev.Intern.Intern(f.Name), rest[0])
+			child.bind(formalSym, rest[0])
 			rest = rest[1:]
 			continue
 		}
@@ -998,6 +1011,9 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 }
 
 func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk {
+	if pos.File == "" && expr != nil {
+		pos = expr.Pos()
+	}
 	return &Thunk{eval: ev, expr: expr, env: env, pos: pos}
 }
 
@@ -1009,6 +1025,9 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		return t.memo, nil
 	}
 	if t.locked {
+		if t.memo != nil {
+			return t.memo, nil
+		}
 		return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 	}
 	t.locked = true
@@ -1030,6 +1049,9 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 func (ev *Evaluator) forceValue(v *Value) (*Value, error) {
 	if v == nil {
 		return Null(), nil
+	}
+	if v.Kind == VKDeferred && v.Deferred != nil {
+		return ev.forceThunk(v.Deferred)
 	}
 	return v, nil
 }

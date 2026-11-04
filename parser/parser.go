@@ -400,7 +400,11 @@ func (p *Parser) parseExprOp() (Expr, error) {
 }
 
 func (p *Parser) parseBinOp(prec int) (Expr, error) {
-	left, err := p.parseUnary(prec)
+	unaryPrec := prec
+	if prec < precUnary {
+		unaryPrec = precUnary
+	}
+	left, err := p.parseUnary(unaryPrec)
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +532,7 @@ func (p *Parser) isSelectStart() bool {
 	switch p.cur().Type {
 	case tokenURI, tokenPath, tokenFloat, tokenInt, tokenID, tokenOrKW,
 		tokenDQuote, tokenIStringOpen, tokenLParen, tokenLBracket, tokenLBrace,
-		tokenRec, tokenMinus, tokenBang, tokenAssert, tokenIf, tokenLet, tokenWith:
+		tokenRec, tokenAssert, tokenIf, tokenLet, tokenWith:
 		return true
 	default:
 		return false

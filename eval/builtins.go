@@ -86,6 +86,15 @@ func (ev *Evaluator) registerBuiltins() {
 	register("compareVersions", builtinCompareVersions)
 	registerNullary("currentSystem", builtinCurrentSystem)
 	register("fetchurl", builtinFetchurl)
+	register("length", builtinLength)
+	register("isList", builtinIsList)
+	register("head", builtinHead)
+	register("tail", builtinTail)
+	register("elemAt", builtinElemAt)
+	register("concatLists", builtinConcatLists)
+	register("elem", builtinElem)
+	register("genList", builtinGenList)
+	register("mapAttrs", builtinMapAttrs)
 }
 
 // BuiltinAttrSet returns an attribute set of all registered builtins.
@@ -282,8 +291,11 @@ func (ev *Evaluator) applyCall2(f, a, b *Value, pos parser.Pos) (*Value, error) 
 	}
 	switch ff.Kind {
 	case VKLambda:
-		// Not fully general; use formals attrset call pattern.
-		return ev.applyLambda(ff.Lambda, []*Value{a, b}, pos)
+		r, err := ev.applyLambda(ff.Lambda, []*Value{a}, pos)
+		if err != nil {
+			return nil, err
+		}
+		return ev.applyCall(r, b, pos)
 	case VKBuiltin:
 		return ff.Builtin.Fn(ev, pos, []*Value{a, b})
 	default:
@@ -495,11 +507,18 @@ func (ev *Evaluator) deepForce(v *Value) error {
 	return nil
 }
 
+func (ev *Evaluator) deepForceValue(v *Value) (*Value, error) {
+	if err := ev.deepForce(v); err != nil {
+		return nil, err
+	}
+	return ev.forceValue(v)
+}
+
 func builtinTryEval(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	v, err := ev.forceValue(args[0])
+	v, err := ev.deepForceValue(args[0])
 	out := Attrs(false)
 	successSym := ev.Intern.Intern("success")
 	valueSym := ev.Intern.Intern("value")
@@ -1148,4 +1167,203 @@ func getAttrString(ev *Evaluator, set *Value, name string) (string, error) {
 		return "", err
 	}
 	return ev.forceString(v)
+}
+
+func forceList(ev *Evaluator, pos parser.Pos, v *Value) ([]*Value, error) {
+	fv, err := ev.forceValue(v)
+	if err != nil {
+		return nil, err
+	}
+	if fv.Kind != VKList {
+		return nil, evalErr(pos, "expected a list")
+	}
+	return fv.List, nil
+}
+
+func builtinLength(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	list, err := forceList(ev, pos, args[0])
+	if err != nil {
+		return nil, err
+	}
+	return Int(int64(len(list))), nil
+}
+
+func builtinIsList(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	fv, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return Bool(fv.Kind == VKList), nil
+}
+
+func builtinHead(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	list, err := forceList(ev, pos, args[0])
+	if err != nil {
+		return nil, err
+	}
+	if len(list) == 0 {
+		return nil, evalErr(pos, "head called on empty list")
+	}
+	return list[0], nil
+}
+
+func builtinTail(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	list, err := forceList(ev, pos, args[0])
+	if err != nil {
+		return nil, err
+	}
+	if len(list) == 0 {
+		return nil, evalErr(pos, "tail called on empty list")
+	}
+	return List(list[1:]...), nil
+}
+
+func builtinElemAt(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	list, err := forceList(ev, pos, args[0])
+	if err != nil {
+		return nil, err
+	}
+	idx, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if idx.Kind != VKInt {
+		return nil, evalErr(pos, "elemAt index must be integer")
+	}
+	i := idx.Int
+	if i < 0 {
+		i += int64(len(list))
+	}
+	if i < 0 || int(i) >= len(list) {
+		return nil, evalErr(pos, "elemAt: index out of bounds")
+	}
+	return list[i], nil
+}
+
+func builtinConcatLists(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	lists, err := forceList(ev, pos, args[0])
+	if err != nil {
+		return nil, err
+	}
+	var out []*Value
+	for _, el := range lists {
+		sub, err := forceList(ev, pos, el)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sub...)
+	}
+	return List(out...), nil
+}
+
+func builtinElem(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	needle, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	list, err := forceList(ev, pos, args[1])
+	if err != nil {
+		return nil, err
+	}
+	for _, el := range list {
+		eq, err := ev.equalValues(needle, el)
+		if err != nil {
+			return nil, err
+		}
+		if eq {
+			return Bool(true), nil
+		}
+	}
+	return Bool(false), nil
+}
+
+func builtinGenList(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	f, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	n, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if n.Kind != VKInt {
+		return nil, evalErr(pos, "genList length must be integer")
+	}
+	out := make([]*Value, n.Int)
+	for i := int64(0); i < n.Int; i++ {
+		r, err := ev.applyCall(f, Int(i), pos)
+		if err != nil {
+			return nil, err
+		}
+		out[i], err = ev.forceValue(r)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return List(out...), nil
+}
+
+func builtinMapAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	f, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	set, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if set.Kind != VKAttrs {
+		return nil, evalErr(pos, "mapAttrs expects attribute set")
+	}
+	out := Attrs(false)
+	for sym, bind := range set.Attrs.Binds {
+		name := ev.Intern.Lookup(sym)
+		var val *Value
+		if bind.Thunk != nil {
+			val, err = ev.forceThunk(bind.Thunk)
+		} else {
+			val = bind.Value
+		}
+		if err != nil {
+			return nil, err
+		}
+		nameVal := Str(name, pos)
+		r, err := ev.applyCall2(f, nameVal, val, pos)
+		if err != nil {
+			return nil, err
+		}
+		rv, err := ev.forceValue(r)
+		if err != nil {
+			return nil, err
+		}
+		out.Attrs.Binds[sym] = &AttrBinding{Value: rv}
+	}
+	return out, nil
 }
