@@ -566,10 +566,6 @@ func (ev *Evaluator) attrsBindingMap(v *Value, pos parser.Pos) (map[data.Symbol]
 		}
 		if cur.Kind == VKDeferred && cur.Deferred != nil {
 			t := cur.Deferred
-			if t.memo != nil {
-				cur = t.memo
-				continue
-			}
 			if t.locked {
 				if t.fixPublish && t.memo != nil && t.memo.Kind == VKAttrs && t.memo.Attrs != nil {
 					return t.memo.Attrs.Binds, nil
@@ -582,6 +578,10 @@ func (ev *Evaluator) attrsBindingMap(v *Value, pos parser.Pos) (map[data.Symbol]
 					return t.memo.Attrs.Binds, nil
 				}
 				return make(map[data.Symbol]*AttrBinding), nil
+			}
+			if t.memo != nil {
+				cur = t.memo
+				continue
 			}
 			fv, err := ev.forceThunk(t)
 			if err != nil {

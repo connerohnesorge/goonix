@@ -261,7 +261,13 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 	sym := ev.Intern.Intern(v.Name)
 	if bind, ok := ev.lookupEnv(env, sym); ok {
 		if bind.Thunk != nil {
-		 if bind.Thunk.locked && bind.Thunk.memo != nil {
+			if bind.Thunk.locked && bind.Thunk.pendingMergeRhs != nil {
+				return Deferred(bind.Thunk), nil
+			}
+			if bind.Thunk.locked && bind.Thunk.fixPublish {
+				return Deferred(bind.Thunk), nil
+			}
+			if bind.Thunk.locked && bind.Thunk.memo != nil {
 				return bind.Thunk.memo, nil
 			}
 			return Deferred(bind.Thunk), nil
@@ -503,7 +509,11 @@ func (ev *Evaluator) evalLet(l *parser.Let, env *Env) (*Value, error) {
 				return
 			}
 			seen[sym] = struct{}{}
-			child.bindThunk(sym, ev.newThunk(bind.Value, child, bind.Pos))
+			t := ev.newThunk(bind.Value, child, bind.Pos)
+			if bo, ok := bind.Value.(*parser.BinaryOp); ok && bo.Op == "//" {
+				t.selfHideSym = sym
+			}
+			child.bindThunk(sym, t)
 		}
 		if len(l.Attrs.Members) > 0 {
 			for _, m := range l.Attrs.Members {
