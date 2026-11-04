@@ -62,6 +62,7 @@ type Evaluator struct {
 	forceFrames []string
 
 	drvStrictByPath map[string]*DerivationValue
+	drvStrictByAttrs map[*AttrSet]*DerivationValue // memo derivationStrict by drvAttrs attr set identity
 	strictDrvs      map[string]*gonixdrv.Derivation // every derivationStrict result, keyed by drvPath
 	moduloCache     *store.ModuloCache
 

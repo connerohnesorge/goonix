@@ -63,7 +63,7 @@ func (ev *Evaluator) fillStructuredDerivationFromAttrs(attrs *Value, drv *Deriva
 			drv.Args = nil
 			for _, el := range lv.List {
 				subCol := newDerivationInputCollector()
-				s, err := ev.coerceDerivationEnvString(el, pos, subCol)
+				s, _, err := ev.coerceDerivationEnvString(el, pos, subCol)
 				if err != nil {
 					return err
 				}
@@ -73,7 +73,7 @@ func (ev *Evaluator) fillStructuredDerivationFromAttrs(attrs *Value, drv *Deriva
 			continue
 		case "builder":
 			subCol := newDerivationInputCollector()
-			s, err := ev.coerceDerivationEnvString(val, pos, subCol)
+			s, _, err := ev.coerceDerivationEnvString(val, pos, subCol)
 			if err != nil {
 				return err
 			}
@@ -81,7 +81,7 @@ func (ev *Evaluator) fillStructuredDerivationFromAttrs(attrs *Value, drv *Deriva
 			col.merge(subCol)
 		case "system":
 			subCol := newDerivationInputCollector()
-			s, err := ev.coerceDerivationEnvString(val, pos, subCol)
+			s, _, err := ev.coerceDerivationEnvString(val, pos, subCol)
 			if err != nil {
 				return err
 			}
@@ -136,6 +136,9 @@ func (ev *Evaluator) fillStructuredDerivationFromAttrs(attrs *Value, drv *Deriva
 	}
 
 	drv.InputDerivations, drv.InputSources = col.toGoNixMaps()
+	if err := ev.verifyStructuredDerivationEnvContext(drv, col); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -238,7 +241,8 @@ func (ev *Evaluator) derivationJSONPath(v *Value, pos parser.Pos, col *derivatio
 		if err != nil {
 			return "", err
 		}
-		return ev.coerceDerivationEnvString(el, pos, col)
+		s, _, err := ev.coerceDerivationEnvString(el, pos, col)
+		return s, err
 	}
 	return "", evalErr(pos, "derivation missing outPath")
 }

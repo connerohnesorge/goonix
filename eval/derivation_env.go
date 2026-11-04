@@ -105,16 +105,16 @@ func isSRIHashString(h string) bool {
 	return false
 }
 
-func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *derivationInputCollector) (string, error) {
+func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *derivationInputCollector) (string, []StringContextElem, error) {
 	prev := ev.materializeStorePaths
 	ev.materializeStorePaths = true
 	defer func() { ev.materializeStorePaths = prev }()
 	sv, err := ev.coerceToString(v, CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	col.mergeValueContext(sv)
-	return sv.String, nil
+	return sv.String, copyStringContext(sv.Ctx), nil
 }
 
 func parseOutputNamesFromEnv(s string) (map[string]struct{}, error) {
@@ -164,6 +164,7 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 
 	col := newDerivationInputCollector()
 	drv.Env = make(map[string]string)
+	envCtx := make(map[string][]StringContextElem)
 	var outputHash, outputHashMode string
 
 	for _, sym := range syms {
@@ -191,22 +192,24 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 			drv.Args = nil
 			for _, el := range lv.List {
 				subCol := newDerivationInputCollector()
-				s, err := ev.coerceDerivationEnvString(el, pos, subCol)
+				s, elCtx, err := ev.coerceDerivationEnvString(el, pos, subCol)
 				if err != nil {
 					return err
 				}
 				drv.Args = append(drv.Args, s)
 				col.merge(subCol)
+				_ = elCtx
 			}
 			continue
 		}
 
 		subCol := newDerivationInputCollector()
-		s, err := ev.coerceDerivationEnvString(val, pos, subCol)
+		s, sCtx, err := ev.coerceDerivationEnvString(val, pos, subCol)
 		if err != nil {
 			return err
 		}
 		drv.Env[key] = s
+		envCtx[key] = sCtx
 		col.merge(subCol)
 
 		switch key {
@@ -243,5 +246,8 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 	}
 
 	drv.InputDerivations, drv.InputSources = col.toGoNixMaps()
+	if err := ev.verifyDerivationEnvContext(drv, envCtx); err != nil {
+		return err
+	}
 	return nil
 }

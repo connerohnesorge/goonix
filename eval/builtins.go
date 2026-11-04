@@ -1030,6 +1030,14 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 		ev.forceFrames = append(ev.forceFrames, "derivationStrict")
 		defer func() { ev.forceFrames = ev.forceFrames[:len(ev.forceFrames)-1] }()
 	}
+	if attrs != nil && attrs.Kind == VKAttrs && attrs.Attrs != nil {
+		if ev.drvStrictByAttrs == nil {
+			ev.drvStrictByAttrs = make(map[*AttrSet]*DerivationValue)
+		}
+		if cached, ok := ev.drvStrictByAttrs[attrs.Attrs]; ok && cached != nil {
+			return cached, nil
+		}
+	}
 	getS := func(name string) (string, error) {
 		sym := ev.Intern.Intern(name)
 		b, ok := attrs.Attrs.Binds[sym]
@@ -1041,7 +1049,8 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 			return "", err
 		}
 		col := newDerivationInputCollector()
-		return ev.coerceDerivationEnvString(v, pos, col)
+		s, _, err := ev.coerceDerivationEnvString(v, pos, col)
+		return s, err
 	}
 	name, err := getS("name")
 	if err != nil {
@@ -1059,6 +1068,9 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 	drv.DrvPath = drvPath
 	drv.OutPaths = outPaths
 	ev.rememberStrictDerivation(drv)
+	if attrs != nil && attrs.Kind == VKAttrs && attrs.Attrs != nil && ev.drvStrictByAttrs != nil {
+		ev.drvStrictByAttrs[attrs.Attrs] = drv
+	}
 	return drv, nil
 }
 
