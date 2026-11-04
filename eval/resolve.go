@@ -70,6 +70,9 @@ func getAttr(v *Value, sym data.Symbol) (*Value, bool) {
 	if !ok || b == nil {
 		return nil, false
 	}
+	if b.Thunk != nil {
+		return Deferred(b.Thunk), true
+	}
 	if b.Value != nil {
 		return b.Value, true
 	}

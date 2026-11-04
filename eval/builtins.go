@@ -47,9 +47,11 @@ func (ev *Evaluator) registerBuiltins() {
 	register("import", builtinImport)
 	register("toString", builtinToString)
 	register("map", builtinMap)
+	register("concatMap", builtinConcatMap)
 	register("filter", builtinFilter)
 	register("foldl'", builtinFoldlPrime)
 	register("attrNames", builtinAttrNames)
+	register("catAttrs", builtinCatAttrs)
 	register("getAttr", builtinGetAttr)
 	register("hasAttr", builtinHasAttr)
 	register("removeAttrs", builtinRemoveAttrs)
@@ -95,6 +97,7 @@ func (ev *Evaluator) registerBuiltins() {
 	register("isFloat", builtinIsFloat)
 	register("isString", builtinIsString)
 	register("isAttrs", builtinIsAttrs)
+	register("isFunction", builtinIsFunction)
 	register("isPath", builtinIsPath)
 	register("typeOf", builtinTypeOf)
 	register("substring", builtinSubstring)
@@ -112,6 +115,18 @@ func (ev *Evaluator) registerBuiltins() {
 	register("genList", builtinGenList)
 	register("mapAttrs", builtinMapAttrs)
 	register("attrValues", builtinAttrValues)
+	register("genericClosure", builtinGenericClosure)
+	register("isBool", builtinIsBool)
+	register("bitAnd", builtinBitAnd)
+	register("bitOr", builtinBitOr)
+	register("bitXor", builtinBitXor)
+	register("baseNameOf", builtinBaseNameOf)
+	register("dirOf", builtinDirOf)
+	register("mul", builtinMul)
+	register("div", builtinDiv)
+	register("unsafeGetAttrPos", builtinUnsafeGetAttrPos)
+	register("functionArgs", builtinFunctionArgs)
+	register("addErrorContext", builtinAddErrorContext)
 }
 
 // BuiltinAttrSet returns an attribute set of all registered builtins.
@@ -225,6 +240,36 @@ func builtinMap(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	return List(out...), nil
 }
 
+func builtinConcatMap(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	f, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	list, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if list.Kind != VKList {
+		return nil, evalErr(pos, "concatMap expects a list")
+	}
+	var out []*Value
+	for _, el := range list.List {
+		r, err := ev.applyCall(f, el, pos)
+		if err != nil {
+			return nil, err
+		}
+		sub, err := forceList(ev, pos, r)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sub...)
+	}
+	return List(out...), nil
+}
+
 func (ev *Evaluator) applyCall(f, arg *Value, pos parser.Pos) (*Value, error) {
 	return ev.applyCallable(f, arg, pos)
 }
@@ -240,6 +285,9 @@ func builtinFilter(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	list, err := ev.forceValue(args[1])
 	if err != nil {
 		return nil, err
+	}
+	if list.Kind == VKNull {
+		list = List()
 	}
 	if list.Kind != VKList {
 		return nil, evalErr(pos, "filter expects a list")
@@ -320,6 +368,39 @@ func builtinAttrNames(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		elems[i] = Str(n, pos)
 	}
 	return List(elems...), nil
+}
+
+func builtinCatAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	name, err := ev.forceString(args[0])
+	if err != nil {
+		return nil, err
+	}
+	list, err := forceList(ev, pos, args[1])
+	if err != nil {
+		return nil, err
+	}
+	sym := ev.Intern.Intern(name)
+	var out []*Value
+	for _, el := range list {
+		set, err := ev.forceValue(el)
+		if err != nil {
+			return nil, err
+		}
+		if set.Kind != VKAttrs {
+			continue
+		}
+		if b := set.Attrs.Binds[sym]; b != nil {
+			val, err := ev.attrBindingValue(b)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, val)
+		}
+	}
+	return List(out...), nil
 }
 
 func stringsSort(ss []string) {
@@ -1567,6 +1648,22 @@ func builtinIsAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	return Bool(fv.Kind == VKAttrs || fv.Kind == VKDerivation), nil
 }
 
+func builtinIsFunction(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	fv, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	switch fv.Kind {
+	case VKLambda, VKBuiltin, VKPartialBuiltin:
+		return Bool(true), nil
+	default:
+		return Bool(false), nil
+	}
+}
+
 func builtinIsPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
@@ -1728,4 +1825,318 @@ func builtinUnsafeDiscardStringContext(ev *Evaluator, pos parser.Pos, args []*Va
 		return nil, err
 	}
 	return Str(s, pos), nil
+}
+
+func builtinIsBool(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	fv, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return Bool(fv.Kind == VKBool), nil
+}
+
+func builtinBitAnd(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	return builtinBitOp(ev, pos, args, func(a, b int64) int64 { return a & b })
+}
+
+func builtinBitOr(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	return builtinBitOp(ev, pos, args, func(a, b int64) int64 { return a | b })
+}
+
+func builtinBitXor(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	return builtinBitOp(ev, pos, args, func(a, b int64) int64 { return a ^ b })
+}
+
+func builtinBitOp(ev *Evaluator, pos parser.Pos, args []*Value, op func(int64, int64) int64) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	a, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	b, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if a.Kind != VKInt || b.Kind != VKInt {
+		return nil, evalErr(pos, "bitwise operation expects integers")
+	}
+	return Int(op(a.Int, b.Int)), nil
+}
+
+func builtinMul(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	a, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	b, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if a.Kind == VKInt && b.Kind == VKInt {
+		return Int(a.Int * b.Int), nil
+	}
+	return nil, evalErr(pos, "mul expects integers")
+}
+
+func builtinDiv(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	a, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	b, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if a.Kind == VKInt && b.Kind == VKInt {
+		if b.Int == 0 {
+			return nil, evalErr(pos, "division by zero")
+		}
+		return Int(a.Int / b.Int), nil
+	}
+	return nil, evalErr(pos, "div expects integers")
+}
+
+func (ev *Evaluator) forceStringOrPath(v *Value) (string, error) {
+	fv, err := ev.forceValue(v)
+	if err != nil {
+		return "", err
+	}
+	switch fv.Kind {
+	case VKString:
+		return fv.String, nil
+	case VKPath:
+		return fv.Path, nil
+	default:
+		return "", fmt.Errorf("expected string or path, got %v", fv.Kind)
+	}
+}
+
+func builtinBaseNameOf(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	s, err := ev.forceStringOrPath(args[0])
+	if err != nil {
+		return nil, evalErr(pos, "%s", err.Error())
+	}
+	s = strings.TrimSuffix(s, "/")
+	if s == "" || s == "/" {
+		return nil, evalErr(pos, "cannot take baseNameOf /")
+	}
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		s = s[i+1:]
+	}
+	return Str(s, pos), nil
+}
+
+func builtinDirOf(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	s, err := ev.forceStringOrPath(args[0])
+	if err != nil {
+		return nil, evalErr(pos, "%s", err.Error())
+	}
+	if s == "" {
+		return Str(".", pos), nil
+	}
+	s = strings.TrimSuffix(s, "/")
+	i := strings.LastIndex(s, "/")
+	if i < 0 {
+		return Str(".", pos), nil
+	}
+	if i == 0 {
+		return Str("/", pos), nil
+	}
+	return Str(s[:i], pos), nil
+}
+
+func builtinUnsafeGetAttrPos(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	name, err := ev.forceString(args[0])
+	if err != nil {
+		return nil, err
+	}
+	set, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if set.Kind != VKAttrs {
+		return nil, evalErr(pos, "unsafeGetAttrPos expects an attribute set")
+	}
+	sym := ev.Intern.Intern(name)
+	if _, ok := set.Attrs.Binds[sym]; !ok {
+		return Null(), nil
+	}
+	return Int(0), nil
+}
+
+func builtinGenericClosure(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	cfg, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Kind != VKAttrs {
+		return nil, evalErr(pos, "genericClosure expects an attribute set")
+	}
+	startSym := ev.Intern.Intern("startSet")
+	opSym := ev.Intern.Intern("operator")
+	keySym := ev.Intern.Intern("key")
+	startBind := cfg.Attrs.Binds[startSym]
+	if startBind == nil {
+		return nil, evalErr(pos, "attribute 'startSet' required")
+	}
+	startSet, err := ev.attrBindingValue(startBind)
+	if err != nil {
+		return nil, err
+	}
+	startList, err := forceList(ev, pos, startSet)
+	if err != nil {
+		return nil, err
+	}
+	if len(startList) == 0 {
+		return List(), nil
+	}
+	opBind := cfg.Attrs.Binds[opSym]
+	if opBind == nil {
+		return nil, evalErr(pos, "attribute 'operator' required")
+	}
+	op, err := ev.attrBindingValue(opBind)
+	if err != nil {
+		return nil, err
+	}
+	opFn, err := ev.forceValue(op)
+	if err != nil {
+		return nil, err
+	}
+	if opFn.Kind != VKLambda && opFn.Kind != VKBuiltin && opFn.Kind != VKPartialBuiltin {
+		return nil, evalErr(pos, "operator must be a function")
+	}
+
+	var doneKeys []*Value
+	keyDone := func(k *Value) (bool, error) {
+		for _, dk := range doneKeys {
+			eq, err := ev.equalValues(dk, k)
+			if err != nil {
+				return false, err
+			}
+			if eq {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	workSet := append([]*Value{}, startList...)
+	var res []*Value
+
+	for len(workSet) > 0 {
+		e := workSet[0]
+		workSet = workSet[1:]
+
+		eAttrs, err := ev.forceValue(e)
+		if err != nil {
+			return nil, err
+		}
+		if eAttrs.Kind != VKAttrs {
+			return nil, evalErr(pos, "genericClosure element must be an attribute set")
+		}
+		keyBind := eAttrs.Attrs.Binds[keySym]
+		if keyBind == nil {
+			return nil, evalErr(pos, "attribute 'key' required")
+		}
+		keyVal, err := ev.attrBindingValue(keyBind)
+		if err != nil {
+			return nil, err
+		}
+		keyVal, err = ev.forceValue(keyVal)
+		if err != nil {
+			return nil, err
+		}
+		seen, err := keyDone(keyVal)
+		if err != nil {
+			return nil, err
+		}
+		if seen {
+			continue
+		}
+		doneKeys = append(doneKeys, keyVal)
+		res = append(res, e)
+
+		newElems, err := ev.applyCall(opFn, e, pos)
+		if err != nil {
+			return nil, err
+		}
+		childList, err := forceList(ev, pos, newElems)
+		if err != nil {
+			return nil, err
+		}
+		for _, el := range childList {
+			if _, err := ev.forceValue(el); err != nil {
+				return nil, err
+			}
+			workSet = append(workSet, el)
+		}
+	}
+	return List(res...), nil
+}
+
+func builtinFunctionArgs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	f, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	out := Attrs(false)
+	switch f.Kind {
+	case VKLambda:
+		if f.Lambda.Formals == nil {
+			return out, nil
+		}
+		for _, p := range f.Lambda.Formals.Params {
+			optional := p.Default != nil
+			out.Attrs.Binds[ev.Intern.Intern(p.Name)] = &AttrBinding{Value: Bool(optional)}
+		}
+	case VKBuiltin, VKPartialBuiltin:
+		// no formal argument metadata
+	default:
+		return nil, evalErr(pos, "expected a function")
+	}
+	return out, nil
+}
+
+func builtinAddErrorContext(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	ctx, err := ev.forceString(args[0])
+	if err != nil {
+		return nil, err
+	}
+	v, err := ev.forceValue(args[1])
+	if err != nil {
+		if ee, ok := err.(*EvalError); ok {
+			return nil, &EvalError{Pos: ee.Pos, Msg: ctx + ": " + ee.Msg}
+		}
+		return nil, fmt.Errorf("%s: %w", ctx, err)
+	}
+	return v, nil
 }

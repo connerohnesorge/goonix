@@ -625,7 +625,7 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 	if err != nil {
 		return nil, err
 	}
-	for i, seg := range s.Path {
+	for _, seg := range s.Path {
 		name := seg.Name
 		if seg.Expr != nil {
 			nv, err := ev.evalExpr(seg.Expr, env)
@@ -642,7 +642,7 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 		if fb.Kind == VKAttrs {
 			b, ok := fb.Attrs.Binds[sym]
 			if !ok {
-				if hasDefault && i == len(s.Path)-1 {
+				if hasDefault {
 					return ev.evalExpr(defaultExpr, env)
 				}
 				return nil, evalErr(s.P, "attribute %q missing", name)
@@ -1052,7 +1052,10 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		return t.memo, nil
 	}
 	if t.locked {
-		return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
+		if ev.thunkIsDirectSelfRef(t) {
+			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
+		}
+		return Null(), nil
 	}
 	t.locked = true
 	v, err := ev.evalWithSelfMerge(t.expr, t.env, t)
@@ -1075,13 +1078,29 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 	return fv, nil
 }
 
+func (ev *Evaluator) thunkIsDirectSelfRef(t *Thunk) bool {
+	v, ok := t.expr.(*parser.Var)
+	if !ok {
+		return false
+	}
+	sym := ev.Intern.Intern(v.Name)
+	bind, ok := t.env.lookup(sym)
+	if !ok || bind.Thunk == nil {
+		return false
+	}
+	return bind.Thunk == t
+}
+
 func (ev *Evaluator) forceValue(v *Value) (*Value, error) {
 	if v == nil {
 		return Null(), nil
 	}
 	if v.Kind == VKDeferred && v.Deferred != nil {
 		if v.Deferred.locked && v.Deferred.memo == nil {
-			return nil, evalErr(v.Deferred.pos, "infinite recursion encountered at %s:%d:%d", v.Deferred.pos.File, v.Deferred.pos.Line, v.Deferred.pos.Col)
+			if ev.thunkIsDirectSelfRef(v.Deferred) {
+				return nil, evalErr(v.Deferred.pos, "infinite recursion encountered at %s:%d:%d", v.Deferred.pos.File, v.Deferred.pos.Line, v.Deferred.pos.Col)
+			}
+			return Null(), nil
 		}
 		return ev.forceThunk(v.Deferred)
 	}
@@ -1189,6 +1208,9 @@ func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {
 	fb, err := ev.forceValue(b)
 	if err != nil {
 		return false, err
+	}
+	if fa == fb {
+		return true, nil
 	}
 	if fa.Kind != fb.Kind {
 		return false, nil
