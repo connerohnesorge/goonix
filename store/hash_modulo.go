@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
-	"strings"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 	"github.com/nix-community/go-nix/pkg/nixhash"
@@ -200,26 +199,6 @@ func fixedOutputModulo(d *gonixdrv.Derivation) (ModuloResult, bool) {
 		return ModuloResult{}, false
 	}
 	return ModuloResult{Kind: ModuloRegular, Hashes: hashes}, true
-}
-
-func fixedMethodAlgo(d *gonixdrv.Derivation, o *gonixdrv.Output) string {
-	algo := o.HashAlgorithm
-	if algo == "" {
-		algo = "sha256"
-	}
-	if strings.HasPrefix(algo, "r:") {
-		return algo
-	}
-	mode := d.Env["outputHashMode"]
-	switch mode {
-	case "nar", "recursive":
-		return "r:" + strings.TrimPrefix(algo, "r:")
-	case "git":
-		return "git:" + strings.TrimPrefix(algo, "git:")
-	default:
-		// flat (default): Nix renderPrefix is empty, printMethodAlgo is just printHashAlgo
-		return strings.TrimPrefix(algo, "r:")
-	}
 }
 
 // OutputPathsModulo computes output store paths using hashDerivationModulo (maskOutputs=true).

@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
-	"github.com/nix-community/go-nix/pkg/nixhash"
 	"github.com/connerohnesorge/goonix/store"
 )
 
@@ -33,7 +32,7 @@ func computeDerivationPaths(ev *Evaluator, cfg store.Config, drv *DerivationValu
 		ev.moduloCache = cache
 	}
 	if isFixedOutputDerivation(d) {
-		outPaths, err = d.CalculateOutputPaths(nil)
+		outPaths, err = store.FixedOutputPaths(cfg, d)
 	} else {
 		outPaths, err = store.OutputPathsModulo(cfg, d, cache)
 	}
@@ -113,25 +112,14 @@ func derivationValueToGoNix(drv *DerivationValue) (*gonixdrv.Derivation, error) 
 	hashAlgo := drv.Env["outputHashAlgo"]
 	hash := drv.Env["outputHash"]
 	hashMode := drv.Env["outputHashMode"]
-	_ = hashMode
-	var parsedFixed *nixhash.Hash
-	if hash != "" {
-		if hw, err := store.ParseHash(hash); err == nil {
-			parsedFixed = &hw.Hash
-			if hashAlgo == "" {
-				hashAlgo = string(hw.Hash.Algo())
-			}
-		}
-	}
 	for out := range outputs {
 		o := &gonixdrv.Output{Path: ""}
-		if parsedFixed != nil && out == "out" {
-			if hashAlgo != "" {
-				o.HashAlgorithm = hashAlgo
-			} else {
-				o.HashAlgorithm = string(parsedFixed.Algo())
+		if hash != "" && out == "out" {
+			base16, drvAlgo, err := store.ParseFixedOutputHash(hash, hashAlgo, hashMode)
+			if err == nil {
+				o.Hash = base16
+				o.HashAlgorithm = drvAlgo
 			}
-			o.Hash = parsedFixed.Format(nixhash.Base16, false)
 		}
 		d.Outputs[out] = o
 	}
