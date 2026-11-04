@@ -3,7 +3,9 @@ module github.com/connerohnesorge/goonix
 go 1.23
 
 require (
+	github.com/klauspost/compress v1.17.9
 	github.com/nix-community/go-nix v0.0.0-20250101154619-4bdde671e0a1
+	github.com/ulikunitz/xz v0.5.12
 	modernc.org/sqlite v1.34.5
 )
 

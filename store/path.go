@@ -38,6 +38,11 @@ func (c Config) storeDir() string {
 	return c.StoreDir
 }
 
+// LogicalStoreDir returns the logical store path prefix (/nix/store by default).
+func (c Config) LogicalStoreDir() string {
+	return c.storeDir()
+}
+
 // ParseRelative parses the `hash-name` portion of a store path.
 func ParseRelative(s string) (*storepath.StorePath, error) {
 	return storepath.FromString(s)
