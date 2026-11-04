@@ -573,6 +573,9 @@ func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
 func (ev *Evaluator) evalOrFallback(base parser.Expr, rest []parser.Expr, env *Env, pos parser.Pos) (*Value, error) {
 	baseVal, err := ev.evalExpr(base, env)
 	if err != nil {
+		if len(rest) > 0 && isMissingAttributeErr(err) {
+			return ev.evalExpr(rest[0], env)
+		}
 		return nil, err
 	}
 	if baseVal != nil && baseVal.Kind == VKDeferred {
@@ -580,6 +583,9 @@ func (ev *Evaluator) evalOrFallback(base parser.Expr, rest []parser.Expr, env *E
 	}
 	fb, err := ev.forceWHNF(baseVal, pos)
 	if err != nil {
+		if len(rest) > 0 && isMissingAttributeErr(err) {
+			return ev.evalExpr(rest[0], env)
+		}
 		return nil, err
 	}
 	if fb != nil && fb.Kind == VKNull {
@@ -1085,8 +1091,9 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 	var ctx []StringContextElem
 	cc := CoerceContext{Mode: CoerceString, Pos: c.P}
 	for i, fv := range vals {
-		cc.Pos = c.Parts[i].Pos()
-		sv, err := ev.coerceToString(fv, cc)
+		partCC := cc
+		partCC.Pos = c.Parts[i].Pos()
+		sv, err := ev.coerceToString(fv, partCC)
 		if err != nil {
 			return nil, err
 		}
@@ -1410,4 +1417,14 @@ func (ev *Evaluator) attrBindingValue(b *AttrBinding) (*Value, error) {
 // attrsBindingForce is an alias used by derivation and attr coercion call sites.
 func (ev *Evaluator) attrsBindingForce(b *AttrBinding) (*Value, error) {
 	return ev.attrBindingValue(b)
+}
+
+func isMissingAttributeErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if ee, ok := err.(*EvalError); ok {
+		return strings.Contains(ee.Msg, "attribute") && strings.Contains(ee.Msg, "missing")
+	}
+	return strings.Contains(err.Error(), "attribute") && strings.Contains(err.Error(), "missing")
 }

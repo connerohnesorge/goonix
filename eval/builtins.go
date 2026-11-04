@@ -192,12 +192,37 @@ func (ev *Evaluator) importModule(path string) (*Value, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.HasSuffix(path, string(filepath.Separator)+"lib"+string(filepath.Separator)+"default.nix") ||
+		strings.HasSuffix(path, "/lib/default.nix") {
+		moduleVal = ev.injectLibThrow(moduleVal)
+	}
 	ev.importCache[path] = moduleVal
 	return moduleVal, nil
 }
 
+func (ev *Evaluator) injectLibThrow(v *Value) *Value {
+	fv, err := ev.forceAttrs(v, parser.Pos{})
+	if err != nil || fv == nil {
+		return v
+	}
+	throwB, ok := ev.Builtins["throw"]
+	if !ok {
+		return v
+	}
+	sym := ev.Intern.Intern("throw")
+	if _, exists := fv.Attrs.Binds[sym]; exists {
+		return fv
+	}
+	out := Attrs(fv.Attrs.Recursive)
+	for k, b := range fv.Attrs.Binds {
+		out.Attrs.Binds[k] = b
+	}
+	out.Attrs.Binds[sym] = &AttrBinding{Value: &Value{Kind: VKBuiltin, Builtin: throwB}}
+	return out
+}
+
 func (ev *Evaluator) bindCorepkgsEnv(env *Env) {
-	for _, name := range []string{"derivation", "baseNameOf", "toString", "dirOf"} {
+	for _, name := range []string{"derivation", "baseNameOf", "toString", "dirOf", "throw"} {
 		if b, ok := ev.Builtins[name]; ok {
 			env.bind(ev.Intern.Intern(name), &Value{Kind: VKBuiltin, Builtin: b})
 		}
