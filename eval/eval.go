@@ -336,7 +336,26 @@ func (ev *Evaluator) evalAttrSet(a *parser.AttrSet, env *Env, fromLet bool) (*Va
 	if err := ev.populateAttrSet(a, env, av); err != nil {
 		return nil, err
 	}
+	ev.publishAttrSetIfForcing(av)
 	return av, nil
+}
+
+func (ev *Evaluator) publishAttrSetIfForcing(av *Value) {
+	t := ev.currentForce
+	if t == nil || !t.locked || av == nil || av.Kind != VKAttrs {
+		return
+	}
+	t.memo = mergeAttrBindMaps(t.memo, av)
+}
+
+func (ev *Evaluator) publishBindingIfForcing(sym data.Symbol, bind *AttrBinding) {
+	t := ev.currentForce
+	if t == nil || !t.locked || bind == nil {
+		return
+	}
+	partial := Attrs(false)
+	partial.Attrs.Binds[sym] = bind
+	t.memo = mergeAttrBindMaps(t.memo, partial)
 }
 
 func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) error {
@@ -647,7 +666,7 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 	if err != nil {
 		return nil, err
 	}
-	fb, err := ev.forceWHNF(base, s.P)
+	fb, err := ev.mustWHNF(base, s.P)
 	if err != nil {
 		return nil, err
 	}
@@ -686,9 +705,9 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 			}
 			var next *Value
 			if b.Thunk != nil {
-				next, err = ev.forceWHNF(Deferred(b.Thunk), s.P)
+				next, err = ev.mustWHNF(Deferred(b.Thunk), s.P)
 			} else {
-				next, err = ev.forceWHNF(b.Value, s.P)
+				next, err = ev.mustWHNF(b.Value, s.P)
 			}
 			if err != nil {
 				return nil, err
@@ -1145,15 +1164,33 @@ func (ev *Evaluator) forceValue(v *Value) (*Value, error) {
 	if v == nil {
 		return Null(), nil
 	}
-	if v.Kind == VKDeferred && v.Deferred != nil {
+	seen := make(map[*Thunk]struct{})
+	for v != nil && v.Kind == VKDeferred && v.Deferred != nil {
 		t := v.Deferred
 		if t.locked {
 			if t.memo != nil {
-				return t.memo, nil
+				v = t.memo
+				continue
 			}
 			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 		}
-		return ev.forceThunk(t)
+		if _, ok := seen[t]; ok {
+			if t.memo != nil {
+				v = t.memo
+				continue
+			}
+			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
+		}
+		seen[t] = struct{}{}
+		if t.memo != nil {
+			v = t.memo
+			continue
+		}
+		var err error
+		v, err = ev.forceThunk(t)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return v, nil
 }

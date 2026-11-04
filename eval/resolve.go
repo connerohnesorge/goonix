@@ -68,8 +68,8 @@ func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool) {
 		return b, true
 	}
 	if env.With != nil {
-		w, err := ev.forceAttrs(env.With, parser.Pos{})
-		if err != nil {
+		w, err := ev.forceWHNF(env.With, parser.Pos{})
+		if err != nil || w == nil || w.Kind != VKAttrs {
 			return nil, false
 		}
 		if v, ok := getAttr(w, sym); ok {

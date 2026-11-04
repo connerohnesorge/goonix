@@ -16,41 +16,46 @@ GOONIX_DEBUG_TYPE=1 go test ./eval/... -run TestImportNixpkgsOnly -count=1
 
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
-| #2 | Eval core / laziness | **partial** — `forceWHNF` / `mustWHNF` split; cross line 23 still blocked |
-| #13 | Ladder / goldens | **partial** — same stdenv cross blocker |
+| #2 | Eval core / laziness | **partial** — unified `forceValue` peel; lib WHNF oracles green; full import blocked at modules |
+| #13 | Ladder / goldens | **partial** — same import blocker |
 
 ## WHNF (Nix 2.24.9)
 
-- **`forceWHNF`**: peel memo chains then `forceValue`; locked without memo → infinite-recursion error (no pass-through); soft cap 512 steps then may still return a thunk.
-- **`mustWHNF`**: `forceWHNF` + error if still `VKDeferred` — used for **calls**, **`//` / forceAttrs**, **lists**, **`if`/bool/arithmetic/strings**, **`typeOf`**.
-- **Select / `?`**: **soft `forceWHNF` only** (never `mustWHNF` on select — re-enters module `equalValues` and hangs); final path segment stays lazy.
-- **`applyCallable` / `evalCall`**: `mustWHNF` on function head (removed double `forceValue` hack).
+- **`forceValue`**: loops on deferred heads — memo peel, then `forceThunk`; locked without memo → infinite-recursion error; no 512-step cap.
+- **`forceWHNF`**: alias of `forceValue` (may still return a thunk in soft contexts).
+- **`mustWHNF`**: `forceValue` + error if still `VKDeferred` — calls, `//` / forceAttrs, lists, `if`/bool/arithmetic/strings, `typeOf`.
+- **Select / `?`**: `mustWHNF` on base and non-final segments; **final segment stays lazy**. HasAttr uses soft `forceWHNF` on base (Nix `?` navigation).
+- **`applyCallable`**: single `mustWHNF` on function head (no double `forceValue`).
 
 ## Fixpoint (load-bearing)
 
-- **`shouldPrimeUpdateLHS` RHS-first `//` priming**: required (`TestFixpointIntersectAttrsSeesPublishedBinds`).
-- Removed: `primeUpdateRhsMemo`, `publishAttrSetIfForcing`.
+- **`shouldPrimeUpdateLHS` RHS-first `//` priming** when LHS is the fixpoint var bound to `currentForce` (`TestFixpointIntersectAttrsSeesPublishedBinds`).
+- **`publishAttrSetIfForcing`** + **`publishBindingIfForcing`**: merge in-progress attr names into the fixpoint blackhole memo while a force is active.
+- **`with` lookups**: `forceWHNF` on the `with` attrset (not full `forceAttrs`).
 
-## stdenv cross line 23 (`lib.init bootStages`)
+## Lib WHNF oracles (green)
 
-With `GOONIX_DEBUG_TYPE=1`, import fails with:
+- `builtins.isAttrs (import lib)`
+- `builtins.typeOf (import lib) == "set"`
+- `(import lib).trivial.id 1 == 1`
+- minimal `fix` + `inherit (self.t) a` (`eval/lib_oracle_test.go`)
 
-`want attribute set; got kind=thunk locked=false memo=true thunkPos=.../pkgs/top-level/default.nix:58:17`
+## Full `import <nixpkgs>` blocker
 
-(pristineLib import) when select needs `lib` as attrset at `cross/default.nix:23`. Eager `mustWHNF` on whole `lib` at applyFormals hits `lib/default.nix:11` fixpoint blackhole.
+`TestImportNixpkgsOnly` fails at **`lib/modules.nix:270`** while evaluating option `_module.freeformType` / module argument `config` (infinite recursion during `forceValue` on the module `config` fixpoint). Past the previous **`stdenv/cross/default.nix:23`** “not an attribute set” failure when `lib` stayed a thunk.
 
-Regression: `eval/stdenv_cross_oracle_test.go` (subexpr types vs Nix when `nix-instantiate` on PATH).
+Regression: `eval/stdenv_cross_oracle_test.go` (`isLinux` / bootStages subexpr types).
 
 ## Tests
 
 - `bash scripts/check-cgo.sh`: **green**
 - `go test ./lang/...`: **green**
-- Fixpoint / with / callPackage / checked / WHNF unit tests: **green**
-- Full `pkgs` import / hello golden: **red** at stdenv cross (above)
+- Lib WHNF / fixpoint / with / callPackage / checked / WHNF unit tests: **green**
+- Full `pkgs` import / hello golden: **red** at modules `config` (above)
 
 ## Ladder
 
 | Rung | Status |
 |------|--------|
-| hello `.drvPath` | **blocked** (stdenv cross) |
+| hello `.drvPath` | **blocked** (modules `config`) |
 | later rungs | **not started** |

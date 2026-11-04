@@ -8,40 +8,15 @@ import (
 	"github.com/connerohnesorge/goonix/parser"
 )
 
-// forceWHNF peels thunks toward WHNF (memo chains first, then forceValue).
-// If still deferred after maxSteps, returns the deferred value (select navigation).
+// forceWHNF peels thunks to WHNF (same as forceValue).
 func (ev *Evaluator) forceWHNF(v *Value, pos parser.Pos) (*Value, error) {
-	const maxSteps = 512
-	seen := make(map[*Thunk]struct{})
-	for step := 0; step < maxSteps && v != nil && v.Kind == VKDeferred && v.Deferred != nil; step++ {
-		t := v.Deferred
-		if t.locked {
-			if t.memo != nil {
-				v = t.memo
-				continue
-			}
-			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
-		}
-		if _, ok := seen[t]; ok {
-			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
-		}
-		seen[t] = struct{}{}
-		if t.memo != nil {
-			v = t.memo
-			continue
-		}
-		var err error
-		v, err = ev.forceValue(v)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return v, nil
+	_ = pos
+	return ev.forceValue(v)
 }
 
-// mustWHNF is forceWHNF for contexts that require a WHNF head (never a bare thunk).
+// mustWHNF requires a WHNF head (never a bare thunk).
 func (ev *Evaluator) mustWHNF(v *Value, pos parser.Pos) (*Value, error) {
-	fv, err := ev.forceWHNF(v, pos)
+	fv, err := ev.forceValue(v)
 	if err != nil {
 		return nil, err
 	}
