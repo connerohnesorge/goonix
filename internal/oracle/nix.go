@@ -85,12 +85,9 @@ func (l Layout) evalRaw(t *testing.T, expr string) (string, error) {
 	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--raw", "-E", expr)
 	cmd := exec.Command("nix-instantiate", args...)
 	cmd.Env = l.HermeticEnv()
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		if len(out) > 0 {
-			return "", fmt.Errorf("nix-instantiate: %w\n%s", err, out)
-		}
-		return "", fmt.Errorf("nix-instantiate: %w", err)
+		return "", fmt.Errorf("nix-instantiate: %w\n%s", err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -103,6 +100,12 @@ func (l Layout) EvalRaw(t *testing.T, expr string) string {
 		t.Fatal(err)
 	}
 	return s
+}
+
+// EvalExprAllowError evaluates expr and returns an error if nix-instantiate fails.
+func (l Layout) EvalExprAllowError(t *testing.T, expr string) (string, error) {
+	t.Helper()
+	return l.evalRaw(t, expr)
 }
 
 // EvalFileRaw evaluates a .nix file to a raw string (e.g. drvPath).

@@ -1126,6 +1126,13 @@ func builtinGetContext(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
+	fv, err := ev.mustWHNF(args[0], pos)
+	if err != nil {
+		return nil, err
+	}
+	if fv.Kind == VKPath {
+		return nil, evalErr(pos, "expected a string but found a path: %s", fv.Path)
+	}
 	sv, err := ev.coerceToString(args[0], CoerceContext{Mode: CoerceString, Pos: pos})
 	if err != nil {
 		return nil, err

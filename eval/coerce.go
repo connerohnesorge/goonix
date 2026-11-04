@@ -214,6 +214,15 @@ func pathStringContext(p, storeDir string) []StringContextElem {
 	return nil
 }
 
+func hasNixStringContext(ctx []StringContextElem) bool {
+	for _, elem := range ctx {
+		if elem.DrvPath != "" || elem.StorePath != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, error) {
 	fa, err := ev.forceValue(a)
 	if err != nil {
@@ -224,28 +233,18 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 		return nil, err
 	}
 	if fa.Kind == VKPath && fb.Kind == VKPath {
-		cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false}
-		as, err := ev.coerceToString(fa, cc)
-		if err != nil {
-			return nil, err
-		}
-		bs, err := ev.coerceToString(fb, cc)
-		if err != nil {
-			return nil, err
-		}
-		return StrWithContext(as.String+bs.String, mergeStringContexts(as.Ctx, bs.Ctx), pos), nil
+		return Path(fa.Path + fb.Path), nil
 	}
 	if fa.Kind == VKPath {
 		cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false}
-		as, err := ev.coerceToString(fa, cc)
-		if err != nil {
-			return nil, err
-		}
 		bs, err := ev.coerceToString(fb, cc)
 		if err != nil {
 			return nil, err
 		}
-		return StrWithContext(as.String+bs.String, mergeStringContexts(as.Ctx, bs.Ctx), pos), nil
+		if hasNixStringContext(bs.Ctx) {
+			return nil, evalErr(pos, "a string that refers to a store path cannot be appended to a path")
+		}
+		return Path(fa.Path + bs.String), nil
 	}
 	if fb.Kind == VKPath {
 		prevInterp := ev.inStringInterpolation
