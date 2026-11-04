@@ -12,7 +12,7 @@ go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
 | #2 | Eval core / laziness | **partial** — lazy `map`/`genList` split; fixpoint overlay path fixed |
-| #13 | Ladder / goldens | **blocked** on `stdenv.shell` during `mkDerivation` |
+| #13 | Ladder / goldens | **blocked** on `stdenv.cc.isGNU` in `all-packages` |
 
 ## Fixpoint / xorg overlay (727)
 
@@ -49,5 +49,5 @@ Debug: `GOONIX_TRACE_FORCE=1` on infinite recursion.
 
 ## Tests
 
-- **Green**: CGO, `./lang/...`, `TestEvalModulesTopLevelConfigNix`, `TestBuiltinLazinessAudit`, `TestExtendsOverlayMapNamesDoesNotForceAllSuperDuringFixpoint`, `TestLetSelfRecursiveBindsOneThunk`, `TestPendingMergeWithSelfAndFixpointIntersectAttrs`
-- **Red**: full `import <nixpkgs>`, hello golden, ladder (`stdenv.shell` in `make-derivation`)
+- **Green**: CGO, `./lang/...`, `TestEvalModulesTopLevelConfigNix`, `TestBuiltinLazinessAudit`, `TestExtendsOverlayMapNamesDoesNotForceAllSuperDuringFixpoint`, `TestLetSelfRecursiveBindsOneThunk`, `TestDerivationExposesEnvAttrsAtTopLevel`, `TestPendingMergeWithSelfAndFixpointIntersectAttrs`
+- **Red**: full `import <nixpkgs>`, hello golden, ladder (`all-packages.nix:6681` / `stdenv.cc.isGNU`)
