@@ -312,14 +312,77 @@ func (ev *Evaluator) evalIndentedString(s *parser.IndentedString, env *Env) (*Va
 		if err != nil {
 			return nil, err
 		}
-		sv, err := ev.coerceToString(v, cc)
+		frag, fragCtx, err := ev.indentedStringFragment(v, cc)
 		if err != nil {
 			return nil, err
 		}
-		b.WriteString(sv.String)
-		ctx = mergeStringContexts(ctx, sv.Ctx)
+		prefix := currentLineIndent(b.String())
+		trimInterpolationLineSuffix(&b)
+		if prefix != "" {
+			frag = indentMultilinePrefix(frag, prefix)
+		}
+		b.WriteString(frag)
+		ctx = mergeStringContexts(ctx, fragCtx)
 	}
-	return StrWithContext(b.String(), ctx, s.P), nil
+	out := unescapeIndentedString(b.String())
+	return strIndentedUnescaped(out, ctx, s.P), nil
+}
+
+func trimInterpolationLineSuffix(b *strings.Builder) {
+	s := b.String()
+	i := strings.LastIndexByte(s, '\n')
+	if i < 0 {
+		return
+	}
+	tail := s[i+1:]
+	if tail == "" || strings.TrimSpace(tail) != "" {
+		return
+	}
+	b.Reset()
+	b.WriteString(s[:i+1])
+}
+
+func indentMultilinePrefix(s, prefix string) string {
+	if prefix == "" || s == "" {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func currentLineIndent(s string) string {
+	i := strings.LastIndexByte(s, '\n')
+	rest := s[i+1:]
+	var b strings.Builder
+	for _, r := range rest {
+		if r == ' ' || r == '\t' {
+			b.WriteRune(r)
+			continue
+		}
+		break
+	}
+	return b.String()
+}
+
+func (ev *Evaluator) indentedStringFragment(v *Value, cc CoerceContext) (string, []StringContextElem, error) {
+	fv, err := ev.mustWHNF(v, cc.Pos)
+	if err != nil {
+		return "", nil, err
+	}
+	if fv.Kind == VKString && fv.IndentedRaw {
+		return stripIndentedString(fv.String), copyStringContext(fv.Ctx), nil
+	}
+	sv, err := ev.coerceToString(v, cc)
+	if err != nil {
+		return "", nil, err
+	}
+	return sv.String, sv.Ctx, nil
 }
 
 func (ev *Evaluator) evalPath(p *parser.Path, env *Env) (*Value, error) {

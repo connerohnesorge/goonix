@@ -62,6 +62,9 @@ type Value struct {
 	// Ctx holds Nix string-context elements (derivation outputs, store path refs).
 	Ctx []StringContextElem
 
+	// IndentedRaw: '' string already unescaped but not yet stripIndented (Nix deferred strip).
+	IndentedRaw bool
+
 	List []*Value
 	Attrs *AttrSet
 
@@ -219,6 +222,10 @@ func Str(s string, pos parser.Pos) *Value {
 
 func StrWithContext(s string, ctx []StringContextElem, pos parser.Pos) *Value {
 	return &Value{Kind: VKString, String: s, Pos: pos, Ctx: ctx}
+}
+
+func strIndentedUnescaped(s string, ctx []StringContextElem, pos parser.Pos) *Value {
+	return &Value{Kind: VKString, String: s, Pos: pos, Ctx: ctx, IndentedRaw: true}
 }
 
 func Path(p string) *Value {

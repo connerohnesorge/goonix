@@ -76,6 +76,10 @@ func (ev *Evaluator) coerceToString(v *Value, cc CoerceContext) (*Value, error) 
 
 	switch fv.Kind {
 	case VKString:
+		if fv.IndentedRaw {
+			s := stripIndentedString(fv.String)
+			return StrWithContext(s, copyStringContext(fv.Ctx), pos), nil
+		}
 		return StrWithContext(fv.String, copyStringContext(fv.Ctx), pos), nil
 	case VKPath:
 		return ev.coercePathToString(fv, pos, cc.CopyPaths)

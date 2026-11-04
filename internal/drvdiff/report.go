@@ -14,14 +14,27 @@ import (
 // Report summarises a closure comparison.
 type Report struct {
 	Deepest     *Result
+	ByteFirst   *ByteCulprit
 	MissingInGo []string // logical drv names present in nix closure but not in go doc
 }
 
 // Analyse compares nix and go closures and returns deepest field mismatch plus missing go nodes.
 func Analyse(nixDoc, goDoc drvshow.Document, nixRootKey, goRootKey string) (Report, error) {
+	return AnalyseWithATerm(nixDoc, goDoc, nixRootKey, goRootKey, nil)
+}
+
+// AnalyseWithATerm also runs leaf-first ATerm byte comparison when src is non-nil.
+func AnalyseWithATerm(nixDoc, goDoc drvshow.Document, nixRootKey, goRootKey string, src ATermBytes) (Report, error) {
 	deepest, err := Compare(nixDoc, goDoc, nixRootKey, goRootKey)
 	if err != nil {
 		return Report{}, err
+	}
+	var byteFirst *ByteCulprit
+	if src != nil {
+		byteFirst, err = CompareBytesBottomUp(nixDoc, goDoc, nixRootKey, goRootKey, src)
+		if err != nil {
+			return Report{}, err
+		}
 	}
 	nixNames := make(map[string]struct{})
 	for k := range nixDoc.Derivations {
@@ -38,7 +51,7 @@ func Analyse(nixDoc, goDoc drvshow.Document, nixRootKey, goRootKey string) (Repo
 		}
 	}
 	sort.Strings(missing)
-	return Report{Deepest: deepest, MissingInGo: missing}, nil
+	return Report{Deepest: deepest, ByteFirst: byteFirst, MissingInGo: missing}, nil
 }
 
 // FormatReport prints human-readable analysis.
@@ -51,5 +64,8 @@ func FormatReport(r Report) string {
 		}
 	}
 	s += FormatResult(r.Deepest)
+	if r.ByteFirst != nil {
+		s += FormatByteCulprit(r.ByteFirst)
+	}
 	return s
 }

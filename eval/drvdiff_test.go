@@ -84,12 +84,25 @@ func TestDrvDiffStdenvNoCCProbeReportsDeepest(t *testing.T) {
 	t.Logf("strict derivations=%d modulo cache=%d", ev.StrictDerivationCount(), ev.ModuloCacheCount())
 	nixKey := drvshow.DrvKey(nixPath)
 	goKey := drvshow.DrvKey(goPath)
-	report, err := drvdiff.Analyse(nixDoc, goDoc, nixKey, goKey)
+	src := drvdiff.StoreATermSource{
+		Go: func(goDrvKey string) []byte {
+			gd, ok := ev.RegisteredDerivation("/nix/store/" + goDrvKey)
+			if !ok {
+				return nil
+			}
+			b, _ := eval.SerializeGoNixDerivation(gd)
+			return b
+		},
+	}
+	report, err := drvdiff.AnalyseWithATerm(nixDoc, goDoc, nixKey, goKey, src)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("closure sizes nix=%d go=%d", len(nixDoc.Derivations), len(goDoc.Derivations))
 	t.Log(drvdiff.FormatReport(report))
+	if report.ByteFirst != nil {
+		t.Fatalf("ATerm byte mismatch:\n%s", drvdiff.FormatByteCulprit(report.ByteFirst))
+	}
 	if report.Deepest != nil {
 		nixEntry := nixDoc.Derivations[report.Deepest.NixKey]
 		goEntry := goDoc.Derivations[report.Deepest.GoonixKey]

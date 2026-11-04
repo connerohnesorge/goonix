@@ -101,11 +101,24 @@ func cmdDrvDiff(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	report, err := drvdiff.Analyse(nixDoc, goDoc, drvshow.DrvKey(nixPath), drvshow.DrvKey(goPath))
+	report, err := drvdiff.AnalyseWithATerm(nixDoc, goDoc, drvshow.DrvKey(nixPath), drvshow.DrvKey(goPath), drvdiff.StoreATermSource{
+		Go: func(goDrvKey string) []byte {
+			gd, ok := ev.RegisteredDerivation("/nix/store/" + goDrvKey)
+			if !ok {
+				return nil
+			}
+			b, _ := eval.SerializeGoNixDerivation(gd)
+			return b
+		},
+	})
 	if err != nil {
 		fatal(err)
 	}
 	fmt.Print(drvdiff.FormatReport(report))
+	if report.ByteFirst != nil {
+		fmt.Print(drvdiff.FormatByteCulprit(report.ByteFirst))
+		return
+	}
 	if report.Deepest != nil {
 		nixEntry := nixDoc.Derivations[report.Deepest.NixKey]
 		goEntry := goDoc.Derivations[report.Deepest.GoonixKey]

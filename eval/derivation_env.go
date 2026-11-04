@@ -41,6 +41,10 @@ func (c *derivationInputCollector) addSrc(path string) {
 	if path == "" || !strings.HasPrefix(path, store.DefaultStoreDir+"/") {
 		return
 	}
+	// Space-separated path lists in env (e.g. defaultNativeBuildInputs) are not inputSrcs.
+	if strings.ContainsAny(path, " \t\n\r") {
+		return
+	}
 	c.srcs[path] = struct{}{}
 }
 
