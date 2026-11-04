@@ -49,4 +49,4 @@ NovaNix parity facts (for docs): **22** matching packages on nixpkgs 24.11 / Nix
 
 ## Status (v0)
 
-End-to-end `pkgs.hello` `.drvPath` parity is in progress (`ladder` test). See open PR for per-phase checklist and issue links.
+Hello `.drvPath` golden is still in progress; see [STATUS.md](STATUS.md) for issues #2–#14 and test evidence. Open PR #15 for the phase checklist.

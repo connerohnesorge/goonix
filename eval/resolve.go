@@ -53,9 +53,24 @@ func (e *Env) lookup(sym data.Symbol) (*AttrBinding, bool) {
 		if b, ok := cur.Vars[sym]; ok {
 			return b, true
 		}
+	}
+	return nil, false
+}
+
+func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool) {
+	for cur := env; cur != nil; cur = cur.Parent {
+		if b, ok := cur.Vars[sym]; ok {
+			return b, true
+		}
 		if cur.With != nil {
-			if v, ok := getAttr(cur.With, sym); ok {
-				return &AttrBinding{Value: v}, true
+			w, err := ev.forceValue(cur.With)
+			if err != nil {
+				return nil, false
+			}
+			if w != nil && w.Kind == VKAttrs {
+				if v, ok := getAttr(w, sym); ok {
+					return &AttrBinding{Value: v}, true
+				}
 			}
 		}
 	}

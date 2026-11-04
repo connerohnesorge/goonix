@@ -109,6 +109,9 @@ type Thunk struct {
 	env  *Env
 	pos  parser.Pos
 
+	// lazy, when set, is invoked instead of expr (used for lazy builtins like mapAttrs).
+	lazy func(*Evaluator) (*Value, error)
+
 	memo   *Value
 	locked bool // blackhole marker while forcing
 }

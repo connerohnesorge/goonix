@@ -29,6 +29,7 @@ func TestHelloDrvPathMatchesGolden(t *testing.T) {
 	helloNix := filepath.Join(root, "testdata", "ladder", "hello.nix")
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
 	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
+	ev.NixPath.PrependEntries("nix=" + filepath.Join(root, "testdata", "nix"))
 	ev.SetCurFile(helloNix)
 
 	expr, err := parser.ParseFile(helloNix)

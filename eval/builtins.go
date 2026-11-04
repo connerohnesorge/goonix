@@ -17,6 +17,7 @@ package eval
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -182,12 +183,21 @@ func (ev *Evaluator) importModule(path string) (*Value, error) {
 	defer func() { ev.curFile = prev }()
 	env := NewEnv()
 	env.bind(ev.Intern.Intern("builtins"), ev.BuiltinAttrSet())
+	ev.bindCorepkgsEnv(env)
 	moduleVal, err := ev.evalExpr(expr, env)
 	if err != nil {
 		return nil, err
 	}
 	ev.importCache[path] = moduleVal
 	return moduleVal, nil
+}
+
+func (ev *Evaluator) bindCorepkgsEnv(env *Env) {
+	for _, name := range []string{"derivation", "baseNameOf", "toString", "dirOf"} {
+		if b, ok := ev.Builtins[name]; ok {
+			env.bind(ev.Intern.Intern(name), &Value{Kind: VKBuiltin, Builtin: b})
+		}
+	}
 }
 
 func resolveImportPath(path string) string {
@@ -686,11 +696,26 @@ func builtinReadDir(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err != nil {
 		return nil, err
 	}
-	elems := make([]*Value, len(entries))
-	for i, e := range entries {
-		elems[i] = Str(e.Name(), pos)
+	out := Attrs(false)
+	for _, e := range entries {
+		typ := readDirEntryType(e)
+		sym := ev.Intern.Intern(e.Name())
+		out.Attrs.Binds[sym] = &AttrBinding{Value: Str(typ, pos)}
 	}
-	return List(elems...), nil
+	return out, nil
+}
+
+func readDirEntryType(e fs.DirEntry) string {
+	switch {
+	case e.IsDir():
+		return "directory"
+	case e.Type()&fs.ModeSymlink != 0:
+		return "symlink"
+	case e.Type().IsRegular():
+		return "regular"
+	default:
+		return "unknown"
+	}
 }
 
 func builtinHashString(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1478,25 +1503,30 @@ func builtinMapAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	out := Attrs(false)
 	for sym, bind := range set.Attrs.Binds {
 		name := ev.Intern.Lookup(sym)
-		var val *Value
-		if bind.Thunk != nil {
-			val, err = ev.forceThunk(bind.Thunk)
-		} else {
-			val = bind.Value
-		}
-		if err != nil {
-			return nil, err
-		}
+		inBind := bind
 		nameVal := Str(name, pos)
-		r, err := ev.applyCall2(f, nameVal, val, pos)
-		if err != nil {
-			return nil, err
+		t := &Thunk{
+			eval: ev,
+			pos:  pos,
+			lazy: func(ev *Evaluator) (*Value, error) {
+				var val *Value
+				var err error
+				if inBind.Thunk != nil {
+					val, err = ev.forceThunk(inBind.Thunk)
+				} else {
+					val = inBind.Value
+				}
+				if err != nil {
+					return nil, err
+				}
+				r, err := ev.applyCall2(f, nameVal, val, pos)
+				if err != nil {
+					return nil, err
+				}
+				return ev.forceValue(r)
+			},
 		}
-		rv, err := ev.forceValue(r)
-		if err != nil {
-			return nil, err
-		}
-		out.Attrs.Binds[sym] = &AttrBinding{Value: rv}
+		out.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
 	}
 	return out, nil
 }
@@ -1657,11 +1687,40 @@ func builtinIsFunction(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 	if err != nil {
 		return nil, err
 	}
+	return Bool(ev.isFunctionValue(fv, pos)), nil
+}
+
+func (ev *Evaluator) isFunctionValue(fv *Value, pos parser.Pos) bool {
 	switch fv.Kind {
 	case VKLambda, VKBuiltin, VKPartialBuiltin:
-		return Bool(true), nil
+		return true
+	case VKAttrs:
+		if !ev.hasFunctor(fv) {
+			return false
+		}
+		sym := ev.Intern.Intern("__functor")
+		b := fv.Attrs.Binds[sym]
+		var functor *Value
+		if b.Thunk != nil {
+			v, err := ev.forceThunk(b.Thunk)
+			if err != nil {
+				return false
+			}
+			functor = v
+		} else {
+			functor = b.Value
+		}
+		fn, err := ev.applyCallable(functor, fv, pos)
+		if err != nil {
+			return false
+		}
+		fn, err = ev.forceValue(fn)
+		if err != nil {
+			return false
+		}
+		return ev.isFunctionValue(fn, pos)
 	default:
-		return Bool(false), nil
+		return false
 	}
 }
 

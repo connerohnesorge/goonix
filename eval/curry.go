@@ -47,9 +47,48 @@ func (ev *Evaluator) applyCallable(f *Value, arg *Value, pos parser.Pos) (*Value
 		return ev.applyBuiltinStep(fv.Builtin, nil, arg, pos)
 	case VKPartialBuiltin:
 		return ev.applyBuiltinStep(fv.Partial.B, fv.Partial.Args, arg, pos)
+	case VKAttrs:
+		if fn, ok, err := ev.functorApply(fv, arg, pos); ok || err != nil {
+			return fn, err
+		}
+		return nil, evalErr(pos, "attempt to call non-function")
 	default:
 		return nil, evalErr(pos, "attempt to call non-function")
 	}
+}
+
+func (ev *Evaluator) hasFunctor(v *Value) bool {
+	if v == nil || v.Kind != VKAttrs || v.Attrs == nil {
+		return false
+	}
+	sym := ev.Intern.Intern("__functor")
+	_, ok := v.Attrs.Binds[sym]
+	return ok
+}
+
+// functorApply implements Nix's __functor calling convention: (f arg) == (f.__functor f) arg.
+func (ev *Evaluator) functorApply(self *Value, arg *Value, pos parser.Pos) (*Value, bool, error) {
+	if !ev.hasFunctor(self) {
+		return nil, false, nil
+	}
+	sym := ev.Intern.Intern("__functor")
+	b := self.Attrs.Binds[sym]
+	var functor *Value
+	if b.Thunk != nil {
+		v, err := ev.forceThunk(b.Thunk)
+		if err != nil {
+			return nil, true, err
+		}
+		functor = v
+	} else {
+		functor = b.Value
+	}
+	fn, err := ev.applyCallable(functor, self, pos)
+	if err != nil {
+		return nil, true, err
+	}
+	out, err := ev.applyCallable(fn, arg, pos)
+	return out, true, err
 }
 
 func (ev *Evaluator) applyBuiltinStep(b *Builtin, bound []*Value, arg *Value, pos parser.Pos) (*Value, error) {

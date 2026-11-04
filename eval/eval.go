@@ -217,15 +217,8 @@ func (ev *Evaluator) evalExpr(expr parser.Expr, env *Env) (*Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		fattrs, err := ev.forceValue(attrs)
-		if err != nil {
-			return nil, err
-		}
-		if fattrs.Kind != VKAttrs {
-			return nil, evalErr(e.P, "with expects an attribute set")
-		}
 		child := env.extend()
-		child.With = fattrs
+		child.With = attrs
 		return ev.evalExpr(e.Body, child)
 	case *parser.Let:
 		return ev.evalLet(e, env)
@@ -262,7 +255,7 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 		return Null(), nil
 	}
 	sym := ev.Intern.Intern(v.Name)
-	if bind, ok := env.lookup(sym); ok {
+	if bind, ok := ev.lookupEnv(env, sym); ok {
 		if bind.Thunk != nil {
 		 if bind.Thunk.locked && bind.Thunk.memo != nil {
 				return bind.Thunk.memo, nil
@@ -446,7 +439,7 @@ func (ev *Evaluator) evalInherit(inh parser.Inherit, env *Env, av *Value) error 
 				return evalErr(inh.Pos, "attribute %q missing", name)
 			}
 		} else {
-			if bind, ok := env.lookup(sym); ok {
+			if bind, ok := ev.lookupEnv(env, sym); ok {
 				if bind.Thunk != nil {
 					var err error
 					val, err = ev.forceThunk(bind.Thunk)
@@ -642,11 +635,11 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 		if fb.Kind == VKAttrs {
 			b, ok := fb.Attrs.Binds[sym]
 			if !ok {
-				if fb.Attrs.Blackhole {
-					return blackholeAttrs(), nil
-				}
 				if hasDefault {
 					return ev.evalExpr(defaultExpr, env)
+				}
+				if fb.Attrs.Blackhole {
+					return blackholeAttrs(), nil
 				}
 				return nil, evalErr(s.P, "attribute %q missing", name)
 			}
@@ -659,6 +652,9 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 				return nil, err
 			}
 			continue
+		}
+		if hasDefault {
+			return ev.evalExpr(defaultExpr, env)
 		}
 		return nil, evalErr(s.P, "value is not an attribute set")
 	}
@@ -1061,7 +1057,13 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		return blackholeAttrs(), nil
 	}
 	t.locked = true
-	v, err := ev.evalWithSelfMerge(t.expr, t.env, t)
+	var v *Value
+	var err error
+	if t.lazy != nil {
+		v, err = t.lazy(ev)
+	} else {
+		v, err = ev.evalWithSelfMerge(t.expr, t.env, t)
+	}
 	if err != nil {
 		t.locked = false
 		return nil, err

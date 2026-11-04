@@ -90,7 +90,23 @@ func (np *NixPath) Entries() []string {
 
 // FindFile resolves a logical name to an absolute filesystem path.
 func (np *NixPath) FindFile(name string) (string, error) {
+	sub := name
+	wantPrefix := ""
+	if idx := strings.Index(name, "/"); idx >= 0 {
+		wantPrefix = name[:idx]
+		sub = name[idx+1:]
+	}
 	for _, e := range np.entries {
+		if wantPrefix != "" && e.prefix == wantPrefix {
+			c := filepath.Join(e.path, sub)
+			if st, err := os.Stat(c); err == nil && !st.IsDir() {
+				return c, nil
+			}
+			c = c + ".nix"
+			if st, err := os.Stat(c); err == nil && !st.IsDir() {
+				return c, nil
+			}
+		}
 		candidates := []string{
 			filepath.Join(e.path, name),
 			filepath.Join(e.path, name+".nix"),
