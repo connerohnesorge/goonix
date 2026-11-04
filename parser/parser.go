@@ -677,14 +677,48 @@ func (p *Parser) parseQuotedString() (Expr, error) {
 
 func (p *Parser) parseIndentedString() (Expr, error) {
 	open := p.advance()
-	parts, err := p.parseStringParts(tokenIStringClose)
+	parts, err := p.parseIndStringParts()
 	if err != nil {
 		return nil, err
 	}
 	if _, err := p.expect(tokenIStringClose); err != nil {
 		return nil, err
 	}
-	return &IndentedString{P: open.Pos, Parts: parts}, nil
+	return stripIndentation(open.Pos, parts), nil
+}
+
+func (p *Parser) parseIndStringParts() ([]indStringPart, error) {
+	var parts []indStringPart
+	for p.cur().Type != tokenIStringClose && p.cur().Type != tokenEOF {
+		switch p.cur().Type {
+		case tokenISText:
+			t := p.advance()
+			raw := p.text(t)
+			text, indent := decodeIndStringText(raw, true)
+			parts = append(parts, indStringPart{pos: t.Pos, text: text, hasIndent: indent})
+		case tokenISPlain:
+			t := p.advance()
+			raw := p.lr.slice(t.Start, t.End)
+			text := raw
+			if len(raw) >= 2 && raw[0] == '\'' && raw[1] == '\'' {
+				text, _ = decodeIndStringEscape([]byte(raw), 0)
+			}
+			parts = append(parts, indStringPart{pos: t.Pos, text: text, hasIndent: false})
+		case tokenInterpOpen:
+			p.advance()
+			expr, err := p.parseExpression()
+			if err != nil {
+				return nil, err
+			}
+			if _, err := p.expect(tokenInterpClose); err != nil {
+				return nil, err
+			}
+			parts = append(parts, indStringPart{pos: expr.Pos(), interp: expr})
+		default:
+			return nil, p.errorf("unexpected token %s in indented string", p.cur().Type)
+		}
+	}
+	return parts, nil
 }
 
 func (p *Parser) parseStringParts(close TokenType) ([]StringPart, error) {
@@ -693,7 +727,7 @@ func (p *Parser) parseStringParts(close TokenType) ([]StringPart, error) {
 		switch p.cur().Type {
 		case tokenText:
 			t := p.advance()
-			parts = append(parts, StringPart{Pos: t.Pos, Text: p.text(t)})
+			parts = append(parts, StringPart{Pos: t.Pos, Text: decodeRegularStringText(p.text(t))})
 		case tokenInterpOpen:
 			p.advance()
 			expr, err := p.parseExpression()

@@ -40,6 +40,8 @@ const (
 	tokenURI
 	tokenID
 	tokenText
+	tokenISText   // indented string text (contributes to min-indent)
+	tokenISPlain  // indented string escape chunk (no indent)
 	tokenEllipsis
 
 	// String / indented string delimiters
@@ -125,6 +127,10 @@ func (t TokenType) String() string {
 		return "id"
 	case tokenText:
 		return "text"
+	case tokenISText:
+		return "istring-text"
+	case tokenISPlain:
+		return "istring-plain"
 	case tokenEllipsis:
 		return "..."
 	case tokenDQuote:

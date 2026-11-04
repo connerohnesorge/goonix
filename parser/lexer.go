@@ -197,6 +197,14 @@ func lex(src []byte, path string) (*lexResult, error) {
 	}
 
 	lexIndentedString = func() error {
+		// Nix: ''(\ *\n)? — optional spaces then newline only (not spaces alone).
+		j := i
+		for j < n && src[j] == ' ' {
+			j++
+		}
+		if j < n && src[j] == '\n' {
+			i = j + 1
+		}
 		isIndentedClose := func(at int) bool {
 			if at+1 >= n || src[at] != '\'' || src[at+1] != '\'' {
 				return false
@@ -211,24 +219,7 @@ func lex(src []byte, path string) (*lexResult, error) {
 				return true
 			}
 		}
-		skipIndentedEscape := func(at int) int {
-			// Caller verified src[at:at+2] == "''".
-			if at+2 < n && src[at+2] == '\'' {
-				return at + 3 // '''
-			}
-			if at+2 < n && src[at+2] == '$' {
-				if at+3 < n && src[at+3] == '{' {
-					return at + 4 // ''${
-				}
-				return at + 3 // ''$
-			}
-			if at+2 < n && src[at+2] == '\\' {
-				return at + 3 // ''\
-			}
-			return at + 2
-		}
 		for i < n {
-			start := i
 			if isIndentedClose(i) {
 				if err := pop(tokenIStringClose, i, i+2); err != nil {
 					return err
@@ -237,11 +228,11 @@ func lex(src []byte, path string) (*lexResult, error) {
 				return nil
 			}
 			if i+1 < n && src[i] == '\'' && src[i+1] == '\'' {
-				end := skipIndentedEscape(i)
-				if end > start {
-					emit(tokenText, start, end)
+				_, next := decodeIndStringEscape(src, i)
+				if next > i {
+					emit(tokenISPlain, i, next)
 				}
-				i = end
+				i = next
 				continue
 			}
 			if i+1 < n && src[i] == '$' && src[i+1] == '{' {
@@ -252,25 +243,28 @@ func lex(src []byte, path string) (*lexResult, error) {
 				}
 				continue
 			}
+			start := i
 			for i < n {
+				if isIndentedClose(i) {
+					break
+				}
 				if i+1 < n && src[i] == '\'' && src[i+1] == '\'' {
 					break
 				}
 				if i+1 < n && src[i] == '$' && src[i+1] == '{' {
 					break
 				}
-				if src[i] == '\'' && i+1 < n && src[i+1] != '\'' {
-					i++
-					continue
-				}
 				if src[i] == '$' {
-					i++
-					continue
+					break
 				}
 				i++
 			}
 			if i > start {
-				emit(tokenText, start, i)
+				emit(tokenISText, start, i)
+			} else if i < n {
+				// lone $ or ' (Nix IND_STR without indentation flag)
+				emit(tokenISPlain, i, i+1)
+				i++
 			}
 		}
 		return r.errorAt(n, "unterminated indented string")

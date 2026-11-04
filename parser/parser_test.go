@@ -113,7 +113,7 @@ func TestParseIndentedString(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := Print(expr)
-	if got != "''hello''" {
+	if got != `"hello"` {
 		t.Fatalf("Print = %q", got)
 	}
 }

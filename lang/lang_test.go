@@ -23,7 +23,7 @@ func TestParseOkayLangCases(t *testing.T) {
 		}
 		switch e.Name() {
 		// Not yet supported by goonix parser (tracked for Phase 1 follow-up).
-		case "parse-okay-crlf.nix", "parse-okay-ind-string.nix", "parse-okay-subversion.nix":
+		case "parse-okay-crlf.nix", "parse-okay-subversion.nix":
 			continue
 		}
 		n++

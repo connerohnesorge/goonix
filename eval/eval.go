@@ -168,8 +168,6 @@ func (ev *Evaluator) evalExpr(expr parser.Expr, env *Env) (*Value, error) {
 		return ev.evalVar(e, env)
 	case *parser.String:
 		return ev.evalString(e, env)
-	case *parser.IndentedString:
-		return ev.evalIndentedString(e, env)
 	case *parser.Path:
 		return ev.evalPath(e, env)
 	case *parser.URI:
@@ -297,106 +295,6 @@ func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 		ctx = mergeStringContexts(ctx, sv.Ctx)
 	}
 	return StrWithContext(b.String(), ctx, s.P), nil
-}
-
-func (ev *Evaluator) evalIndentedString(s *parser.IndentedString, env *Env) (*Value, error) {
-	var b strings.Builder
-	var ctx []StringContextElem
-	cc := CoerceContext{Mode: CoerceString, Pos: s.P, CopyPaths: true}
-	for _, part := range s.Parts {
-		if part.Interp == nil {
-			b.WriteString(part.Text)
-			continue
-		}
-		v, err := ev.evalExpr(part.Interp, env)
-		if err != nil {
-			return nil, err
-		}
-		frag, fragCtx, err := ev.indentedStringFragment(v, cc)
-		if err != nil {
-			return nil, err
-		}
-		prefix := currentLineIndent(b.String())
-		trimInterpolationLineSuffix(&b)
-		if prefix != "" && interpolationAtLineStart(b.String()) {
-			frag = indentMultilinePrefix(frag, prefix)
-		}
-		b.WriteString(frag)
-		ctx = mergeStringContexts(ctx, fragCtx)
-	}
-	out := unescapeIndentedString(b.String())
-	return strIndentedUnescaped(out, ctx, s.P), nil
-}
-
-func trimInterpolationLineSuffix(b *strings.Builder) {
-	s := b.String()
-	i := strings.LastIndexByte(s, '\n')
-	if i < 0 {
-		return
-	}
-	tail := s[i+1:]
-	if tail == "" || strings.TrimSpace(tail) != "" {
-		return
-	}
-	b.Reset()
-	b.WriteString(s[:i+1])
-}
-
-func indentMultilinePrefix(s, prefix string) string {
-	if prefix == "" || s == "" {
-		return s
-	}
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		if line == "" {
-			continue
-		}
-		lines[i] = prefix + line
-	}
-	return strings.Join(lines, "\n")
-}
-
-func currentLineIndent(s string) string {
-	i := strings.LastIndexByte(s, '\n')
-	rest := s[i+1:]
-	var b strings.Builder
-	for _, r := range rest {
-		if r == ' ' || r == '\t' {
-			b.WriteRune(r)
-			continue
-		}
-		break
-	}
-	return b.String()
-}
-
-// interpolationAtLineStart reports whether the next interpolated value begins the
-// line (only whitespace may appear after the last newline). Nix does not pad
-// interpolated text when non-whitespace already appears on the line.
-func interpolationAtLineStart(buf string) bool {
-	i := strings.LastIndexByte(buf, '\n')
-	rest := buf[i+1:]
-	for _, r := range rest {
-		if r != ' ' && r != '\t' {
-			return false
-		}
-	}
-	return true
-}
-
-func (ev *Evaluator) indentedStringFragment(v *Value, cc CoerceContext) (string, []StringContextElem, error) {
-	fv, err := ev.mustWHNF(v, cc.Pos)
-	if err != nil {
-		return "", nil, err
-	}
-	if fv.Kind == VKString && fv.IndentedRaw {
-		return stripIndentedString(fv.String), copyStringContext(fv.Ctx), nil
-	}
-	sv, err := ev.coerceToString(v, cc)
-	if err != nil {
-		return "", nil, err
-	}
-	return sv.String, sv.Ctx, nil
 }
 
 func (ev *Evaluator) evalPath(p *parser.Path, env *Env) (*Value, error) {
@@ -1183,41 +1081,11 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 		}
 		return Int(sum), nil
 	}
-	hasIndented := false
-	for _, fv := range vals {
-		if fv.Kind == VKString && fv.IndentedRaw {
-			hasIndented = true
-			break
-		}
-	}
-	cc := CoerceContext{Mode: CoerceString, Pos: c.P}
-	if hasIndented {
-		var rawParts []string
-		var ctx []StringContextElem
-		for _, fv := range vals {
-			if fv.Kind == VKString && fv.IndentedRaw {
-				rawParts = append(rawParts, fv.String)
-				ctx = mergeStringContexts(ctx, fv.Ctx)
-				continue
-			}
-			sv, err := ev.coerceToString(fv, cc)
-			if err != nil {
-				return nil, err
-			}
-			if len(rawParts) > 0 {
-				combined := joinIndentedRawBodies(rawParts)
-				combined += sv.String
-				return strIndentedUnescaped(combined, mergeStringContexts(ctx, sv.Ctx), c.P), nil
-			}
-			// fall through to plain concat below for prefix plain strings
-		}
-		if len(rawParts) > 0 {
-			return strIndentedUnescaped(joinIndentedRawBodies(rawParts), ctx, c.P), nil
-		}
-	}
 	var b strings.Builder
 	var ctx []StringContextElem
-	for _, fv := range vals {
+	cc := CoerceContext{Mode: CoerceString, Pos: c.P}
+	for i, fv := range vals {
+		cc.Pos = c.Parts[i].Pos()
 		sv, err := ev.coerceToString(fv, cc)
 		if err != nil {
 			return nil, err

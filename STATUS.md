@@ -25,7 +25,7 @@ go test ./ladder/... -count=1
 ## Filesystem path → store (fixed)
 
 - **`StorePathForFilesystemPath`:** Nix `hashStringsModulo("source", "sha256", base16NarHash, storeDir, name)` + `CompressHash` (was wrongly using raw NAR digest as path hash).
-- **String interpolation:** `evalString` / `evalIndentedString` use `CopyPaths` with `Stat` guard before copying.
+- **String interpolation:** `evalString` uses `CopyPaths` with `Stat` guard before copying.
 - **Oracle:** `store/path_store_oracle_test.go` vs `builtins.path` (**green**).
 
 ## drv-diff (extended)
@@ -36,10 +36,9 @@ go test ./ladder/... -count=1
 
 ## Fixes (bootstrap chain)
 
-- **`''` strings:** deferred stripIndent; unescape; interpolation padding only when `${` starts the line; `evalConcatStrings` merges IndentedRaw before one strip; `joinIndentedRawBodies` for `+`/`++` concat.
+- **`''` strings:** Nix 2.24.9 parse-time `stripIndentation` (per literal, no eval-time indent memory); lexer `''(\ *\n)?`, `'''` → `''`, `''` escapes and lone `$`/`'` in text; `"..."` unescape at parse (`decodeRegularStringText`).
 - **inputSrcs / inputDrvs:** only from string **context** at coercion time (`mergeValueContext` on `Ctx` only); no scanning env text or path fallback.
-- **Derivation env newlines:** `coerceDerivationEnvString` trailing newline rules for multi-line `.drv` env (e.g. preHook, buildCommand).
-- **Oracles:** `eval/derivation_env_inputsrc_test.go`, `eval/indented_string_oracle_test.go`, `eval/glibc_bootstrap_files_aterm_test.go`, `eval/bootstrap_stdenv_linux_aterm_test.go`.
+- **Oracles:** `eval/derivation_env_inputsrc_test.go`, `eval/ind_string_lang_test.go`, `testdata/lang/eval-okay-ind-string.nix`, `parse-okay-ind-string.nix`, `eval/glibc_bootstrap_files_aterm_test.go`, `eval/bootstrap_stdenv_linux_aterm_test.go`.
 
 ## Ladder goldens
 

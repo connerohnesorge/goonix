@@ -111,17 +111,7 @@ func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *de
 		return "", err
 	}
 	col.mergeValueContext(sv)
-	s := sv.String
-	if strings.Contains(s, "\n") {
-		if !strings.HasSuffix(s, "\n") {
-			s += "\n"
-		}
-		// Multi-line env values from '' that end with a whitespace-only line keep an extra newline in .drv env.
-		if strings.Count(s, "\n") >= 4 && !strings.HasSuffix(s, "\n\n") {
-			s += "\n"
-		}
-	}
-	return s, nil
+	return sv.String, nil
 }
 
 func parseOutputNamesFromEnv(s string) (map[string]struct{}, error) {

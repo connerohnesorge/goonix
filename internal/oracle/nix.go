@@ -118,6 +118,19 @@ func (l Layout) EvalFileRaw(t *testing.T, nixFile string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// EvalFileRawBytes is like EvalFileRaw but preserves trailing newlines from --raw output.
+func (l Layout) EvalFileRawBytes(t *testing.T, nixFile string) string {
+	t.Helper()
+	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--raw", nixFile)
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("nix-instantiate %s: %v\n%s", nixFile, err, out)
+	}
+	return string(out)
+}
+
 // Instantiate materialises a derivation and returns its .drv store path (fresh instantiate).
 func (l Layout) Instantiate(t *testing.T, nixFile string) string {
 	t.Helper()
@@ -154,4 +167,18 @@ func (l Layout) EvalStdinRaw(t *testing.T, src string) string {
 		t.Fatalf("nix-instantiate: %v\n%s", err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// EvalStdinRawBytes is like EvalStdinRaw but preserves trailing newlines from --raw output.
+func (l Layout) EvalStdinRawBytes(t *testing.T, src string) string {
+	t.Helper()
+	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--raw", "-")
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
+	cmd.Stdin = strings.NewReader(src)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("nix-instantiate: %v\n%s", err, out)
+	}
+	return string(out)
 }
