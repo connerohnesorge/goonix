@@ -12,8 +12,9 @@ go test ./eval -run 'TestImportNixpkgsLibVersion|TestNullDynamic|TestXgccNoEmpty
 - **Null dynamic attr names** (`${if … then "CC" else null} = …`) are dropped like Nix (fixes xgcc **`env[""] = "gcc -m64"`** from gcc’s solaris `CC` stub).
 - **`derivationStrict` env context invariant** in eval: string-context drv outputs must appear in env text and in `inputDrvs`; structured attrs checked via `__json`.
 - **`derivationStrict` memo** by `drvAttrs` attr-set identity; **`WithVerifyStrictMemo`** recomputes on cache hit in tests.
-- **`builtins.placeholder`** string context + env materialization (`/hash` refs like Nix); oracle **`TestPlaceholderMaterializesInDerivationStrictEnv`**.
-- **Topological byte-first diff** (`drvdiff.CompareBytesBottomUpNameStdenv`) pairs by **`name` + `env.stdenv`**; **`TestBootstrapStage2XgccTopologicalByteFirstNameStdenv`**.
+- **`builtins.placeholder`** returns `"/" + nixBase32(sha256("nix-output:" + name))` at eval time (no string context, no strict rewrite); oracles in `placeholder_oracle_test.go`.
+- **Derivation env** store paths in space-separated lists get `/nix/store/` when coerced as bare fingerprints.
+- **Stage1 stdenv oracle** (`stage1_stdenv_oracle.nix`): `cc == null`, `cc ? outPath`, `hasCC`, `dnbiLen`, `dnbiNames`, `preHook` metrics.
 - **`outPath`-only** attrset coercion (no `out` fallback).
 
 ## Bootstrap ATerm ladder
