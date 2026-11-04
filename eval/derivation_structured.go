@@ -17,11 +17,15 @@ func (ev *Evaluator) structuredAttrsEnabled(attrs *Value) (bool, error) {
 	if b == nil {
 		return false, nil
 	}
-	tv, err := ev.attrsBindingForce(b)
-	if err != nil {
-		return false, err
-	}
-	return ev.forceBool(ev, tv, nil)
+		tv, err := ev.attrsBindingForce(b)
+		if err != nil {
+			return false, err
+		}
+		tv, err = ev.forceValue(tv)
+		if err != nil {
+			return false, err
+		}
+		return ev.forceBool(ev, tv, nil)
 }
 
 func (ev *Evaluator) fillStructuredDerivationFromAttrs(attrs *Value, drv *DerivationValue, pos parser.Pos, ignoreNulls bool) error {
@@ -44,6 +48,10 @@ func (ev *Evaluator) fillStructuredDerivationFromAttrs(attrs *Value, drv *Deriva
 		}
 		b := attrs.Attrs.Binds[sym]
 		val, err := ev.attrsBindingForce(b)
+		if err != nil {
+			return err
+		}
+		val, err = ev.forceValue(val)
 		if err != nil {
 			return err
 		}

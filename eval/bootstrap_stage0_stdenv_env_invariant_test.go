@@ -175,43 +175,20 @@ func bootstrapStageStdenvNixKey(t *testing.T, stage string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return pickBootstrapStdenvKey(t, nixDoc, stage)
+	rootKey := drvshow.DrvKey(nixPath)
+	return pickBootstrapStdenvKey(t, nixDoc, rootKey, stage)
 }
 
-func pickBootstrapStdenvKey(t *testing.T, doc drvshow.Document, stage string) string {
+func pickBootstrapStdenvKey(t *testing.T, doc drvshow.Document, rootKey, stage string) string {
 	t.Helper()
 	suffix := "bootstrap-" + stage + "-stdenv-linux.drv"
-	var matches []string
-	for k := range doc.Derivations {
-		if strings.HasSuffix(k, suffix) {
-			matches = append(matches, k)
-		}
-	}
-	sort.Strings(matches)
-	if len(matches) == 0 {
+	k := drvshow.PickKeyByBFS(doc, rootKey, func(k string, e drvshow.Entry) bool {
+		return strings.HasSuffix(k, suffix)
+	})
+	if k == "" {
 		t.Fatalf("closure missing %s", stage)
 	}
-	if len(matches) == 1 {
-		return matches[0]
-	}
-	// Prefer the stdenv whose defaultNativeBuildInputs env string includes the stage gcc-wrapper (longest is a stable tie-break).
-	best := matches[0]
-	bestScore := stdenvDNBIScore(doc.Derivations[best])
-	for _, k := range matches[1:] {
-		if s := stdenvDNBIScore(doc.Derivations[k]); s > bestScore {
-			best = k
-			bestScore = s
-		}
-	}
-	return best
-}
-
-func stdenvDNBIScore(e drvshow.Entry) int {
-	s := e.Env["defaultNativeBuildInputs"]
-	if strings.Contains(s, "gcc-wrapper") {
-		return 1000000 + len(s)
-	}
-	return len(s)
+	return k
 }
 
 func bootstrapStageStdenvGoShared(t *testing.T, stage string) (goKey string, gd *gonixdrv.Derivation) {

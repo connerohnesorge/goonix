@@ -224,14 +224,28 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 		return nil, err
 	}
 	if fa.Kind == VKPath && fb.Kind == VKPath {
-		return Path(fa.Path + fb.Path), nil
-	}
-	if fa.Kind == VKPath {
-		bs, err := ev.coerceToString(fb, CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false})
+		cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false}
+		as, err := ev.coerceToString(fa, cc)
 		if err != nil {
 			return nil, err
 		}
-		return Path(fa.Path + bs.String), nil
+		bs, err := ev.coerceToString(fb, cc)
+		if err != nil {
+			return nil, err
+		}
+		return StrWithContext(as.String+bs.String, mergeStringContexts(as.Ctx, bs.Ctx), pos), nil
+	}
+	if fa.Kind == VKPath {
+		cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false}
+		as, err := ev.coerceToString(fa, cc)
+		if err != nil {
+			return nil, err
+		}
+		bs, err := ev.coerceToString(fb, cc)
+		if err != nil {
+			return nil, err
+		}
+		return StrWithContext(as.String+bs.String, mergeStringContexts(as.Ctx, bs.Ctx), pos), nil
 	}
 	if fb.Kind == VKPath {
 		prevInterp := ev.inStringInterpolation

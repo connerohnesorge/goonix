@@ -142,6 +142,10 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 		if err != nil {
 			return err
 		}
+		tv, err = ev.forceValue(tv)
+		if err != nil {
+			return err
+		}
 		ignoreNulls, err = ev.forceBool(ev, tv, nil)
 		if err != nil {
 			return err
@@ -174,6 +178,10 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 		}
 		b := attrs.Attrs.Binds[sym]
 		val, err := ev.attrsBindingForce(b)
+		if err != nil {
+			return err
+		}
+		val, err = ev.forceValue(val)
 		if err != nil {
 			return err
 		}

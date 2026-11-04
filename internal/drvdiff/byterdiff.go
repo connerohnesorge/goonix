@@ -44,10 +44,19 @@ func CompareBytesBottomUp(nixDoc, goDoc drvshow.Document, nixRootKey, goRootKey 
 
 // CompareBytesBottomUpNameStdenv pairs nodes by drvshow.NameStdenvPairID (name + env.stdenv stage).
 func CompareBytesBottomUpNameStdenv(nixDoc, goDoc drvshow.Document, nixRootKey, goRootKey string, src ATermBytes) (*ByteCulprit, error) {
-	pairsAll := pairClosureByNameStdenv(nixDoc, goDoc)
-	return compareBytesBottomUpFromRoot(nixDoc, goDoc, nixRootKey, pairsAll, nameStdenvPairID(nixDoc, nixRootKey), src, func(key string) string {
+	pairsAll := pairClosureByNameStdenvFromRoot(nixDoc, goDoc, nixRootKey, goRootKey)
+	nixKeyToID := make(map[string]string, len(pairsAll))
+	for id, p := range pairsAll {
+		nixKeyToID[p.nixKey] = id
+	}
+	idOfKey := func(key string) string {
+		if id, ok := nixKeyToID[key]; ok {
+			return id
+		}
 		return nameStdenvPairID(nixDoc, key)
-	})
+	}
+	rootID := idOfKey(nixRootKey)
+	return compareBytesBottomUpFromRoot(nixDoc, goDoc, nixRootKey, pairsAll, rootID, src, idOfKey)
 }
 
 func logicalPairID(doc drvshow.Document, key string) string {
@@ -202,16 +211,55 @@ func pairClosureByLogical(nixDoc, goDoc drvshow.Document) map[string]keyPair {
 	return out
 }
 
+func pairClosureByNameStdenvFromRoot(nixDoc, goDoc drvshow.Document, nixRoot, goRoot string) map[string]keyPair {
+	nixLists := groupKeysByPairID(nixDoc, nixRoot)
+	goLists := groupKeysByPairID(goDoc, goRoot)
+	out := make(map[string]keyPair)
+	for id, nKeys := range nixLists {
+		gKeys := goLists[id]
+		if len(gKeys) == 0 {
+			continue
+		}
+		n := len(nKeys)
+		if len(gKeys) < n {
+			n = len(gKeys)
+		}
+		if n == 1 {
+			out[id] = keyPair{nixKey: nKeys[0], goKey: gKeys[0]}
+			continue
+		}
+		for i := 0; i < n; i++ {
+			suffix := string(rune('a' + i))
+			if i >= 26 {
+				suffix = fmt.Sprintf("%d", i)
+			}
+			out[id+"\x1f"+suffix] = keyPair{nixKey: nKeys[i], goKey: gKeys[i]}
+		}
+	}
+	return out
+}
+
+func groupKeysByPairID(doc drvshow.Document, root string) map[string][]string {
+	lists := make(map[string][]string)
+	for _, k := range drvshow.ClosureBFSOrder(doc, root) {
+		e, ok := doc.Derivations[k]
+		if !ok {
+			continue
+		}
+		id := drvshow.NameStdenvPairID(e)
+		lists[id] = append(lists[id], k)
+	}
+	return lists
+}
+
 func pairClosureByNameStdenv(nixDoc, goDoc drvshow.Document) map[string]keyPair {
+	// Legacy pairing without roots: first key per pair ID in arbitrary map order.
 	nixBy := make(map[string]string)
 	for k, e := range nixDoc.Derivations {
 		id := drvshow.NameStdenvPairID(e)
-		if prev, ok := nixBy[id]; ok {
-			if stdenvDNBIScore(nixDoc.Derivations[prev]) >= stdenvDNBIScore(e) {
-				continue
-			}
+		if _, ok := nixBy[id]; !ok {
+			nixBy[id] = k
 		}
-		nixBy[id] = k
 	}
 	out := make(map[string]keyPair)
 	for k, e := range goDoc.Derivations {
@@ -220,22 +268,9 @@ func pairClosureByNameStdenv(nixDoc, goDoc drvshow.Document) map[string]keyPair 
 		if !ok {
 			continue
 		}
-		if prev, ok := out[id]; ok {
-			if stdenvDNBIScore(goDoc.Derivations[prev.goKey]) >= stdenvDNBIScore(e) {
-				continue
-			}
-		}
 		out[id] = keyPair{nixKey: nk, goKey: k}
 	}
 	return out
-}
-
-func stdenvDNBIScore(e drvshow.Entry) int {
-	s := e.Env["defaultNativeBuildInputs"]
-	if strings.Contains(s, "gcc-wrapper") {
-		return 1000000 + len(s)
-	}
-	return len(s)
 }
 
 // topoLeavesFirstByDepth sorts by max input-chain depth (leaves first), stable by name.

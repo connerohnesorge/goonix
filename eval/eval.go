@@ -1356,10 +1356,15 @@ func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {
 		if fb.Kind != VKAttrs {
 			return false, nil
 		}
-		if dpA, okA := ev.derivationAttrSetDrvPath(fa); okA {
-			if dpB, okB := ev.derivationAttrSetDrvPath(fb); okB && dpA == dpB {
-				return true, nil
-			}
+		_, okA := ev.derivationAttrSetDrvPath(fa)
+		_, okB := ev.derivationAttrSetDrvPath(fb)
+		if okA && okB {
+			dpA, _ := ev.derivationAttrSetDrvPath(fa)
+			dpB, _ := ev.derivationAttrSetDrvPath(fb)
+			return dpA == dpB, nil
+		}
+		if okA != okB {
+			return false, nil
 		}
 		if len(fa.Attrs.Binds) != len(fb.Attrs.Binds) {
 			return false, nil

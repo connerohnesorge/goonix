@@ -4,35 +4,34 @@ Oracle: **Nix 2.24.9**, nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. 
 
 ```bash
 bash scripts/check-cgo.sh
-go test ./eval -run 'TestImportNixpkgsLibVersion|TestNullDynamic|TestXgccNoEmpty|TestBootstrapTools|TestBootstrapStage2GCCWrapperEnvContext|TestStdenvDrvPath' -count=1
+go test ./eval -run 'TestImportNixpkgsLibVersion|TestNullDynamic|TestBootstrapXgcc|TestBootstrapTools|TestBootstrapStage2GCCWrapper|TestStdenvDrvPath' -count=1
 ```
 
 ## Fixes (recent)
 
-- **Null dynamic attr names** (`${if … then "CC" else null} = …`) are dropped like Nix (fixes xgcc **`env[""] = "gcc -m64"`** from gcc’s solaris `CC` stub).
-- **`derivationStrict` env context invariant** in eval: string-context drv outputs must appear in env text and in `inputDrvs`; structured attrs checked via `__json`.
-- **`derivationStrict` memo** by `drvAttrs` attr-set identity; **`WithVerifyStrictMemo`** recomputes on cache hit in tests.
-- **`builtins.placeholder`** returns `"/" + nixBase32(sha256("nix-output:" + name))` at eval time (no string context, no strict rewrite); oracles in `placeholder_oracle_test.go`.
-- **Reverted derivation env “fingerprint normalization”** (no `strings.Fields` / prepending `/nix/store/`); env bytes must match Nix coercion exactly (stage0/stage1 invariant tests).
-- **`coerceToString` on lists** keeps empty elements (fixes e.g. texinfo `buildInputs` trailing space vs Nix).
-- **Topo pairing** for duplicate `bootstrap-stageN-stdenv-linux` nodes prefers the instance whose `defaultNativeBuildInputs` includes the stage gcc-wrapper.
-- **Stage0/1 stdenv env invariants** vs Nix `.drv` bytes; stage1 head-hook `outPath` oracle.
-- **`outPath`-only** attrset coercion (no `out` fallback).
+- **`builtins.toString`** keeps string context (gcc `env = mapAttrs (_: v: toString v)` for `CPATH` / `LIBRARY_PATH`).
+- **`builtins.concatStringsSep`** merges per-element string context (Nix `__concatStringsSep`).
+- **`derivationStrict` + `__ignoreNulls`**: force attr values before dropping nulls (no empty `libcCross` / `targetConfig` env keys).
+- **xgcc drvAttrs oracles** (`xgcc_drvattrs_oracle.nix`, strict env / inputDrvs / `getContext` on `LIBRARY_PATH`).
+- **`equalValues`**: `drvPath` shortcut only when **both** sides are derivations (`type == "derivation"`).
+- **Duplicate stdenv pairing** in topo byte diff: **BFS order from closure root**, not longest `defaultNativeBuildInputs`.
+- **Path/string `+`**: string result with merged context (no silent `Path` concat drop).
+- **Null dynamic attr names**, list empty elements, stage0/1 env invariants, placeholder, strict memo (unchanged from prior notes).
 
 ## Bootstrap ATerm ladder
 
 | Node | Status |
 |------|--------|
-| bootstrap-tools, stage0/1 stdenv env bytes | **green** (invariant tests; disambiguate duplicate stage1 stdenv) |
+| bootstrap-tools, stage0/1 stdenv env bytes | **green** |
 | stage2 cc / ERP stdenv oracles | **green** |
-| texinfo (stage1), list→env trailing space | **green** |
-| xgcc byte ATerm | **red** (go env has extra empty `libcCross` / `targetConfig` keys Nix omits with `__ignoreNulls`) |
-| binutils-wrapper, gcc-wrapper, stage2 stdenv | **red** (downstream of xgcc / pairing) |
+| texinfo, xgcc byte ATerm (topo name+stdenv) | **green** |
+| gcc-wrapper (stage2) | **green** |
+| binutils-wrapper, stage2 stdenv | **red** (closure pairing / upstream drv) |
 | stdenvNoCC, hello, curl | **red** |
 
 ## Import / contexts
 
-- **`TestImportNixpkgsLibVersionOnly`**, **`TestImportNixpkgsNoStoreCopy`**, path interp oracles **green**.
+- **`TestImportNixpkgsLibVersionOnly`**, path interp oracles, **`TestStringContextAuditMatchesNix`** (incl. `toString`) **green**.
 
 ## CGO
 

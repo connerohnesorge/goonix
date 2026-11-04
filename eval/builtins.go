@@ -223,7 +223,7 @@ func builtinToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	if err != nil {
 		return nil, err
 	}
-	return Str(sv.String, pos), nil
+	return StrWithContext(sv.String, copyStringContext(sv.Ctx), pos), nil
 }
 
 func builtinMap(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1924,15 +1924,21 @@ func builtinConcatStringsSep(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 	if err != nil {
 		return nil, err
 	}
-	var parts []string
-	for _, el := range list {
-		s, err := ev.forceString(el)
+	var b strings.Builder
+	var ctx []StringContextElem
+	cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false}
+	for i, el := range list {
+		if i > 0 {
+			b.WriteString(sep)
+		}
+		sv, err := ev.coerceToString(el, cc)
 		if err != nil {
 			return nil, err
 		}
-		parts = append(parts, s)
+		b.WriteString(sv.String)
+		ctx = mergeStringContexts(ctx, sv.Ctx)
 	}
-	return Str(strings.Join(parts, sep), pos), nil
+	return StrWithContext(b.String(), ctx, pos), nil
 }
 
 func builtinParseDrvName(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {

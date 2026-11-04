@@ -33,6 +33,10 @@ func TestStringContextAuditMatchesNix(t *testing.T) {
 			expr: `let pkgs = ` + pkgs + `; s = pkgs.gcc-unwrapped.outPath; in builtins.toString (builtins.length (builtins.attrNames (builtins.getContext (builtins.substring 0 10 s))))`,
 		},
 		{
+			name: "toString",
+			expr: `let pkgs = ` + pkgs + `; s = pkgs.gcc-unwrapped.outPath; in builtins.toString (builtins.length (builtins.attrNames (builtins.getContext (builtins.toString s))))`,
+		},
+		{
 			name: "unsafeDiscardStringContext",
 			expr: `let pkgs = ` + pkgs + `; s = pkgs.gcc-unwrapped.outPath; in builtins.toString (builtins.length (builtins.attrNames (builtins.getContext (builtins.unsafeDiscardStringContext s))))`,
 		},
