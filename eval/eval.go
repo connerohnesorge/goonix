@@ -1345,6 +1345,11 @@ func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {
 		if fb.Kind != VKAttrs {
 			return false, nil
 		}
+		if dpA, okA := ev.derivationAttrSetDrvPath(fa); okA {
+			if dpB, okB := ev.derivationAttrSetDrvPath(fb); okB && dpA == dpB {
+				return true, nil
+			}
+		}
 		if len(fa.Attrs.Binds) != len(fb.Attrs.Binds) {
 			return false, nil
 		}
@@ -1397,6 +1402,34 @@ func (ev *Evaluator) describeThunk(t *Thunk) string {
 		}
 	}
 	return fmt.Sprintf("thunk@%s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
+}
+
+func (ev *Evaluator) derivationAttrSetDrvPath(v *Value) (string, bool) {
+	if v == nil || v.Kind != VKAttrs {
+		return "", false
+	}
+	intern := ev.Intern
+	tb := v.Attrs.Binds[intern.Intern("type")]
+	if tb == nil {
+		return "", false
+	}
+	tv, err := ev.attrBindingValue(tb)
+	if err != nil || tv == nil || tv.Kind != VKString || tv.String != "derivation" {
+		return "", false
+	}
+	db := v.Attrs.Binds[intern.Intern("drvPath")]
+	if db == nil {
+		return "", false
+	}
+	dv, err := ev.attrBindingValue(db)
+	if err != nil || dv == nil {
+		return "", false
+	}
+	s, err := ev.coerceToString(dv, CoerceContext{Mode: CoerceString, CopyPaths: false})
+	if err != nil {
+		return "", false
+	}
+	return s.String, s.String != ""
 }
 
 func (ev *Evaluator) attrBindingValue(b *AttrBinding) (*Value, error) {

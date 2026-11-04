@@ -7,22 +7,24 @@ Oracle: **Nix 2.24.9**, nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. 
 ```bash
 bash scripts/check-cgo.sh
 go test ./store/... -run 'TestParseFixedOutput|TestStorePathForFilesystemPath' -count=1
-go test ./eval/... -run 'TestGlibcBootstrap|TestBootstrapStage0Binutils|TestCurlPlatform|TestSelectOr' -count=1
+go test ./eval/... -run 'TestGlibcBootstrap|TestBootstrapStage0Binutils|TestStringInterp|TestPythonModuleSelfEquality' -count=1
 go test ./ladder/... -count=1
 ```
 
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
 | #2 | Eval core / laziness | **partial** |
-| #13 | Ladder / goldens | **partial** — `input_drv`, `toFile` **green**; hello / stdenvNoCC / curl still red |
+| #13 | Ladder / goldens | **partial** — `input_drv`, `toFile` **green**; hello / stdenvNoCC / curl drvPath still red |
 
 ## Bootstrap ATerm chain (green)
 
 - **`''` strings:** parse-time `stripIndentation` only (Nix 2.24.9).
-- **Derivation env paths:** `coerceEnvStrings` + single `coerceToString` with `CopyPaths` for `''`/`""` and concat parts; `store.CopyPathToStore` uses `0755` while building trees (fixes empty `-by-name` store objects); `RealiseStorePath` skips only non-empty store paths.
-- **`__structuredAttrs`:** JSON env via `fillStructuredDerivationFromAttrs` (Nix `printValueAsJSON` shape).
-- **`builtins.fromJSON`:** attr keys use `ev.Intern` (was a fresh interner — broke `sdkVersions.${…}` and apple-sdk on linux).
-- **Oracles:** `TestGlibcBootstrapFilesATermMatchesNix`, `TestBootstrapStage0StdenvLinuxATermMatchesNix`, `TestBootstrapStage0BinutilsWrapperATermMatchesNix`, `TestCurlPlatformProbeMatchesNix`, `TestSelectOrMissingAttrMatchesNix` (**green**). No `lib.throw` injection; global `throw` via `evalVar` → `Builtins`.
+- **String path contexts:** `"${./p}"` and `"s" + p` copy to the store (via `inStringInterpolation` / `concatCoercedStrings`); `importDepth` on `builtins.import` keeps `TestImportNixpkgsOnly` lazy; `evalConcatStrings` folds through `concatCoercedStrings`.
+- **Derivation env paths:** `materializeStorePaths` during env coercion only.
+- **`__structuredAttrs`:** JSON env via `fillStructuredDerivationFromAttrs`.
+- **`builtins.fromJSON`:** attr keys use `ev.Intern`.
+- **Derivation `==`:** attrsets with `type = "derivation"` compare by forced `drvPath` (fixes python `pythonModule != python` check-meta false positive).
+- **Oracles:** bootstrap ATerm trio, `TestStringInterpPathGetContextMatchesNix`, `TestStringPlusPathCopiesMatchesNix`, `TestPythonModuleSelfEqualityMatchesNix`, `TestCurlPlatformProbeMatchesNix`, `TestSelectOrMissingAttrMatchesNix` (**green**).
 
 ## Ladder goldens
 
@@ -32,12 +34,12 @@ go test ./ladder/... -count=1
 | toFile | `TestToFileLadderMatchesGolden` | **green** |
 | hello | `TestHelloDrvPathMatchesGolden` | **red** |
 | stdenvNoCC | `TestStdenvNoCCLadderMatchesGolden` | **red** |
-| curl | `TestCurlLadderMatchesGolden` | **red** — check-meta python propagation assert during closure (past apple-sdk / `fromJSON`) |
+| curl | `TestCurlLadderMatchesGolden` | **red** — past check-meta; **drvPath** mismatch vs oracle |
 
 ## Still red / next
 
-- Ladder hello / stdenvNoCC / curl `drvPath` goldens vs oracle
-- `TestStdenvNoCCMkDerivationOracleMatchesNix`, `TestDrvDiffStdenvNoCCProbeReportsDeepest` (if not covered by ATerm chain)
+- `TestStdenvNoCCMkDerivationOracleMatchesNix` / `TestDrvDiffStdenvNoCCProbeReportsDeepest` — byte diff deepest logical **libffi-3.4.6** (env store paths e.g. bash/stdenv-linux differ from Nix on probe)
+- Ladder hello / stdenvNoCC / curl **drvPath** goldens
 
 ## derivationStrict rungs 1–10
 
