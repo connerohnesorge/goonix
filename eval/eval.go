@@ -347,8 +347,8 @@ func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) err
 	applyInherit := func(inh parser.Inherit) error {
 		return ev.bindAttrInherit(inh, env, bindEnv, av, a.Recursive)
 	}
-	applyBind := func(bind parser.Binding) {
-		ev.insertBinding(av, bindEnv, bind, a.Recursive)
+	applyBind := func(bind parser.Binding) error {
+		return ev.insertBinding(av, bindEnv, bind, a.Recursive)
 	}
 
 	if len(a.Members) > 0 {
@@ -359,12 +359,16 @@ func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) err
 				}
 			}
 			if m.Binding != nil {
-				applyBind(*m.Binding)
+				if err := applyBind(*m.Binding); err != nil {
+					return err
+				}
 			}
 		}
 	} else {
 		for _, bind := range a.Binds {
-			applyBind(bind)
+			if err := applyBind(bind); err != nil {
+				return err
+			}
 		}
 		for _, inh := range a.Inherit {
 			if err := applyInherit(inh); err != nil {
@@ -1425,4 +1429,9 @@ func (ev *Evaluator) attrBindingValue(b *AttrBinding) (*Value, error) {
 		return ev.forceThunk(b.Thunk)
 	}
 	return b.Value, nil
+}
+
+// attrsBindingForce is an alias used by derivation and attr coercion call sites.
+func (ev *Evaluator) attrsBindingForce(b *AttrBinding) (*Value, error) {
+	return ev.attrBindingValue(b)
 }

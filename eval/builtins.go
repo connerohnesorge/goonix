@@ -90,6 +90,7 @@ func (ev *Evaluator) registerBuiltins() {
 	registerNullary("storeDir", builtinStoreDir)
 	registerNullary("nixVersion", builtinNixVersion)
 	register("compareVersions", builtinCompareVersions)
+	register("splitVersion", builtinSplitVersion)
 	register("lessThan", builtinLessThan)
 	register("add", builtinAdd)
 	register("sub", builtinSub)
@@ -1000,15 +1001,9 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 		if !ok {
 			return "", fmt.Errorf("missing attribute %q", name)
 		}
-		var v *Value
-		if b.Thunk != nil {
-			var err error
-			v, err = ev.forceThunk(b.Thunk)
-			if err != nil {
-				return "", err
-			}
-		} else {
-			v = b.Value
+		v, err := ev.attrsBindingForce(b)
+		if err != nil {
+			return "", err
 		}
 		return ev.forceString(v)
 	}
@@ -1031,15 +1026,9 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 		Env:     map[string]string{},
 		Outputs: map[string]struct{}{"out": {}},
 	}
-	// args list
 	argsSym := ev.Intern.Intern("args")
 	if b, ok := attrs.Attrs.Binds[argsSym]; ok {
-		var lv *Value
-		if b.Thunk != nil {
-			lv, err = ev.forceThunk(b.Thunk)
-		} else {
-			lv = b.Value
-		}
+		lv, err := ev.attrsBindingForce(b)
 		if err == nil && lv.Kind == VKList {
 			for _, el := range lv.List {
 				s, err := ev.forceString(el)
@@ -1052,21 +1041,11 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 	}
 	envSym := ev.Intern.Intern("env")
 	if b, ok := attrs.Attrs.Binds[envSym]; ok {
-		var evset *Value
-		if b.Thunk != nil {
-			evset, err = ev.forceThunk(b.Thunk)
-		} else {
-			evset = b.Value
-		}
+		evset, err := ev.attrsBindingForce(b)
 		if err == nil && evset.Kind == VKAttrs {
 			for sym, bind := range evset.Attrs.Binds {
 				key := ev.Intern.Lookup(sym)
-				var val *Value
-				if bind.Thunk != nil {
-					val, err = ev.forceThunk(bind.Thunk)
-				} else {
-					val = bind.Value
-				}
+				val, err := ev.attrsBindingForce(bind)
 				if err != nil {
 					return nil, err
 				}
@@ -1236,6 +1215,17 @@ func builtinCompareVersions(ev *Evaluator, pos parser.Pos, args []*Value) (*Valu
 		return nil, err
 	}
 	return Int(int64(compareVersions(v1, v2))), nil
+}
+
+func builtinSplitVersion(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	v, err := ev.forceString(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return List(splitVersion(v)...), nil
 }
 
 func builtinNixVersion(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {

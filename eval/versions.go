@@ -17,6 +17,8 @@ package eval
 import (
 	"strconv"
 	"unicode"
+
+	"github.com/connerohnesorge/goonix/parser"
 )
 
 // compareVersions compares Nix-style version strings (same semantics as Nix).
@@ -78,4 +80,18 @@ func componentsLT(c1, c2 string) bool {
 		return false
 	}
 	return c1 < c2
+}
+
+// splitVersion splits a version string into components (same semantics as Nix builtins.splitVersion).
+func splitVersion(s string) []*Value {
+	var out []*Value
+	p := 0
+	for p < len(s) {
+		c := nextVersionComponent(s, &p)
+		if c == "" {
+			break
+		}
+		out = append(out, Str(c, parser.Pos{}))
+	}
+	return out
 }

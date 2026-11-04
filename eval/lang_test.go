@@ -68,6 +68,7 @@ func TestLangSkeleton(t *testing.T) {
 		{Name: "builtins.hasAttr", Source: `builtins.hasAttr "nixVersion" builtins`, WantSubstr: "true"},
 		{Name: "builtins ? nixVersion", Source: `if builtins ? nixVersion then "yes" else "no"`, WantSubstr: "yes"},
 		{Name: "compareVersions", Source: `builtins.toString (builtins.compareVersions "2.0" "1.9")`, WantSubstr: "1"},
+		{Name: "splitVersion", Source: `builtins.toJSON (builtins.splitVersion "1.2.3-rc1")`, WantSubstr: `["1","2","3","rc","1"]`},
 	})
 }
 

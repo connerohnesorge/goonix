@@ -5,28 +5,45 @@
 package eval
 
 import (
+	"github.com/connerohnesorge/goonix/data"
 	"github.com/connerohnesorge/goonix/parser"
 )
 
-// insertBinding places bind into av, creating nested attrsets for multi-segment paths.
-func (ev *Evaluator) insertBinding(av *Value, bindEnv *Env, bind parser.Binding, recursive bool) {
-	if len(bind.Path) == 0 {
-		return
+func (ev *Evaluator) resolveAttrSym(an parser.AttrName, env *Env, pos parser.Pos) (data.Symbol, error) {
+	if an.Expr == nil {
+		return ev.Intern.Intern(an.Name), nil
 	}
-	if bind.Path[0].Expr != nil {
-		return
+	v, err := ev.evalExpr(an.Expr, env)
+	if err != nil {
+		return 0, err
+	}
+	s, err := ev.forceString(v)
+	if err != nil {
+		return 0, evalErr(pos, "dynamic attribute name must be a string")
+	}
+	return ev.Intern.Intern(s), nil
+}
+
+// insertBinding places bind into av, creating nested attrsets for multi-segment paths.
+func (ev *Evaluator) insertBinding(av *Value, bindEnv *Env, bind parser.Binding, recursive bool) error {
+	if len(bind.Path) == 0 {
+		return nil
+	}
+	sym, err := ev.resolveAttrSym(bind.Path[0], bindEnv, bind.Pos)
+	if err != nil {
+		return err
 	}
 	t := ev.newThunk(bind.Value, bindEnv, bind.Pos)
 	if len(bind.Path) == 1 {
-		sym := ev.Intern.Intern(bind.Path[0].Name)
 		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
 		if recursive {
 			bindEnv.bindThunk(sym, t)
 		}
-		return
+		return nil
 	}
-	nested := ev.ensureNestedAttr(av, bind.Path[0].Name, recursive, bindEnv)
-	ev.insertBindingInto(nested, bindEnv, bind.Path[1:], t, recursive)
+	name := ev.Intern.Lookup(sym)
+	nested := ev.ensureNestedAttr(av, name, recursive, bindEnv)
+	return ev.insertBindingInto(nested, bindEnv, bind.Path[1:], t, recursive)
 }
 
 func (ev *Evaluator) ensureNestedAttr(av *Value, name string, recursive bool, bindEnv *Env) *Value {
@@ -42,20 +59,21 @@ func (ev *Evaluator) ensureNestedAttr(av *Value, name string, recursive bool, bi
 	return nested
 }
 
-func (ev *Evaluator) insertBindingInto(av *Value, bindEnv *Env, path []parser.AttrName, t *Thunk, recursive bool) {
+func (ev *Evaluator) insertBindingInto(av *Value, bindEnv *Env, path []parser.AttrName, t *Thunk, recursive bool) error {
 	if len(path) == 0 {
-		return
+		return nil
 	}
-	if path[0].Expr != nil {
-		return
+	sym, err := ev.resolveAttrSym(path[0], bindEnv, t.pos)
+	if err != nil {
+		return err
 	}
 	if len(path) == 1 {
-		sym := ev.Intern.Intern(path[0].Name)
 		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
-		return
+		return nil
 	}
-	nested := ev.ensureNestedAttr(av, path[0].Name, recursive, bindEnv)
-	ev.insertBindingInto(nested, bindEnv, path[1:], t, recursive)
+	name := ev.Intern.Lookup(sym)
+	nested := ev.ensureNestedAttr(av, name, recursive, bindEnv)
+	return ev.insertBindingInto(nested, bindEnv, path[1:], t, recursive)
 }
 
 func (ev *Evaluator) syncRecTopLevel(av *Value, bindEnv *Env) {
