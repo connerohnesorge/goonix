@@ -53,7 +53,6 @@ type Evaluator struct {
 	curFile     string
 	importDepth int
 	importCache map[string]*Value
-	currentForce *Thunk // thunk currently being forceThunk'd (blackhole target)
 }
 
 type storeConfig struct {
@@ -336,26 +335,7 @@ func (ev *Evaluator) evalAttrSet(a *parser.AttrSet, env *Env, fromLet bool) (*Va
 	if err := ev.populateAttrSet(a, env, av); err != nil {
 		return nil, err
 	}
-	ev.publishAttrSetIfForcing(av)
 	return av, nil
-}
-
-func (ev *Evaluator) publishAttrSetIfForcing(av *Value) {
-	t := ev.currentForce
-	if t == nil || !t.locked || av == nil || av.Kind != VKAttrs {
-		return
-	}
-	t.memo = mergeAttrBindMaps(t.memo, av)
-}
-
-func (ev *Evaluator) publishBindingIfForcing(sym data.Symbol, bind *AttrBinding) {
-	t := ev.currentForce
-	if t == nil || !t.locked || bind == nil {
-		return
-	}
-	partial := Attrs(false)
-	partial.Attrs.Binds[sym] = bind
-	t.memo = mergeAttrBindMaps(t.memo, partial)
 }
 
 func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) error {
@@ -565,6 +545,11 @@ func (ev *Evaluator) bindLetInherit(inh parser.Inherit, env *Env) error {
 }
 
 func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
+	if len(c.Args) >= 1 {
+		if orv, ok := c.Args[0].(*parser.Var); ok && orv.Name == "or" {
+			return ev.evalOrFallback(c.Fun, c.Args[1:], env, c.P)
+		}
+	}
 	fun, err := ev.evalExpr(c.Fun, env)
 	if err != nil {
 		return nil, err
@@ -588,6 +573,28 @@ func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
 		return ev.applyCallableN(ff, args, c.P)
 	}
 	return nil, evalErr(c.P, "attempt to call non-function")
+}
+
+// evalOrFallback implements `e1 or e2` (cursed invoke): if e1 is null, e2; else e1 without forcing thunks.
+func (ev *Evaluator) evalOrFallback(base parser.Expr, rest []parser.Expr, env *Env, pos parser.Pos) (*Value, error) {
+	baseVal, err := ev.evalExpr(base, env)
+	if err != nil {
+		return nil, err
+	}
+	if baseVal != nil && baseVal.Kind == VKDeferred {
+		return baseVal, nil
+	}
+	fb, err := ev.forceWHNF(baseVal, pos)
+	if err != nil {
+		return nil, err
+	}
+	if fb != nil && fb.Kind == VKNull {
+		if len(rest) == 0 {
+			return Null(), nil
+		}
+		return ev.evalExpr(rest[0], env)
+	}
+	return fb, nil
 }
 
 func (ev *Evaluator) applyLambda(l *LambdaValue, args []*Value, pos parser.Pos) (*Value, error) {
@@ -666,9 +673,20 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 	if err != nil {
 		return nil, err
 	}
-	fb, err := ev.mustWHNF(base, s.P)
-	if err != nil {
-		return nil, err
+	var fb *Value
+	if hasDefault {
+		fb, err = ev.forceWHNF(base, s.P)
+		if err != nil {
+			return nil, err
+		}
+		if fb != nil && (fb.Kind == VKDeferred || fb.Kind != VKAttrs) {
+			return ev.evalExpr(defaultExpr, env)
+		}
+	} else {
+		fb, err = ev.mustWHNF(base, s.P)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for i, seg := range s.Path {
 		name := seg.Name
@@ -1065,55 +1083,16 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 }
 
 func (ev *Evaluator) evalOpUpdate(b *parser.BinaryOp, env *Env) (*Value, error) {
-	var r *Value
-	var err error
-	if ev.shouldPrimeUpdateLHS(b, env) {
-		r, err = ev.evalAttrs(b.Right, env, b.P)
-		if err != nil {
-			return nil, err
-		}
-		ev.currentForce.memo = mergeAttrBindMaps(ev.currentForce.memo, r)
+	// Nix evalOpUpdate: RHS evalAttrs, then LHS, then merge (RHS wins on key clash).
+	r, err := ev.evalAttrs(b.Right, env, b.P)
+	if err != nil {
+		return nil, err
 	}
 	l, err := ev.evalAttrs(b.Left, env, b.P)
 	if err != nil {
 		return nil, err
 	}
-	if r == nil {
-		r, err = ev.evalAttrs(b.Right, env, b.P)
-		if err != nil {
-			return nil, err
-		}
-	}
 	return mergeAttrBindMaps(l, r), nil
-}
-
-func (ev *Evaluator) shouldPrimeUpdateLHS(b *parser.BinaryOp, env *Env) bool {
-	t := ev.currentForce
-	if t == nil || !t.locked {
-		return false
-	}
-	expr := b.Left
-	for {
-		p, ok := expr.(*parser.Parens)
-		if !ok {
-			break
-		}
-		expr = p.Expr
-	}
-	v, ok := expr.(*parser.Var)
-	if !ok {
-		return false
-	}
-	sym := ev.Intern.Intern(v.Name)
-	if bind, ok := ev.lookupEnv(env, sym); ok {
-		if bind.Thunk == t {
-			return true
-		}
-		if bind.Value != nil && bind.Value.Kind == VKDeferred && bind.Value.Deferred == t {
-			return true
-		}
-	}
-	return false
 }
 
 func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk {
@@ -1131,16 +1110,10 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		return t.memo, nil
 	}
 	if t.locked {
-		if t.memo != nil {
-			return t.memo, nil
-		}
 		return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 	}
 	t.locked = true
-	prev := ev.currentForce
-	ev.currentForce = t
 	defer func() {
-		ev.currentForce = prev
 		t.locked = false
 	}()
 	var v *Value
@@ -1168,17 +1141,9 @@ func (ev *Evaluator) forceValue(v *Value) (*Value, error) {
 	for v != nil && v.Kind == VKDeferred && v.Deferred != nil {
 		t := v.Deferred
 		if t.locked {
-			if t.memo != nil {
-				v = t.memo
-				continue
-			}
 			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 		}
 		if _, ok := seen[t]; ok {
-			if t.memo != nil {
-				v = t.memo
-				continue
-			}
 			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 		}
 		seen[t] = struct{}{}
@@ -1306,23 +1271,25 @@ func mergeAttrBindMaps(lhs, rhs *Value) *Value {
 }
 
 func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {
-	fa, err := ev.forceValue(a)
+	pos := parser.Pos{}
+	fa, err := ev.mustWHNF(a, pos)
 	if err != nil {
 		return false, err
 	}
-	fb, err := ev.forceValue(b)
+	fb, err := ev.mustWHNF(b, pos)
 	if err != nil {
 		return false, err
 	}
 	if fa == fb {
 		return true, nil
 	}
+	if fa.Kind == VKNull || fb.Kind == VKNull {
+		return fa.Kind == VKNull && fb.Kind == VKNull, nil
+	}
 	if fa.Kind != fb.Kind {
 		return false, nil
 	}
 	switch fa.Kind {
-	case VKNull:
-		return true, nil
 	case VKBool:
 		return fa.Bool == fb.Bool, nil
 	case VKInt:

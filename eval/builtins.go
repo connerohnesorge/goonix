@@ -394,12 +394,9 @@ func builtinAttrNames(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	set, err := ev.forceValue(args[0])
+	set, err := ev.forceAttrs(args[0], pos)
 	if err != nil {
 		return nil, err
-	}
-	if set.Kind != VKAttrs {
-		return nil, evalErr(pos, "attrNames expects attribute set")
 	}
 	var names []string
 	for sym := range set.Attrs.Binds {
@@ -1560,7 +1557,7 @@ func builtinMapAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	if err != nil {
 		return nil, err
 	}
-	set, err := ev.forceValue(args[1])
+	set, err := ev.forceAttrs(args[1], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -1638,7 +1635,7 @@ func builtinIsInt(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) 
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	fv, err := ev.forceValue(args[0])
+	fv, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -1649,7 +1646,7 @@ func builtinIsFloat(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	fv, err := ev.forceValue(args[0])
+	fv, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -1728,7 +1725,7 @@ func builtinIsString(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	fv, err := ev.forceValue(args[0])
+	fv, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -1739,7 +1736,7 @@ func builtinIsAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	fv, err := ev.forceValue(args[0])
+	fv, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -1750,7 +1747,7 @@ func builtinIsFunction(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	fv, err := ev.forceValue(args[0])
+	fv, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -1795,7 +1792,7 @@ func builtinIsPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	fv, err := ev.forceValue(args[0])
+	fv, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -1958,7 +1955,7 @@ func builtinIsBool(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	fv, err := ev.forceValue(args[0])
+	fv, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -2235,7 +2232,7 @@ func builtinFunctionArgs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	f, err := ev.forceValue(args[0])
+	f, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -2301,12 +2298,23 @@ func builtinAddErrorContext(ev *Evaluator, pos parser.Pos, args []*Value) (*Valu
 	if err != nil {
 		return nil, err
 	}
-	v, err := ev.forceValue(args[1])
-	if err != nil {
-		if ee, ok := err.(*EvalError); ok {
-			return nil, &EvalError{Pos: ee.Pos, Msg: ctx + ": " + ee.Msg}
-		}
-		return nil, fmt.Errorf("%s: %w", ctx, err)
+	inner := args[1]
+	if inner == nil {
+		return Null(), nil
 	}
-	return v, nil
+	t := &Thunk{
+		eval: ev,
+		pos:  pos,
+		lazy: func(ev *Evaluator) (*Value, error) {
+			v, err := ev.forceValue(inner)
+			if err != nil {
+				if ee, ok := err.(*EvalError); ok {
+					return nil, &EvalError{Pos: ee.Pos, Msg: ctx + " " + ee.Msg}
+				}
+				return nil, fmt.Errorf("%s: %w", ctx, err)
+			}
+			return v, nil
+		},
+	}
+	return Deferred(t), nil
 }

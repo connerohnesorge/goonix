@@ -9,22 +9,24 @@ import (
 	"github.com/connerohnesorge/goonix/parser"
 )
 
+// Bare `final // { … }` inside lib.fix is invalid in real Nix (see testdata/oracle/fixpoint_bare_update.nix).
+// nixpkgs uses lib.extends overlays; this matches testdata/oracle/fixpoint_extends.nix.
 func TestFixpointIntersectAttrsSeesPublishedBinds(t *testing.T) {
-	src := `
-let
-  lib = import "` + filepath.Join("testdata", "nixpkgs", "lib", "default.nix") + `";
-  f = final: final // { fetchurl = 42; other = 1; };
-  pkgs = lib.fix f;
-in builtins.intersectAttrs { fetchurl = false; other = false; } pkgs
-`
 	root := modRoot(t)
-	src = fmt.Sprintf(`
+	libPath := filepath.Join(root, "testdata", "nixpkgs", "lib", "default.nix")
+	src := fmt.Sprintf(`
 let
   lib = import %q;
-  f = final: final // { fetchurl = 42; other = 1; };
-  pkgs = lib.fix f;
-in builtins.intersectAttrs { fetchurl = false; other = false; } pkgs
-`, filepath.Join(root, "testdata", "nixpkgs", "lib", "default.nix"))
+  toFix = lib.foldl' (lib.flip lib.extends) (self: { }) [
+    (self: super: { fetchurl = 42; })
+    (self: super: { other = 1; })
+    (self: super: {
+      probe = lib.intersectAttrs { fetchurl = false; other = false; } self;
+    })
+  ];
+  pkgs = lib.fix toFix;
+in pkgs.probe
+`, libPath)
 	ev := eval.NewEvaluator()
 	expr, err := parser.ParseString(src)
 	if err != nil {

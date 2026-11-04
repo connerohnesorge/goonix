@@ -8,54 +8,40 @@ go test ./eval/... ./lang/... -count=1
 go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 ```
 
-Debug type mismatches (thunk kind, memo, thunk source pos):
-
-```bash
-GOONIX_DEBUG_TYPE=1 go test ./eval/... -run TestImportNixpkgsOnly -count=1
-```
-
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
-| #2 | Eval core / laziness | **partial** — unified `forceValue` peel; lib WHNF oracles green; full import blocked at modules |
-| #13 | Ladder / goldens | **partial** — same import blocker |
+| #2 | Eval core / laziness | **partial** — strict blackhole; Nix `//` order; lazy `or` / `addErrorContext`; modules `config` still recurses |
+| #13 | Ladder / goldens | **blocked** on modules `config` |
 
-## WHNF (Nix 2.24.9)
+## Strict blackhole (no partial memo)
 
-- **`forceValue`**: loops on deferred heads — memo peel, then `forceThunk`; locked without memo → infinite-recursion error; no 512-step cap.
-- **`forceWHNF`**: alias of `forceValue` (may still return a thunk in soft contexts).
-- **`mustWHNF`**: `forceValue` + error if still `VKDeferred` — calls, `//` / forceAttrs, lists, `if`/bool/arithmetic/strings, `typeOf`.
-- **Select / `?`**: `mustWHNF` on base and non-final segments; **final segment stays lazy**. HasAttr uses soft `forceWHNF` on base (Nix `?` navigation).
-- **`applyCallable`**: single `mustWHNF` on function head (no double `forceValue`).
+Removed: `currentForce`, `publishAttrSetIfForcing`, `publishBindingIfForcing`, `shouldPrimeUpdateLHS`, locked-thunk memo peek during force.
 
-## Fixpoint (load-bearing)
+- **`//`**: RHS `evalAttrs` then LHS (Nix `evalOpUpdate` order).
+- **`forceValue` / `forceThunk`**: locked without completed memo → infinite recursion (no partial attrset).
+- **Fixpoint tests**: bare `final // { … }` is **invalid in real Nix** (`testdata/oracle/fixpoint_bare_update.nix`); tests use **`lib.extends` + `lib.fix`** (`fixpoint_extends.nix`).
 
-- **`shouldPrimeUpdateLHS` RHS-first `//` priming** when LHS is the fixpoint var bound to `currentForce` (`TestFixpointIntersectAttrsSeesPublishedBinds`).
-- **`publishAttrSetIfForcing`** + **`publishBindingIfForcing`**: merge in-progress attr names into the fixpoint blackhole memo while a force is active.
-- **`with` lookups**: `forceWHNF` on the `with` attrset (not full `forceAttrs`).
+## Laziness fixes (Nix-aligned)
 
-## Lib WHNF oracles (green)
+- **`e1 or e2`**: cursed-invoke / `SelectOr` — do not `mustWHNF`/`forceValue` the fixpoint when choosing the left side.
+- **`builtins.addErrorContext`**: lazy wrapper (context applied when the inner value is forced).
+- **`equalValues`**: WHNF peel; `null` on either side without deep attr forcing.
+- **`builtins.is*`**: `mustWHNF` on the scrutinee (not full `forceValue`).
+- **`with` lookups**: `forceWHNF` on the attrset (not `forceAttrs`).
 
-- `builtins.isAttrs (import lib)`
-- `builtins.typeOf (import lib) == "set"`
-- `(import lib).trivial.id 1 == 1`
-- minimal `fix` + `inherit (self.t) a` (`eval/lib_oracle_test.go`)
+## Oracle reproducers
 
-## Full `import <nixpkgs>` blocker
+See `testdata/oracle/` and `eval/oracle_repro_test.go` (runs when `nix-instantiate` is on PATH).
 
-`TestImportNixpkgsOnly` fails at **`lib/modules.nix:270`** while evaluating option `_module.freeformType` / module argument `config` (infinite recursion during `forceValue` on the module `config` fixpoint). Past the previous **`stdenv/cross/default.nix:23`** “not an attribute set” failure when `lib` stayed a thunk.
+## Blocker: `lib/modules.nix:270` (`config` fixpoint)
 
-Regression: `eval/stdenv_cross_oracle_test.go` (`isLinux` / bootStages subexpr types).
+Minimal repro: `eval/modules_config_repro_test.go` (`configEval.config` with `config.nix` + `{ config = { }; }`).
+
+Nix evaluates this; goonix still recurses while evaluating option `_module.freeformType` and **module argument `config`** (`applyModuleArgs` / `addErrorContext` path). Next trace: who forces the `config` formal during option merge before the merged `config` let completes.
 
 ## Tests
 
 - `bash scripts/check-cgo.sh`: **green**
 - `go test ./lang/...`: **green**
-- Lib WHNF / fixpoint / with / callPackage / checked / WHNF unit tests: **green**
-- Full `pkgs` import / hello golden: **red** at modules `config` (above)
-
-## Ladder
-
-| Rung | Status |
-|------|--------|
-| hello `.drvPath` | **blocked** (modules `config`) |
-| later rungs | **not started** |
+- Lib WHNF oracles, extends fixpoint, pending-merge `with self`, `evalModules` empty: **green**
+- Full `import <nixpkgs>` / hello golden: **red** (modules `config`)
