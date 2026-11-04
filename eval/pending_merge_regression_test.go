@@ -68,4 +68,44 @@ in pkgs.probe
 	if fv2.Kind != eval.VKAttrs || fv2.Attrs.Binds[sym] == nil {
 		t.Fatalf("fixpoint intersectAttrs pool: got %v", fv2.DisplayString(ev2, ev2.Intern))
 	}
+
+	// makeScope `self = f self // { callPackage = … }` must not get fixPublish from `f self`,
+	// or `with self` skips pending-merge lookup and generated default.nix loses callPackage.
+	makeScopeSrc := fmt.Sprintf(`
+let
+  lib = import %q;
+  pkg = { lib }: self: with self; { probe = callPackage; };
+  generatedPackages = lib.makeOverridable pkg { inherit (lib) lib; };
+  scope = lib.makeScopeWithSplicing' {
+    splicePackages = x: x;
+    newScope = s: x: x // s;
+  } {
+    otherSplices = {
+      selfBuildBuild = { };
+      selfBuildHost = { };
+      selfBuildTarget = { };
+      selfHostHost = { };
+      selfHostTarget = { };
+      selfTargetTarget = { };
+    };
+    f = lib.extends (self: super: { forced = super.probe; }) generatedPackages;
+  };
+in scope.forced
+`, libPath)
+	ev3 := eval.NewEvaluator()
+	expr3, err := parser.ParseString(makeScopeSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	val3, err := ev3.EvalWithBuiltins(expr3)
+	if err != nil {
+		t.Fatalf("makeScope extends super during pending merge: %v", err)
+	}
+	fv3, err := ev3.ForceValue(val3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fv3 == nil {
+		t.Fatal("nil forced probe")
+	}
 }

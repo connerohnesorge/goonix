@@ -15,7 +15,8 @@ func TestMakeScopeLetSelfMergeWithSelfCallPackageStub(t *testing.T) {
 	src := fmt.Sprintf(`
 let
   lib = import %q;
-  generatedPackages = { lib }: self: with self; { probe = callPackage; };
+  pkg = { lib }: self: with self; { probe = callPackage; };
+  generatedPackages = lib.makeOverridable pkg { inherit (lib) lib; };
   scope = lib.makeScopeWithSplicing' {
     splicePackages = x: x;
     newScope = s: x: x // s;
@@ -28,7 +29,7 @@ let
       selfHostTarget = { };
       selfTargetTarget = { };
     };
-    f = lib.extends (_: _: { }) (lib.callPackageWith { inherit (lib) lib; } generatedPackages { });
+    f = lib.extends (_: _: { }) generatedPackages;
   };
 in scope.probe
 `, libNix)

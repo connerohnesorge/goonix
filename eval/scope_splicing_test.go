@@ -58,11 +58,14 @@ func TestMakeScopeWithSplicingRealXorgDefault(t *testing.T) {
 	src := fmt.Sprintf(`
 let
   lib = import %q;
-  auto = { inherit (lib) lib; pixman = null; callPackage = lib.trivial.id; };
+  auto = { inherit (lib) lib; pixman = null; fetchurl = lib.trivial.id; };
+  overrides = self: super: {
+    fontadobeutopiatype1 = super.fontadobeutopiatype1;
+  };
   generatedPackages = lib.callPackageWith auto (import %q) { };
   scope = lib.makeScopeWithSplicing' {
     splicePackages = x: x;
-    newScope = s: x: x // s;
+    newScope = lib.callPackageWith auto;
   } {
     otherSplices = {
       selfBuildBuild = { };
@@ -72,9 +75,9 @@ let
       selfHostTarget = { };
       selfTargetTarget = { };
     };
-    f = lib.extends (_: _: { }) generatedPackages;
+    f = lib.extends overrides generatedPackages;
   };
-in scope.fontadobeutopiatype1 or scope.appres or "ok"
+in scope.fontadobeutopiatype1
 `, libNix, defNix)
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
 	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)

@@ -617,6 +617,9 @@ func (ev *Evaluator) markFixPublishArg(arg *Value) {
 	if ev.currentForce == nil || !ev.currentForce.locked {
 		return
 	}
+	if ev.currentForce.selfHideSym != 0 || ev.currentForce.pendingMergeRhs != nil {
+		return
+	}
 	if arg != nil && arg.Kind == VKDeferred && arg.Deferred != nil && arg.Deferred == ev.currentForce {
 		ev.currentForce.fixPublish = true
 		if ev.currentForce.memo == nil {
