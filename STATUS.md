@@ -33,13 +33,22 @@ go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 
 **Import:** `TestImportNixpkgsOnly` **green** (evaluates pinned nixpkgs import without forcing full `pkgs`).
 
-## Blocker: hello golden / ladder drvPath hash
+## derivationStrict ladder (vs Nix 2.24.9)
 
-**Symptom:** `pkgs.hello` evaluates; `drvPath` thunk forces to a path, but **store hash** differs from Nix / committed golden (`gciipqhq…` vs goonix `0kn0nr4…`).
+Oracle per rung: `nix-instantiate --eval -E '(builtins.derivationStrict …).drvPath'` and compare to goonix `AttrsToDerivation` + `SerializeDerivation` (ATerm round-trip via `store.DrvPath`).
 
-**Cause:** `attrsToDerivation` does not implement Nix `derivationStrict` env flattening or string-context `inputDrvs`/`inputSrcs`. Full flattening was attempted but forces boot attrs (e.g. stdenv overrides / `perl.override`) and hits infinite recursion at `pkgs/stdenv/linux/default.nix:347`.
+| Rung | Status |
+|------|--------|
+| 1 minimal, 2 args, 3 env, 5 __ignoreNulls, 6 coercions, 7 path→inputSrcs | **match** drvPath + ATerm |
+| 4 multi-output | skip (env/output path ordering) |
+| 8 toFile | skip (toFile hash / inputSrcs) |
+| 9 inputDrvs | skip (dep string context) |
+| 10 fixed-output | skip (SRI `outputHash`) |
 
-**Next:** Nix-compatible `derivationStrict` env + input collection without over-forcing (string context / selective coercion).
+**Implementation:** `eval/derivation_env.go` (`fillDerivationFromAttrs`), `computeDerivationPaths` computes output paths before `DrvPath()` (Nix `hashDerivationModulo`).
+
+**Import / hello blocked again:** full env flatten runs on boot `mkDerivation`; infinite recursion at `linux/default.nix:347` (`perl = super.perl.override { … }`) — **override / makeOverridable eagerness**, not incomplete flatten. Next: minimal reproducer + oracle, then hello golden.
+
 
 ## Fixpoint / xorg overlay (727)
 

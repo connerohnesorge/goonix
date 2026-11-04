@@ -995,6 +995,7 @@ func builtinDerivation(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 }
 
 func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
+	pos := parser.Pos{}
 	getS := func(name string) (string, error) {
 		sym := ev.Intern.Intern(name)
 		b, ok := attrs.Attrs.Binds[sym]
@@ -1011,51 +1012,9 @@ func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
 	if err != nil {
 		return nil, err
 	}
-	system, err := getS("system")
-	if err != nil {
+	drv := &DerivationValue{Name: name}
+	if err := ev.fillDerivationFromAttrs(attrs, drv, pos); err != nil {
 		return nil, err
-	}
-	builder, err := getS("builder")
-	if err != nil {
-		return nil, err
-	}
-	drv := &DerivationValue{
-		Name:    name,
-		System:  system,
-		Builder: builder,
-		Env:     map[string]string{},
-		Outputs: map[string]struct{}{"out": {}},
-	}
-	argsSym := ev.Intern.Intern("args")
-	if b, ok := attrs.Attrs.Binds[argsSym]; ok {
-		lv, err := ev.attrsBindingForce(b)
-		if err == nil && lv.Kind == VKList {
-			for _, el := range lv.List {
-				s, err := ev.forceString(el)
-				if err != nil {
-					return nil, err
-				}
-				drv.Args = append(drv.Args, s)
-			}
-		}
-	}
-	envSym := ev.Intern.Intern("env")
-	if b, ok := attrs.Attrs.Binds[envSym]; ok {
-		evset, err := ev.attrsBindingForce(b)
-		if err == nil && evset.Kind == VKAttrs {
-			for sym, bind := range evset.Attrs.Binds {
-				key := ev.Intern.Lookup(sym)
-				val, err := ev.attrsBindingForce(bind)
-				if err != nil {
-					return nil, err
-				}
-				s, err := ev.forceString(val)
-				if err != nil {
-					return nil, err
-				}
-				drv.Env[key] = s
-			}
-		}
 	}
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
 	drvPath, outPaths, err := computeDerivationPaths(cfg, drv)

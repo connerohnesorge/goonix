@@ -26,15 +26,21 @@ func computeDerivationPaths(cfg store.Config, drv *DerivationValue) (drvPath str
 	if err != nil {
 		return "", nil, err
 	}
+	outPaths, err = d.CalculateOutputPaths(nil)
+	if err != nil {
+		return "", nil, err
+	}
+	for name, path := range outPaths {
+		if o, ok := d.Outputs[name]; ok {
+			o.Path = path
+		}
+		d.Env[name] = path
+	}
 	drvPath, err = d.DrvPath()
 	if err != nil {
 		return "", nil, err
 	}
 	drvPath = cfg.RewriteDefaultStoreDir(drvPath)
-	outPaths, err = d.CalculateOutputPaths(nil)
-	if err != nil {
-		return "", nil, err
-	}
 	for k, v := range outPaths {
 		outPaths[k] = cfg.RewriteDefaultStoreDir(v)
 	}
@@ -51,24 +57,29 @@ func derivationValueToGoNix(drv *DerivationValue) (*gonixdrv.Derivation, error) 
 		Arguments:        append([]string{}, drv.Args...),
 		Env:              map[string]string{},
 	}
+	for path, outs := range drv.InputDerivations {
+		d.InputDerivations[path] = append([]string(nil), outs...)
+	}
 	for k, v := range drv.Env {
 		d.Env[k] = v
 	}
-	d.Env["name"] = drv.Name
-	d.Env["system"] = drv.System
-	d.Env["builder"] = drv.Builder
 
 	outputs := drv.Outputs
 	if len(outputs) == 0 {
 		outputs = map[string]struct{}{"out": {}}
 	}
+	hashAlgo := drv.Env["outputHashAlgo"]
+	hash := drv.Env["outputHash"]
+	hashMode := drv.Env["outputHashMode"]
+	_ = hashMode
 	for out := range outputs {
 		o := &gonixdrv.Output{Path: ""}
-		if algo, ok := drv.Env["outputHashAlgo"]; ok && out == "out" {
-			if hash, ok2 := drv.Env["outputHash"]; ok2 {
-				o.HashAlgorithm = algo
-				o.Hash = hash
+		if hash != "" && out == "out" {
+			if hashAlgo == "" {
+				hashAlgo = "sha256"
 			}
+			o.HashAlgorithm = hashAlgo
+			o.Hash = hash
 		}
 		d.Outputs[out] = o
 	}
@@ -96,9 +107,7 @@ func WriteDerivation(cfg store.Config, drv *DerivationValue) error {
 			if o, ok := d.Outputs[name]; ok {
 				o.Path = path
 			}
-			if name == "out" {
-				d.Env["out"] = path
-			}
+			d.Env[name] = path
 		}
 	}
 	content := &stringsBuilder{}
@@ -106,6 +115,34 @@ func WriteDerivation(cfg store.Config, drv *DerivationValue) error {
 		return err
 	}
 	return store.WriteTextToStore(drv.DrvPath, content.String())
+}
+
+// SerializeDerivation returns the ATerm bytes for d (same as a .drv file body).
+func SerializeDerivation(cfg store.Config, drv *DerivationValue) ([]byte, error) {
+	if drv.DrvPath == "" {
+		var err error
+		drv.DrvPath, drv.OutPaths, err = computeDerivationPaths(cfg, drv)
+		if err != nil {
+			return nil, err
+		}
+	}
+	d, err := derivationValueToGoNix(drv)
+	if err != nil {
+		return nil, err
+	}
+	if drv.OutPaths != nil {
+		for name, path := range drv.OutPaths {
+			if o, ok := d.Outputs[name]; ok {
+				o.Path = path
+			}
+			d.Env[name] = path
+		}
+	}
+	content := &stringsBuilder{}
+	if err := d.WriteDerivation(content); err != nil {
+		return nil, err
+	}
+	return []byte(content.String()), nil
 }
 
 type stringsBuilder struct {
