@@ -2,6 +2,7 @@ package eval_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,6 +58,96 @@ func evalGoonixFile(t *testing.T, importPath string) map[string]any {
 		t.Fatal(err)
 	}
 	return valueToJSONMap(t, ev, val)
+}
+
+func evalGoonixFileAllowErr(t *testing.T, importPath string) (map[string]any, error) {
+	t.Helper()
+	root := modRoot(t)
+	abs, _ := filepath.Abs(importPath)
+	src := `import "` + abs + `" {}`
+	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
+	nixpkgs := filepath.Join(root, "testdata", "nixpkgs")
+	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
+	ev.NixPath.PrependEntries("nix=" + filepath.Join(root, "testdata", "nix"))
+	expr, err := parser.ParseString(src)
+	if err != nil {
+		return nil, err
+	}
+	val, err := ev.EvalWithBuiltins(expr)
+	if err != nil {
+		return nil, err
+	}
+	return valueToJSONMapAllowErr(t, ev, val)
+}
+
+func valueToJSONMapAllowErr(t *testing.T, ev *eval.Evaluator, v *eval.Value) (map[string]any, error) {
+	t.Helper()
+	fv, err := ev.ForceValue(v)
+	if err != nil {
+		return nil, err
+	}
+	m, err := evalValueToJSONAllowErr(t, ev, fv)
+	if err != nil {
+		return nil, err
+	}
+	out, ok := m.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("expected attrset JSON")
+	}
+	return out, nil
+}
+
+func evalValueToJSONAllowErr(t *testing.T, ev *eval.Evaluator, v *eval.Value) (any, error) {
+	t.Helper()
+	if v == nil {
+		return nil, nil
+	}
+	fv, err := ev.ForceValue(v)
+	if err != nil {
+		return nil, err
+	}
+	switch fv.Kind {
+	case eval.VKNull:
+		return nil, nil
+	case eval.VKBool:
+		return fv.Bool, nil
+	case eval.VKInt:
+		return fv.Int, nil
+	case eval.VKString:
+		return fv.String, nil
+	case eval.VKList:
+		out := make([]any, len(fv.List))
+		for i, el := range fv.List {
+			x, err := evalValueToJSONAllowErr(t, ev, el)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = x
+		}
+		return out, nil
+	case eval.VKAttrs:
+		m := map[string]any{}
+		for sym, bind := range fv.Attrs.Binds {
+			name := ev.Intern.Lookup(sym)
+			var val *eval.Value
+			if bind.Thunk != nil {
+				val, err = ev.ForceValue(eval.Deferred(bind.Thunk))
+			} else {
+				val = bind.Value
+			}
+			if err != nil {
+				return nil, err
+			}
+			x, err := evalValueToJSONAllowErr(t, ev, val)
+			if err != nil {
+				return nil, err
+			}
+			m[name] = x
+		}
+		return m, nil
+	default:
+		return fv.DisplayString(ev, ev.Intern), nil
+	}
 }
 
 func valueToJSONMap(t *testing.T, ev *eval.Evaluator, v *eval.Value) map[string]any {

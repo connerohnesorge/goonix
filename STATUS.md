@@ -54,6 +54,8 @@ Import now proceeds past `mkDerivation`; next failure (separate): `all-packages.
 
 **Still to fix:** why real boot + `allPackages` forces `gccStdenv` with null `stdenv.cc` under `tryEval pkgs` while Nix does not (stage `prevStage` / cc-wrapper / laziness on the glibc assert path).
 
+**Probe (Nix 2.24.9 vs goonix):** `testdata/oracle/import_head_probe.nix` — `{ tryPkgs, hasOverrides, ccType, tryStdenv }`. Nix: `tryPkgs=true`, `hasOverrides=true`, `ccType="set"`, `tryStdenv=true`. Goonix: `tryPkgs=false` (6681), `pkgs.stdenv ? overrides` fails same stack (parser: `(pkgs.stdenv) ? overrides`, not `pkgs ? stdenv`). Minimal fixpoint + folder `// { __bootPackages }` preserve `overrides` and `cc` in isolation (`TestStdenvFolderMergePreservesOverrides`); failure is **real boot stdenv** on the assert `prevStage.${libc}` → `glibc` → `callPackage` path when `stdenvOverrides` does not replace `glibc` before the assert runs.
+
 ## Reverted (wrong semantics)
 
 - **`//` empty-LHS fallback** on infinite recursion — reverted.
