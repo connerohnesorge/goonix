@@ -54,11 +54,9 @@ func cmdDerivationShow(args []string) {
 		if err != nil {
 			fatal(err)
 		}
-		doc := ev.DerivationShowFromCache()
-		if extra, err := ev.DerivationShowClosure(path); err == nil {
-			for k, v := range extra.Derivations {
-				doc.Derivations[k] = v
-			}
+		doc, err := ev.DerivationShowClosure(path)
+		if err != nil {
+			fatal(err)
 		}
 		emitJSON(doc)
 		return
@@ -100,11 +98,9 @@ func cmdDrvDiff(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	goDoc := ev.DerivationShowFromCache()
-	if extra, err := ev.DerivationShowClosure(goPath); err == nil {
-		for k, v := range extra.Derivations {
-			goDoc.Derivations[k] = v
-		}
+	goDoc, err := ev.DerivationShowClosure(goPath)
+	if err != nil {
+		fatal(err)
 	}
 	report, err := drvdiff.Analyse(nixDoc, goDoc, drvshow.DrvKey(nixPath), drvshow.DrvKey(goPath))
 	if err != nil {
@@ -117,7 +113,7 @@ func evalFileDrvPath(path, nixPath string) (*eval.Evaluator, string, error) {
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
 	ev.SetCurFile(path)
 	if nixPath != "" {
-		for _, part := range strings.Split(nixPath, ":") {
+		for _, part := range strings.FieldsFunc(nixPath, func(r rune) bool { return r == ':' || r == ',' }) {
 			part = strings.TrimSpace(part)
 			if part != "" {
 				ev.NixPath.PrependEntries(part)

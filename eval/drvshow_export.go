@@ -5,19 +5,37 @@
 package eval
 
 import (
+	"fmt"
+
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 	"github.com/connerohnesorge/goonix/store/drvshow"
 )
 
-// RegisteredDerivation returns a derivation previously registered in the modulo cache.
+// RegisteredDerivation returns a derivation registered by derivationStrict.
 func (ev *Evaluator) RegisteredDerivation(drvPath string) (*gonixdrv.Derivation, bool) {
-	if ev == nil || ev.moduloCache == nil {
+	if ev == nil || drvPath == "" {
 		return nil, false
 	}
-	return ev.moduloCache.Lookup(drvPath)
+	if ev.strictDrvs != nil {
+		if d, ok := ev.strictDrvs[drvPath]; ok {
+			return d, true
+		}
+	}
+	if ev.moduloCache != nil {
+		return ev.moduloCache.Lookup(drvPath)
+	}
+	return nil, false
 }
 
-// ModuloCacheCount returns derivations registered during evaluation.
+// StrictDerivationCount is derivations recorded at the end of derivationStrict.
+func (ev *Evaluator) StrictDerivationCount() int {
+	if ev == nil || ev.strictDrvs == nil {
+		return 0
+	}
+	return len(ev.strictDrvs)
+}
+
+// ModuloCacheCount returns derivations registered during evaluation (includes modulo-only entries).
 func (ev *Evaluator) ModuloCacheCount() int {
 	if ev == nil || ev.moduloCache == nil {
 		return 0
@@ -25,29 +43,28 @@ func (ev *Evaluator) ModuloCacheCount() int {
 	return ev.moduloCache.Count()
 }
 
-// DerivationShowFromCache serialises every registered derivation (not only root-reachable).
+// DerivationShowFromCache serialises every derivationStrict registration (debug aid).
 func (ev *Evaluator) DerivationShowFromCache() drvshow.Document {
 	doc := drvshow.Document{
 		Derivations: make(map[string]drvshow.Entry),
 		Version:     4,
 	}
-	if ev == nil || ev.moduloCache == nil {
+	if ev == nil || ev.strictDrvs == nil {
 		return doc
 	}
-	ev.moduloCache.RangeRegistered(func(path string, d *gonixdrv.Derivation) bool {
+	for path, d := range ev.strictDrvs {
 		doc.Derivations[drvshow.DrvKey(path)] = drvshow.FromDerivation(d)
-		return true
-	})
+	}
 	return doc
 }
 
-// DerivationShowClosure builds nix-show JSON for the closure reachable from rootDrvPath.
+// DerivationShowClosure walks inputDrvs from rootDrvPath using only derivationStrict registrations.
 func (ev *Evaluator) DerivationShowClosure(rootDrvPath string) (drvshow.Document, error) {
 	load := func(path string) (*gonixdrv.Derivation, error) {
 		if d, ok := ev.RegisteredDerivation(path); ok {
 			return d, nil
 		}
-		return drvshow.LoadFromFile(path)
+		return nil, fmt.Errorf("derivation %q was not registered by derivationStrict (inputDrvs reference missing strict eval)", path)
 	}
 	return drvshow.BuildClosure(rootDrvPath, load)
 }

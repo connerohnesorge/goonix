@@ -25,6 +25,7 @@ import (
 	"github.com/connerohnesorge/goonix/data"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store"
+	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 )
 
 // EvalError reports evaluation failures with source context.
@@ -60,6 +61,7 @@ type Evaluator struct {
 	forceFrames []string
 
 	drvStrictByPath map[string]*DerivationValue
+	strictDrvs      map[string]*gonixdrv.Derivation // every derivationStrict result, keyed by drvPath
 	moduloCache     *store.ModuloCache
 }
 

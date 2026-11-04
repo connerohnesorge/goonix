@@ -66,9 +66,6 @@ func (ev *Evaluator) rememberStrictDerivation(drv *DerivationValue) {
 		ev.drvStrictByPath = make(map[string]*DerivationValue)
 	}
 	ev.drvStrictByPath[drv.DrvPath] = drv
-	if ev.moduloCache == nil {
-		ev.moduloCache = store.NewModuloCache()
-	}
 	gd, err := derivationValueToGoNix(drv)
 	if err != nil {
 		return
@@ -80,6 +77,13 @@ func (ev *Evaluator) rememberStrictDerivation(drv *DerivationValue) {
 			}
 			gd.Env[name] = path
 		}
+	}
+	if ev.strictDrvs == nil {
+		ev.strictDrvs = make(map[string]*gonixdrv.Derivation)
+	}
+	ev.strictDrvs[drv.DrvPath] = gd
+	if ev.moduloCache == nil {
+		ev.moduloCache = store.NewModuloCache()
 	}
 	ev.moduloCache.Register(drv.DrvPath, gd)
 }
@@ -121,10 +125,11 @@ func derivationValueToGoNix(drv *DerivationValue) (*gonixdrv.Derivation, error) 
 	for out := range outputs {
 		o := &gonixdrv.Output{Path: ""}
 		if parsedFixed != nil && out == "out" {
-			if hashAlgo == "" {
-				hashAlgo = "sha256"
+			if hashAlgo != "" {
+				o.HashAlgorithm = hashAlgo
+			} else {
+				o.HashAlgorithm = string(parsedFixed.Algo())
 			}
-			o.HashAlgorithm = hashAlgo
 			o.Hash = parsedFixed.Format(nixhash.Base16, false)
 		}
 		d.Outputs[out] = o

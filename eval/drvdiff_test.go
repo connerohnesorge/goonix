@@ -76,13 +76,11 @@ func TestDrvDiffStdenvNoCCProbeReportsDeepest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nix closure: %v", err)
 	}
-	goDoc := ev.DerivationShowFromCache()
-	if extra, err := ev.DerivationShowClosure(goPath); err == nil {
-		for k, v := range extra.Derivations {
-			goDoc.Derivations[k] = v
-		}
+	goDoc, err := ev.DerivationShowClosure(goPath)
+	if err != nil {
+		t.Fatalf("go closure: %v", err)
 	}
-	t.Logf("modulo cache entries=%d", ev.ModuloCacheCount())
+	t.Logf("strict derivations=%d modulo cache=%d", ev.StrictDerivationCount(), ev.ModuloCacheCount())
 	nixKey := drvshow.DrvKey(nixPath)
 	goKey := drvshow.DrvKey(goPath)
 	report, err := drvdiff.Analyse(nixDoc, goDoc, nixKey, goKey)
@@ -91,12 +89,12 @@ func TestDrvDiffStdenvNoCCProbeReportsDeepest(t *testing.T) {
 	}
 	t.Logf("closure sizes nix=%d go=%d", len(nixDoc.Derivations), len(goDoc.Derivations))
 	t.Log(drvdiff.FormatReport(report))
-	if len(report.MissingInGo) > 0 {
-		t.Fatalf("go closure missing %d derivations (modulo cache=%d); first missing: %q",
-			len(report.MissingInGo), ev.ModuloCacheCount(), report.MissingInGo[0])
+	if report.Deepest != nil {
+		t.Fatalf("deepest field mismatch:\n%s", drvdiff.FormatResult(report.Deepest))
 	}
-	if report.Deepest == nil {
-		t.Fatal("expected field-level deepest mismatch")
+	if len(report.MissingInGo) > 0 {
+		t.Fatalf("go closure missing %d derivations (strict=%d); first missing: %q",
+			len(report.MissingInGo), ev.StrictDerivationCount(), report.MissingInGo[0])
 	}
 }
 
