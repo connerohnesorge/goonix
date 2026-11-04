@@ -36,6 +36,7 @@ const (
 	VKAttrs
 	VKLambda
 	VKBuiltin
+	VKPartialBuiltin
 	VKDerivation
 	VKDeferred // unevaluated let binding / lazy reference
 )
@@ -56,6 +57,7 @@ type Value struct {
 
 	Lambda *LambdaValue
 	Builtin *Builtin
+	Partial *PartialBuiltin
 
 	// Derivation metadata (type = "derivation").
 	Derivation *DerivationValue

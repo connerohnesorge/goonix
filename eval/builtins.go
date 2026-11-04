@@ -84,17 +84,34 @@ func (ev *Evaluator) registerBuiltins() {
 	registerNullary("storeDir", builtinStoreDir)
 	registerNullary("nixVersion", builtinNixVersion)
 	register("compareVersions", builtinCompareVersions)
+	register("lessThan", builtinLessThan)
+	register("add", builtinAdd)
+	register("sub", builtinSub)
 	registerNullary("currentSystem", builtinCurrentSystem)
 	register("fetchurl", builtinFetchurl)
 	register("length", builtinLength)
 	register("isList", builtinIsList)
+	register("isInt", builtinIsInt)
+	register("isFloat", builtinIsFloat)
+	register("isString", builtinIsString)
+	register("isAttrs", builtinIsAttrs)
+	register("isPath", builtinIsPath)
+	register("typeOf", builtinTypeOf)
+	register("substring", builtinSubstring)
+	register("stringLength", builtinStringLength)
+	register("concatStringsSep", builtinConcatStringsSep)
+	register("parseDrvName", builtinParseDrvName)
+	register("unsafeDiscardStringContext", builtinUnsafeDiscardStringContext)
 	register("head", builtinHead)
 	register("tail", builtinTail)
 	register("elemAt", builtinElemAt)
 	register("concatLists", builtinConcatLists)
 	register("elem", builtinElem)
+	register("all", builtinAll)
+	register("any", builtinAny)
 	register("genList", builtinGenList)
 	register("mapAttrs", builtinMapAttrs)
+	register("attrValues", builtinAttrValues)
 }
 
 // BuiltinAttrSet returns an attribute set of all registered builtins.
@@ -209,18 +226,7 @@ func builtinMap(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 }
 
 func (ev *Evaluator) applyCall(f, arg *Value, pos parser.Pos) (*Value, error) {
-	ff, err := ev.forceValue(f)
-	if err != nil {
-		return nil, err
-	}
-	switch ff.Kind {
-	case VKLambda:
-		return ev.applyLambda(ff.Lambda, []*Value{arg}, pos)
-	case VKBuiltin:
-		return ff.Builtin.Fn(ev, pos, []*Value{arg})
-	default:
-		return nil, evalErr(pos, "not a function")
-	}
+	return ev.applyCallable(f, arg, pos)
 }
 
 func builtinFilter(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -285,22 +291,11 @@ func builtinFoldlPrime(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 }
 
 func (ev *Evaluator) applyCall2(f, a, b *Value, pos parser.Pos) (*Value, error) {
-	ff, err := ev.forceValue(f)
+	r, err := ev.applyCallable(f, a, pos)
 	if err != nil {
 		return nil, err
 	}
-	switch ff.Kind {
-	case VKLambda:
-		r, err := ev.applyLambda(ff.Lambda, []*Value{a}, pos)
-		if err != nil {
-			return nil, err
-		}
-		return ev.applyCall(r, b, pos)
-	case VKBuiltin:
-		return ff.Builtin.Fn(ev, pos, []*Value{a, b})
-	default:
-		return nil, evalErr(pos, "not a function")
-	}
+	return ev.applyCallable(r, b, pos)
 }
 
 func builtinAttrNames(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -652,7 +647,7 @@ func builtinMatch(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) 
 	}
 	m := r.FindStringSubmatch(s)
 	if m == nil {
-		return List(), nil
+		return Null(), nil
 	}
 	if len(m) > 0 {
 		m = m[1:]
@@ -1298,6 +1293,62 @@ func builtinElem(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	return Bool(false), nil
 }
 
+func builtinAll(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	pred, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	list, err := forceList(ev, pos, args[1])
+	if err != nil {
+		return nil, err
+	}
+	for _, el := range list {
+		r, err := ev.applyCall(pred, el, pos)
+		if err != nil {
+			return nil, err
+		}
+		b, err := ev.forceBool(ev, r, nil)
+		if err != nil {
+			return nil, err
+		}
+		if !b {
+			return Bool(false), nil
+		}
+	}
+	return Bool(true), nil
+}
+
+func builtinAny(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	pred, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	list, err := forceList(ev, pos, args[1])
+	if err != nil {
+		return nil, err
+	}
+	for _, el := range list {
+		r, err := ev.applyCall(pred, el, pos)
+		if err != nil {
+			return nil, err
+		}
+		b, err := ev.forceBool(ev, r, nil)
+		if err != nil {
+			return nil, err
+		}
+		if b {
+			return Bool(true), nil
+		}
+	}
+	return Bool(false), nil
+}
+
 func builtinGenList(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
@@ -1366,4 +1417,315 @@ func builtinMapAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 		out.Attrs.Binds[sym] = &AttrBinding{Value: rv}
 	}
 	return out, nil
+}
+
+func builtinAttrValues(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	set, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	if set.Kind != VKAttrs {
+		return nil, evalErr(pos, "attrValues expects attribute set")
+	}
+	var names []string
+	for sym := range set.Attrs.Binds {
+		names = append(names, ev.Intern.Lookup(sym))
+	}
+	stringsSort(names)
+	out := make([]*Value, 0, len(names))
+	for _, name := range names {
+		sym := ev.Intern.Intern(name)
+		b := set.Attrs.Binds[sym]
+		if b == nil {
+			continue
+		}
+		if b.Thunk != nil {
+			v, err := ev.forceThunk(b.Thunk)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		} else {
+			out = append(out, b.Value)
+		}
+	}
+	return List(out...), nil
+}
+
+func builtinIsInt(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	fv, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return Bool(fv.Kind == VKInt), nil
+}
+
+func builtinIsFloat(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	fv, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return Bool(fv.Kind == VKFloat), nil
+}
+
+func builtinLessThan(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	a, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	b, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if a.Kind == VKInt && b.Kind == VKInt {
+		return Bool(a.Int < b.Int), nil
+	}
+	if a.Kind == VKFloat || b.Kind == VKFloat || a.Kind == VKInt || b.Kind == VKInt {
+		var af, bf float64
+		if a.Kind == VKInt {
+			af = float64(a.Int)
+		} else {
+			af = a.Float
+		}
+		if b.Kind == VKInt {
+			bf = float64(b.Int)
+		} else {
+			bf = b.Float
+		}
+		return Bool(af < bf), nil
+	}
+	return Bool(false), nil
+}
+
+func builtinAdd(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	a, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	b, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if a.Kind == VKInt && b.Kind == VKInt {
+		return Int(a.Int + b.Int), nil
+	}
+	return nil, evalErr(pos, "add expects integers")
+}
+
+func builtinSub(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	a, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	b, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if a.Kind == VKInt && b.Kind == VKInt {
+		return Int(a.Int - b.Int), nil
+	}
+	return nil, evalErr(pos, "sub expects integers")
+}
+
+func builtinIsString(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	fv, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return Bool(fv.Kind == VKString), nil
+}
+
+func builtinIsAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	fv, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return Bool(fv.Kind == VKAttrs || fv.Kind == VKDerivation), nil
+}
+
+func builtinIsPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	fv, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return Bool(fv.Kind == VKPath), nil
+}
+
+func builtinTypeOf(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	fv, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	var t string
+	switch fv.Kind {
+	case VKNull:
+		t = "null"
+	case VKBool:
+		t = "bool"
+	case VKInt:
+		t = "int"
+	case VKFloat:
+		t = "float"
+	case VKString:
+		t = "string"
+	case VKPath:
+		t = "path"
+	case VKList:
+		t = "list"
+	case VKAttrs, VKDerivation:
+		t = "set"
+	case VKLambda:
+		t = "lambda"
+	case VKBuiltin, VKPartialBuiltin:
+		t = "function"
+	default:
+		t = "string"
+	}
+	return Str(t, pos), nil
+}
+
+func builtinSubstring(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 3); err != nil {
+		return nil, err
+	}
+	startV, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	lenV, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	s, err := ev.forceString(args[2])
+	if err != nil {
+		return nil, err
+	}
+	if startV.Kind != VKInt || lenV.Kind != VKInt {
+		return nil, evalErr(pos, "substring start and length must be integers")
+	}
+	start := int(startV.Int)
+	length := int(lenV.Int)
+	runes := []rune(s)
+	if start < 0 {
+		start = len(runes) + start
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start > len(runes) {
+		start = len(runes)
+	}
+	end := start + length
+	if end > len(runes) {
+		end = len(runes)
+	}
+	if end < start {
+		end = start
+	}
+	return Str(string(runes[start:end]), pos), nil
+}
+
+func builtinStringLength(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	s, err := ev.forceString(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return Int(int64(len([]byte(s)))), nil
+}
+
+func builtinConcatStringsSep(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	sep, err := ev.forceString(args[0])
+	if err != nil {
+		return nil, err
+	}
+	list, err := forceList(ev, pos, args[1])
+	if err != nil {
+		return nil, err
+	}
+	var parts []string
+	for _, el := range list {
+		s, err := ev.forceString(el)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, s)
+	}
+	return Str(strings.Join(parts, sep), pos), nil
+}
+
+func builtinParseDrvName(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	s, err := ev.forceString(args[0])
+	if err != nil {
+		return nil, err
+	}
+	base := s
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	if strings.HasSuffix(base, ".drv") {
+		base = strings.TrimSuffix(base, ".drv")
+	}
+	name := base
+	version := ""
+	if i := strings.LastIndex(base, "-"); i > 0 {
+		verPart := base[i+1:]
+		if len(verPart) > 0 && verPart[0] >= '0' && verPart[0] <= '9' {
+			name = base[:i]
+			version = verPart
+		}
+	}
+	out := Attrs(false)
+	out.Attrs.Binds[ev.Intern.Intern("name")] = &AttrBinding{Value: Str(name, pos)}
+	out.Attrs.Binds[ev.Intern.Intern("version")] = &AttrBinding{Value: Str(version, pos)}
+	return out, nil
+}
+
+func builtinUnsafeDiscardStringContext(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
+	}
+	s, err := ev.forceString(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return Str(s, pos), nil
 }

@@ -197,14 +197,52 @@ func lex(src []byte, path string) (*lexResult, error) {
 	}
 
 	lexIndentedString = func() error {
+		isIndentedClose := func(at int) bool {
+			if at+1 >= n || src[at] != '\'' || src[at+1] != '\'' {
+				return false
+			}
+			if at+2 >= n {
+				return true
+			}
+			switch src[at+2] {
+			case '\'', '$', '\\':
+				return false
+			default:
+				return true
+			}
+		}
+		skipIndentedEscape := func(at int) int {
+			// Caller verified src[at:at+2] == "''".
+			if at+2 < n && src[at+2] == '\'' {
+				return at + 3 // '''
+			}
+			if at+2 < n && src[at+2] == '$' {
+				if at+3 < n && src[at+3] == '{' {
+					return at + 4 // ''${
+				}
+				return at + 3 // ''$
+			}
+			if at+2 < n && src[at+2] == '\\' {
+				return at + 3 // ''\
+			}
+			return at + 2
+		}
 		for i < n {
 			start := i
-			if i+1 < n && src[i] == '\'' && src[i+1] == '\'' {
-				if err := pop(tokenIStringClose, start, start+2); err != nil {
+			if isIndentedClose(i) {
+				if err := pop(tokenIStringClose, i, i+2); err != nil {
 					return err
 				}
 				i += 2
 				return nil
+			}
+			if i+1 < n && src[i] == '\'' && src[i+1] == '\'' {
+				end := skipIndentedEscape(i)
+				if end > start {
+					emit(tokenText, start, end)
+				}
+				i = end
+				continue
 			}
 			if i+1 < n && src[i] == '$' && src[i+1] == '{' {
 				push(tokenInterpOpen, tokenInterpClose, i, i+2)
@@ -220,10 +258,6 @@ func lex(src []byte, path string) (*lexResult, error) {
 				}
 				if i+1 < n && src[i] == '$' && src[i+1] == '{' {
 					break
-				}
-				if i+2 < n && src[i] == '\'' && src[i+1] == '\'' && src[i+2] == '\\' {
-					i += 3
-					continue
 				}
 				if src[i] == '\'' && i+1 < n && src[i+1] != '\'' {
 					i++

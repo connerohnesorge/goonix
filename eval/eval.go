@@ -267,6 +267,9 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 	sym := ev.Intern.Intern(v.Name)
 	if bind, ok := env.lookup(sym); ok {
 		if bind.Thunk != nil {
+			if bind.Thunk.locked && bind.Thunk.memo != nil {
+				return bind.Thunk.memo, nil
+			}
 			return Deferred(bind.Thunk), nil
 		}
 		return bind.Value, nil
@@ -339,6 +342,13 @@ func (ev *Evaluator) evalPath(p *parser.Path, env *Env) (*Value, error) {
 func (ev *Evaluator) evalAttrSet(a *parser.AttrSet, env *Env, fromLet bool) (*Value, error) {
 	_ = fromLet
 	av := Attrs(a.Recursive)
+	if err := ev.populateAttrSet(a, env, av); err != nil {
+		return nil, err
+	}
+	return av, nil
+}
+
+func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) error {
 	bindEnv := env.extend()
 
 	for _, bind := range a.Binds {
@@ -346,19 +356,18 @@ func (ev *Evaluator) evalAttrSet(a *parser.AttrSet, env *Env, fromLet bool) (*Va
 	}
 
 	for _, inh := range a.Inherit {
-		if err := ev.bindAttrInherit(inh, bindEnv, av); err != nil {
-			return nil, err
+		if err := ev.bindAttrInherit(inh, bindEnv, av, a.Recursive); err != nil {
+			return err
 		}
 	}
 
 	if a.Recursive {
 		ev.syncRecTopLevel(av, bindEnv)
 	}
-
-	return av, nil
+	return nil
 }
 
-func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, env *Env, av *Value) error {
+func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, env *Env, av *Value, recursive bool) error {
 	for _, n := range inh.Names {
 		name := n.Name
 		if n.Expr != nil {
@@ -376,6 +385,9 @@ func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, env *Env, av *Value) er
 			expr = &parser.Var{P: inh.Pos, Name: name}
 		}
 		t := ev.newThunk(expr, env, inh.Pos)
+		if recursive {
+			env.bindThunk(sym, t)
+		}
 		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
 	}
 	return nil
@@ -515,19 +527,18 @@ func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
 	case VKLambda:
 		result := ff
 		for _, arg := range args {
-			r, err := ev.applyLambda(result.Lambda, []*Value{arg}, c.P)
+			r, err := ev.applyCallable(result, arg, c.P)
 			if err != nil {
 				return nil, err
 			}
-			fr, err := ev.forceValue(r)
+			result, err = ev.forceValue(r)
 			if err != nil {
 				return nil, err
 			}
-			result = fr
 		}
 		return result, nil
-	case VKBuiltin:
-		return ff.Builtin.Fn(ev, c.P, args)
+	case VKBuiltin, VKPartialBuiltin:
+		return ev.applyCallableN(ff, args, c.P)
 	default:
 		return nil, evalErr(c.P, "attempt to call non-function")
 	}
@@ -666,7 +677,7 @@ func (ev *Evaluator) evalHasAttr(h *parser.HasAttr, env *Env) (*Value, error) {
 	if fb.Kind != VKAttrs {
 		return Bool(false), nil
 	}
-	for _, seg := range h.Path {
+	for i, seg := range h.Path {
 		name := seg.Name
 		if seg.Expr != nil {
 			nv, err := ev.evalExpr(seg.Expr, env)
@@ -684,12 +695,18 @@ func (ev *Evaluator) evalHasAttr(h *parser.HasAttr, env *Env) (*Value, error) {
 		if !ok {
 			return Bool(false), nil
 		}
+		if i == len(h.Path)-1 {
+			return Bool(true), nil
+		}
 		if b.Thunk != nil {
 			fb, err = ev.forceThunk(b.Thunk)
 		} else {
 			fb = b.Value
 		}
 		if err != nil {
+			return Bool(false), nil
+		}
+		if fb.Kind != VKAttrs {
 			return Bool(false), nil
 		}
 	}
@@ -1000,6 +1017,33 @@ func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk
 	return &Thunk{eval: ev, expr: expr, env: env, pos: pos}
 }
 
+func (ev *Evaluator) evalWithSelfMerge(expr parser.Expr, env *Env, self *Thunk) (*Value, error) {
+	if bo, ok := expr.(*parser.BinaryOp); ok && bo.Op == "//" {
+		lv, err := ev.evalWithSelfMerge(bo.Left, env, self)
+		if err != nil {
+			return nil, err
+		}
+		self.memo = lv
+		rv, err := ev.evalExpr(bo.Right, env)
+		if err != nil {
+			return nil, err
+		}
+		return ev.updateAttrSet(lv, rv, bo.P)
+	}
+	if as, ok := expr.(*parser.AttrSet); ok {
+		av := Attrs(as.Recursive)
+		self.memo = av
+		if err := ev.populateAttrSet(as, env, av); err != nil {
+			return nil, err
+		}
+		return av, nil
+	}
+	if p, ok := expr.(*parser.Parens); ok {
+		return ev.evalWithSelfMerge(p.Expr, env, self)
+	}
+	return ev.evalExpr(expr, env)
+}
+
 func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 	if t == nil {
 		return Null(), nil
@@ -1008,18 +1052,20 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		return t.memo, nil
 	}
 	if t.locked {
-		if t.memo != nil {
-			return t.memo, nil
-		}
 		return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 	}
 	t.locked = true
-	v, err := t.eval.evalExpr(t.expr, t.env)
+	v, err := ev.evalWithSelfMerge(t.expr, t.env, t)
 	if err != nil {
 		t.locked = false
 		return nil, err
 	}
-	fv, err := t.eval.forceValue(v)
+	if v != nil && v.Kind == VKAttrs {
+		t.memo = v
+		t.locked = false
+		return v, nil
+	}
+	fv, err := ev.forceValue(v)
 	if err != nil {
 		t.locked = false
 		return nil, err
@@ -1034,6 +1080,9 @@ func (ev *Evaluator) forceValue(v *Value) (*Value, error) {
 		return Null(), nil
 	}
 	if v.Kind == VKDeferred && v.Deferred != nil {
+		if v.Deferred.locked && v.Deferred.memo == nil {
+			return nil, evalErr(v.Deferred.pos, "infinite recursion encountered at %s:%d:%d", v.Deferred.pos.File, v.Deferred.pos.Line, v.Deferred.pos.Col)
+		}
 		return ev.forceThunk(v.Deferred)
 	}
 	return v, nil
@@ -1168,7 +1217,43 @@ func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {
 			}
 		}
 		return true, nil
+	case VKAttrs:
+		if fb.Kind != VKAttrs {
+			return false, nil
+		}
+		if len(fa.Attrs.Binds) != len(fb.Attrs.Binds) {
+			return false, nil
+		}
+		for sym, bindA := range fa.Attrs.Binds {
+			bindB := fb.Attrs.Binds[sym]
+			if bindB == nil {
+				return false, nil
+			}
+			va, err := ev.attrBindingValue(bindA)
+			if err != nil {
+				return false, err
+			}
+			vb, err := ev.attrBindingValue(bindB)
+			if err != nil {
+				return false, err
+			}
+			eq, err := ev.equalValues(va, vb)
+			if err != nil || !eq {
+				return eq, err
+			}
+		}
+		return true, nil
 	default:
 		return false, nil
 	}
+}
+
+func (ev *Evaluator) attrBindingValue(b *AttrBinding) (*Value, error) {
+	if b == nil {
+		return Null(), nil
+	}
+	if b.Thunk != nil {
+		return ev.forceThunk(b.Thunk)
+	}
+	return b.Value, nil
 }
