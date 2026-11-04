@@ -57,26 +57,31 @@ func (e *Env) lookup(sym data.Symbol) (*AttrBinding, bool) {
 	return nil, false
 }
 
-func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool) {
+func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, error) {
 	if env == nil {
-		return nil, false
+		return nil, false, nil
 	}
 	if b, ok := env.Vars[sym]; ok {
-		return b, true
+		return b, true, nil
 	}
-	if b, ok := ev.lookupEnv(env.Parent, sym); ok {
-		return b, true
+	if b, ok, err := ev.lookupEnv(env.Parent, sym); err != nil {
+		return nil, false, err
+	} else if ok {
+		return b, true, nil
 	}
 	if env.With != nil {
 		w, err := ev.forceWHNF(env.With, parser.Pos{})
-		if err != nil || w == nil || w.Kind != VKAttrs {
-			return nil, false
+		if err != nil {
+			return nil, false, err
+		}
+		if w == nil || w.Kind != VKAttrs {
+			return nil, false, nil
 		}
 		if v, ok := getAttr(w, sym); ok {
-			return &AttrBinding{Value: v}, true
+			return &AttrBinding{Value: v}, true, nil
 		}
 	}
-	return nil, false
+	return nil, false, nil
 }
 
 func getAttr(v *Value, sym data.Symbol) (*Value, bool) {

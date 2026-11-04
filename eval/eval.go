@@ -15,7 +15,6 @@
 package eval
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -218,12 +217,9 @@ func (ev *Evaluator) evalExpr(expr parser.Expr, env *Env) (*Value, error) {
 		}
 		return ev.evalExpr(e.Body, env)
 	case *parser.With:
-		attrs, err := ev.evalExpr(e.Attrs, env)
-		if err != nil {
-			return nil, err
-		}
 		child := env.extend()
-		child.With = attrs
+		t := ev.newThunk(e.Attrs, env, e.P)
+		child.With = Deferred(t)
 		return ev.evalExpr(e.Body, child)
 	case *parser.Let:
 		return ev.evalLet(e, env)
@@ -260,7 +256,9 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 		return Null(), nil
 	}
 	sym := ev.Intern.Intern(v.Name)
-	if bind, ok := ev.lookupEnv(env, sym); ok {
+	if bind, ok, err := ev.lookupEnv(env, sym); err != nil {
+		return nil, err
+	} else if ok {
 		if bind.Thunk != nil {
 			return Deferred(bind.Thunk), nil
 		}
@@ -465,7 +463,9 @@ func (ev *Evaluator) evalInherit(inh parser.Inherit, env *Env, av *Value) error 
 				return evalErr(inh.Pos, "attribute %q missing", name)
 			}
 		} else {
-			if bind, ok := ev.lookupEnv(env, sym); ok {
+			if bind, ok, err := ev.lookupEnv(env, sym); err != nil {
+				return err
+			} else if ok {
 				if bind.Thunk != nil {
 					var err error
 					val, err = ev.forceThunk(bind.Thunk)
@@ -1099,33 +1099,16 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 	return Str(b.String(), c.P), nil
 }
 
-func isInfiniteRecursionErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	var ee *EvalError
-	if errors.As(err, &ee) {
-		return strings.Contains(ee.Msg, "infinite recursion")
-	}
-	return strings.Contains(err.Error(), "infinite recursion")
-}
-
 func (ev *Evaluator) evalOpUpdate(b *parser.BinaryOp, env *Env) (*Value, error) {
+	l, err := ev.evalAttrs(b.Left, env, b.P)
+	if err != nil {
+		return nil, err
+	}
 	r, err := ev.evalAttrs(b.Right, env, b.P)
 	if err != nil {
 		return nil, err
 	}
-	lv, err := ev.evalExpr(b.Left, env)
-	if err != nil {
-		return nil, err
-	}
-	fl, err := ev.forceAttrs(lv, b.P)
-	if err != nil && isInfiniteRecursionErr(err) {
-		fl = Attrs(false)
-	} else if err != nil {
-		return nil, err
-	}
-	return mergeAttrBindMaps(fl, r), nil
+	return mergeAttrBindMaps(l, r), nil
 }
 
 func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk {

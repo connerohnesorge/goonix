@@ -94,6 +94,11 @@ func TestBuiltinLazinessAudit(t *testing.T) {
 		{name: "rec forward", expr: `rec { a = 1; b = a; u = ` + throwVal + `; }.a`},
 		{name: "formals unused", expr: `let f = { a, b ? ` + throwVal + ` }: a; in f { a = 1; }`},
 		{name: "list append unused", expr: `[ 1 ] ++ (if false then [ ( ` + throwVal + ` ) ] else [ ])`},
+
+		// --- with / scope construction (xorg-shaped) ---
+		{name: "with self attrset literal deferred", expr: `((self: with self; { probe = 1; z = ` + throwVal + `; }) { }).probe`},
+		{name: "with self user fixpoint", expr: `let s = (self: with self; { a = f 1; f = x: x; z = ` + throwVal + `; }) s; in s.a`},
+		{name: "makeScope self merge callPackage", expr: `let f = self: with self; { got = callPackage 0; }; self = f self // { callPackage = x: x; z = ` + throwVal + `; }; in self.got`},
 	}
 
 	for _, tc := range cases {
