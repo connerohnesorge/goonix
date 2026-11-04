@@ -58,23 +58,27 @@ func (e *Env) lookup(sym data.Symbol) (*AttrBinding, bool) {
 }
 
 func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool) {
-	for cur := env; cur != nil; cur = cur.Parent {
-		if b, ok := cur.Vars[sym]; ok {
-			if ev.forceHideSym != 0 && sym == ev.forceHideSym && ev.inMergeLeft &&
-				b.Thunk != nil && ev.currentForce != nil && b.Thunk == ev.currentForce {
-				continue
-			}
-			return b, true
+	if env == nil {
+		return nil, false
+	}
+	if b, ok := env.Vars[sym]; ok {
+		if ev.forceHideSym != 0 && sym == ev.forceHideSym && ev.inMergeLeft &&
+			b.Thunk != nil && ev.currentForce != nil && b.Thunk == ev.currentForce {
+			return ev.lookupEnv(env.Parent, sym)
 		}
-		if cur.With != nil {
-			w, err := ev.forceValue(cur.With)
-			if err != nil {
-				return nil, false
-			}
-			if w != nil && w.Kind == VKAttrs {
-				if v, ok := getAttr(w, sym); ok {
-					return &AttrBinding{Value: v}, true
-				}
+		return b, true
+	}
+	if b, ok := ev.lookupEnv(env.Parent, sym); ok {
+		return b, true
+	}
+	if env.With != nil {
+		w, err := ev.forceValue(env.With)
+		if err != nil {
+			return nil, false
+		}
+		if w != nil && w.Kind == VKAttrs {
+			if v, ok := getAttr(w, sym); ok {
+				return &AttrBinding{Value: v}, true
 			}
 		}
 	}

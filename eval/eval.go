@@ -352,7 +352,7 @@ func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) err
 		return ev.bindAttrInherit(inh, env, bindEnv, av, a.Recursive)
 	}
 	applyBind := func(bind parser.Binding) {
-		ev.insertBinding(av, env, bindEnv, bind, a.Recursive)
+		ev.insertBinding(av, bindEnv, bind, a.Recursive)
 	}
 
 	if len(a.Members) > 0 {
@@ -401,12 +401,12 @@ func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, populateEnv, bindEnv *E
 			expr = &parser.Var{P: inh.Pos, Name: name}
 		}
 		lookupEnv := populateEnv
-		if inh.From != nil {
+		if inh.From != nil && recursive {
 			lookupEnv = bindEnv
 		}
 		t := ev.newThunk(expr, lookupEnv, inh.Pos)
 		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
-		if inh.From != nil {
+		if inh.From != nil && recursive {
 			bindEnv.bindThunk(sym, t)
 		}
 	}
@@ -1057,6 +1057,11 @@ func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk
 
 func (ev *Evaluator) evalWithSelfMerge(expr parser.Expr, env *Env, self *Thunk) (*Value, error) {
 	if bo, ok := expr.(*parser.BinaryOp); ok && bo.Op == "//" {
+		if self != nil {
+			if rhsAttr, ok := ev.selfMergeRHSAttrSet(bo.Right, env); ok {
+				self.pendingMergeRhs = rhsAttr
+			}
+		}
 		lv, err := func() (*Value, error) {
 			if self != nil && self.selfHideSym != 0 {
 				ev.inMergeLeft = true
@@ -1096,6 +1101,25 @@ func (ev *Evaluator) evalWithSelfMerge(expr parser.Expr, env *Env, self *Thunk) 
 	return ev.evalExpr(expr, env)
 }
 
+func (ev *Evaluator) selfMergeRHSAttrSet(expr parser.Expr, env *Env) (*Value, bool) {
+	for {
+		if p, ok := expr.(*parser.Parens); ok {
+			expr = p.Expr
+			continue
+		}
+		break
+	}
+	as, ok := expr.(*parser.AttrSet)
+	if !ok {
+		return nil, false
+	}
+	av := Attrs(as.Recursive)
+	if err := ev.populateAttrSet(as, env, av); err != nil {
+		return nil, false
+	}
+	return av, true
+}
+
 func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 	if t == nil {
 		return Null(), nil
@@ -1104,6 +1128,11 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		return t.memo, nil
 	}
 	if t.locked {
+		if t.memo != nil && t.pendingMergeRhs != nil {
+			if merged, err := ev.updateAttrSet(t.memo, t.pendingMergeRhs, t.pos); err == nil {
+				return merged, nil
+			}
+		}
 		if ev.thunkIsDirectSelfRef(t) {
 			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 		}

@@ -10,8 +10,8 @@ go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
-| #2 | Eval core / laziness | **partial** — parse.nix scoping fixed; hello blocked on xorg/callPackage path |
-| #13 | Ladder / goldens | **partial** — hello fails at `all-packages.nix:13754` |
+| #2 | Eval core / laziness | **partial** — `recurseIntoAttrs`/xorg line fixed; hello now fails later on `callPackage` scoping / `let self = lhs // rhs` |
+| #13 | Ladder / goldens | **partial** — import progresses past xorg; blocked ~`all-packages.nix:10294` |
 
 ## Scoping fix (parse.nix) — **done**
 
@@ -23,23 +23,33 @@ Additional lexical scoping: **non-recursive attrsets** no longer register `bindE
 
 Regression tests: `eval/parse_kernels_test.go`, `eval/merge_alias_test.go`, `eval/parsed_self_test.go`, `eval/inherit_scope_test.go`.
 
+## Callable / pkgs import fixes — **partial**
+
+- **`builtins.intersectAttrs`**: required for real `lib.callPackageWith` / `makeOverridable` (two-stage xorg `default.nix` imports).
+- **`inherit (lib) …` in non-recursive attrsets**: use `populateEnv` for `inherit (from)` thunks so `lib` resolves to the outer formal, not `pkgs.lib` via `with pkgs`.
+- **`lookupEnv`**: walk lexical `Vars` up the parent chain before `with` on each frame (formals beat `with` shadowing).
+- **`let self = lhs // rhs`**: stash RHS attr shells in `pendingMergeRhs`; while `self` is forcing, expose `lhs // rhs` keys (e.g. `callPackage` from `makeScopeWithSplicing'`) to re-entrant lookups; force `with` attrs to a value.
+
+**Fixed:** `all-packages.nix:13754` (`recurseIntoAttrs xorgPackages` — callee was blackhole `{ … }` from wrong `lib` lookup).
+
+**Next blocker:** full `pkgs` import / hello golden — `undefined variable "callPackage"` (e.g. `all-packages.nix:10294`, xorg `default.nix:374` in isolated tests). Likely remaining gap: `self` passed into `{ … }: self: with self` package functions during `let self = f self // { callPackage = … }` still missing merged RHS in some paths.
+
 ## Hello golden (gate)
 
 - **Target:** `/nix/store/gciipqhqkdlqqn803zd4a389v86ran45-hello-2.12.1.drv`
-- **goonix:** fails at `all-packages.nix:13754` (`recurseIntoAttrs xorgPackages` — `attempt to call non-function`). Same failure on pre-scoping commit when importing full `pkgs`; next focus: `callPackageWith` / `makeOverridable` / `builtins.functionArgs` for `self:` package functions (xorg `default.nix`).
+- **goonix:** past xorg `recurseIntoAttrs`; fails on `callPackage` while evaluating nixpkgs fixpoint / xorg generated package set.
 
 ## Tests
 
 - `bash scripts/check-cgo.sh`: **green**
 - `go test ./lang/...`: **green**
-- `go test ./eval/...`: **red** — `TestPkgsXorgIsAttrset`, `TestRecurseIntoAttrsTypeInPkgs` (full `pkgs` import)
-- `go test ./ladder/...`: **red** — hello golden (xorg path above)
-- Parse / platform tests (`TestMkSystemFromStringX8664Linux`, kernel alias tests): **green**
+- `go test ./eval/...`: **mostly green**; red: full `pkgs` import / xorg integration tests (`TestImportNixpkgsOnly`, `TestPkgsXorgIsAttrset`, `TestHello…` via ladder)
+- Parse / platform / callPackage unit tests (`TestMkSystemFromStringX8664Linux`, kernel alias, `TestCallPackageWithTwoStageImport`, merge/inherit scope): **green**
 
 ## Ladder rungs
 
 | Rung | Status |
 |------|--------|
-| hello `.drvPath` | **blocked** (xorg / callPackage) |
+| hello `.drvPath` | **blocked** (`callPackage` / scope merge) |
 | dependent / toFile / stdenvNoCC / curl | **not started** |
 | network `nix-build` rungs | **skipped** |

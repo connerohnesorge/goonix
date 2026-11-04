@@ -118,6 +118,9 @@ type Thunk struct {
 
 	memo   *Value
 	locked bool // blackhole marker while forcing
+
+	// pendingMergeRhs holds the right-hand attrset of `let self = lhs // rhs` while lhs is evaluated.
+	pendingMergeRhs *Value
 }
 
 func (v *Value) force(e *Evaluator) (*Value, error) {

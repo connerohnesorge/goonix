@@ -56,6 +56,7 @@ func (ev *Evaluator) registerBuiltins() {
 	register("getAttr", builtinGetAttr)
 	register("hasAttr", builtinHasAttr)
 	register("removeAttrs", builtinRemoveAttrs)
+	register("intersectAttrs", builtinIntersectAttrs)
 	register("listToAttrs", builtinListToAttrs)
 	register("seq", builtinSeq)
 	register("deepSeq", builtinDeepSeq)
@@ -499,6 +500,30 @@ removeLoop:
 			}
 		}
 		out.Attrs.Binds[sym] = bind
+	}
+	return out, nil
+}
+
+func builtinIntersectAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	left, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	right, err := ev.forceValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	if left.Kind != VKAttrs || right.Kind != VKAttrs {
+		return nil, evalErr(pos, "intersectAttrs expects two attribute sets")
+	}
+	out := Attrs(false)
+	for sym := range left.Attrs.Binds {
+		if bind, ok := right.Attrs.Binds[sym]; ok {
+			out.Attrs.Binds[sym] = bind
+		}
 	}
 	return out, nil
 }
