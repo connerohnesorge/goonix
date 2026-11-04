@@ -40,6 +40,15 @@ func (ev *Evaluator) applyCallable(f *Value, arg *Value, pos parser.Pos) (*Value
 	if err != nil {
 		return nil, err
 	}
+	if !ev.isCallableValue(fv, pos) && fv != nil && fv.Kind == VKDeferred {
+		fv, err = ev.forceValue(fv)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !ev.isCallableValue(fv, pos) {
+		return nil, evalErr(pos, "attempt to call non-function")
+	}
 	switch fv.Kind {
 	case VKLambda:
 		return ev.applyLambda(fv.Lambda, []*Value{arg}, pos)

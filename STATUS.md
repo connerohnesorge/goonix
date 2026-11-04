@@ -10,38 +10,36 @@ go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
-| #2 | Eval core / laziness | **partial** — Nix-aligned `//` / fixpoint / `with`; past callPackage ping-pong; hello reaches `stdenv/cross` |
-| #13 | Ladder / goldens | **partial** — same blocker as full `pkgs` import |
+| #2 | Eval core / laziness | **partial** — Nix WHNF select/`?`; top-level `checked` chain; stdenv cross still blocked |
+| #13 | Ladder / goldens | **partial** — same stdenv cross blocker |
 
-## Eval laziness refactor (Nix 2.24.9 model)
+## Eval laziness (Nix 2.24.9)
 
-Removed stacked flags (`fixPublish`, `pendingMergeRhs`, `selfHideSym`, `publishUnderConstruction`, merge-left hide, partial-memo special cases).
+- **`//`**: `evalOpUpdate` + `mergeAttrBindMaps` (no deep force of attr values).
+- **Select / `?`**: `forceWHNF` (thunk peel only, stop on locked fixpoint thunks); **final path segment is not WHNF-forced** (lazy attr binding).
+- **`isList` / `forceList`**: two-step `forceValue` to WHNF list (not select-style deep walk).
+- **Calls**: `evalCall` uses `forceValueDeep` on the function; **`applyCallable` does a second `forceValue` when the head is still deferred** so curried `throwIfNot … lib.foldr …` chains work with lazy select results.
+- **Fixpoint**: blackhole + **`shouldPrimeUpdateLHS` RHS-first `//` priming** remains **load-bearing** (`TestFixpointIntersectAttrsSeesPublishedBinds`).
+- **Removed (oracle-green without them)**: `primeUpdateRhsMemo`, `publishAttrSetIfForcing`.
 
-Core behaviour now:
-
-- **`//`**: `evalAttrs` both sides, merge binding maps without forcing values (`evalOpUpdate` + `mergeAttrBindMaps`).
-- **Fixpoint force**: blackhole on re-entrant thunk force; `primeUpdateRhsMemo` for top-level `f x // rhs`; optional RHS-first priming when LHS is the fixpoint var; publish attr names into fixpoint memo while forcing overlay attrset literals.
-- **`with`**: force `with` attrs only on fallback lookup (lexical bindings win).
-- **Select / WHNF**: `forceValueDeep` (bounded) for attr navigation; self-referential defer detection in `forceThunk`.
-
-Regression oracles: `eval/pending_merge_regression_test.go`, `eval/with_self_callpackage_test.go`, `eval/fixpoint_sibling_test.go`, `eval/formal_lib_test.go`, makeScope/xorg tests (unit-level **green** where they do not import full `pkgs`).
+Regression tests: `eval/whnf_regression_test.go` (`TestLibInitBootStagesCrossShape`), `eval/whnf_internal_test.go`, `eval/checked_expr_test.go`, fixpoint/with/callPackage oracles.
 
 ## Hello golden (gate)
 
 - **Target:** `/nix/store/gciipqhqkdlqqn803zd4a389v86ran45-hello-2.12.1.drv`
-- **goonix:** evaluates `<nixpkgs>` through lib, modules, and top-level `checked` overlays; fails at `pkgs/stdenv/cross/default.nix:23` (`value is not an attribute set` on `lib.init bootStages` path).
+- **goonix:** evaluates through lib, modules, and `checked` overlays; fails at `pkgs/stdenv/cross/default.nix:23` (`value is not an attribute set` on `lib.init bootStages` path).
 
 ## Tests
 
 - `bash scripts/check-cgo.sh`: **green**
 - `go test ./lang/...`: **green**
-- `go test ./eval/...`: **green** except 8 integration tests that import full/minimal `pkgs` / xorg (stdenv cross / scope splicing)
-- `go test ./ladder/... -run TestHelloDrvPathMatchesGolden`: **red** (same stdenv cross site)
+- `go test ./eval/...`: unit + oracle **green**; full/minimal `pkgs` import and xorg/scope integration **red** at stdenv cross (same site)
+- `go test ./ladder/... -run TestHelloDrvPathMatchesGolden`: **red** (stdenv cross)
 
 ## Ladder rungs
 
 | Rung | Status |
 |------|--------|
-| hello `.drvPath` | **blocked** (stdenv cross / full pkgs boot) |
+| hello `.drvPath` | **blocked** (stdenv cross / `lib.init bootStages`) |
 | dependent / toFile / stdenvNoCC / curl | **not started** |
 | network `nix-build` rungs | **skipped** |

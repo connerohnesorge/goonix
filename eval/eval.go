@@ -336,20 +336,7 @@ func (ev *Evaluator) evalAttrSet(a *parser.AttrSet, env *Env, fromLet bool) (*Va
 	if err := ev.populateAttrSet(a, env, av); err != nil {
 		return nil, err
 	}
-	ev.publishAttrSetIfForcing(av)
 	return av, nil
-}
-
-// publishAttrSetIfForcing merges av's bindings into the fixpoint thunk currently
-// being forced, so nested lookups (with self, inherit (self.customisation), …)
-// see the attr names before the force completes.
-func (ev *Evaluator) publishAttrSetIfForcing(av *Value) {
-	t := ev.currentForce
-	// Only extend fixpoint overlays (memo primed by // RHS or fix') during blackhole force.
-	if t == nil || !t.locked || t.memo == nil || av == nil || av.Kind != VKAttrs {
-		return
-	}
-	t.memo = mergeAttrBindMaps(t.memo, av)
 }
 
 func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) error {
@@ -563,9 +550,12 @@ func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	ff, err := ev.forceValue(fun)
+	ff, err := ev.forceValueDeep(fun)
 	if err != nil {
 		return nil, err
+	}
+	if !ev.isCallableValue(ff, c.P) {
+		return nil, evalErr(c.P, "attempt to call non-function")
 	}
 	args := make([]*Value, len(c.Args))
 	for i, a := range c.Args {
@@ -656,11 +646,11 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 	if err != nil {
 		return nil, err
 	}
-	fb, err := ev.forceValueDeep(base)
+	fb, err := ev.forceWHNF(base, s.P)
 	if err != nil {
 		return nil, err
 	}
-	for _, seg := range s.Path {
+	for i, seg := range s.Path {
 		name := seg.Name
 		if seg.Expr != nil {
 			nv, err := ev.evalExpr(seg.Expr, env)
@@ -685,11 +675,19 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 				}
 				return nil, evalErr(s.P, "attribute %q missing", name)
 			}
+			if i == len(s.Path)-1 {
+				if b.Thunk != nil {
+					fb = Deferred(b.Thunk)
+				} else {
+					fb = b.Value
+				}
+				break
+			}
 			var next *Value
 			if b.Thunk != nil {
-				next, err = ev.forceValueDeep(Deferred(b.Thunk))
+				next, err = ev.forceWHNF(Deferred(b.Thunk), s.P)
 			} else {
-				next, err = ev.forceValueDeep(b.Value)
+				next, err = ev.forceWHNF(b.Value, s.P)
 			}
 			if err != nil {
 				return nil, err
@@ -713,7 +711,7 @@ func (ev *Evaluator) evalHasAttr(h *parser.HasAttr, env *Env) (*Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	fb, err := ev.forceValue(base)
+	fb, err := ev.forceWHNF(base, h.P)
 	if err != nil {
 		return nil, err
 	}
@@ -742,9 +740,9 @@ func (ev *Evaluator) evalHasAttr(h *parser.HasAttr, env *Env) (*Value, error) {
 			return Bool(true), nil
 		}
 		if b.Thunk != nil {
-			fb, err = ev.forceValueDeep(Deferred(b.Thunk))
+			fb, err = ev.forceWHNF(Deferred(b.Thunk), h.P)
 		} else {
-			fb, err = ev.forceValueDeep(b.Value)
+			fb, err = ev.forceWHNF(b.Value, h.P)
 		}
 		if err != nil {
 			return Bool(false), nil
@@ -1104,29 +1102,6 @@ func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk
 	return &Thunk{eval: ev, expr: expr, env: env, pos: pos}
 }
 
-func (ev *Evaluator) primeUpdateRhsMemo(t *Thunk) {
-	if t == nil || t.memo != nil {
-		return
-	}
-	expr := t.expr
-	for {
-		p, ok := expr.(*parser.Parens)
-		if !ok {
-			break
-		}
-		expr = p.Expr
-	}
-	bo, ok := expr.(*parser.BinaryOp)
-	if !ok || bo.Op != "//" {
-		return
-	}
-	rhs, err := ev.evalAttrs(bo.Right, t.env, bo.P)
-	if err != nil {
-		return
-	}
-	t.memo = rhs
-}
-
 func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 	if t == nil {
 		return Null(), nil
@@ -1143,7 +1118,6 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 	t.locked = true
 	prev := ev.currentForce
 	ev.currentForce = t
-	ev.primeUpdateRhsMemo(t)
 	defer func() {
 		ev.currentForce = prev
 		t.locked = false
@@ -1182,6 +1156,7 @@ func (ev *Evaluator) forceValue(v *Value) (*Value, error) {
 	return v, nil
 }
 
+// forceValueDeep peels deferred thunks (for call targets); does not force inside aggregates.
 func (ev *Evaluator) forceValueDeep(v *Value) (*Value, error) {
 	const maxSteps = 64
 	seen := make(map[*Thunk]struct{})

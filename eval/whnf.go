@@ -8,6 +8,30 @@ import (
 	"github.com/connerohnesorge/goonix/parser"
 )
 
+// forceWHNF forces v to weak head normal form for select / hasAttr (Nix: peel
+// thunks only; never force inside aggregates). Stops on locked fixpoint thunks.
+func (ev *Evaluator) forceWHNF(v *Value, pos parser.Pos) (*Value, error) {
+	_ = pos
+	const maxSteps = 64
+	seen := make(map[*Thunk]struct{})
+	for step := 0; step < maxSteps && v != nil && v.Kind == VKDeferred && v.Deferred != nil; step++ {
+		t := v.Deferred
+		if t.locked {
+			return v, nil
+		}
+		if _, ok := seen[t]; ok {
+			return v, nil
+		}
+		seen[t] = struct{}{}
+		var err error
+		v, err = ev.forceValue(v)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return v, nil
+}
+
 // forceAttrs is WHNF coercion to an attribute set (Nix forceAttrs).
 func (ev *Evaluator) forceAttrs(v *Value, pos parser.Pos) (*Value, error) {
 	fv, err := ev.forceValue(v)
