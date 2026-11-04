@@ -102,7 +102,18 @@ func ParseFixedOutputHash(envHash, envAlgo, envMode string) (base16 string, drvA
 	}
 	hw, err := ParseHash(envHash)
 	if err != nil {
-		return "", "", err
+		// Nix keeps legacy nix-base32 in env when outputHashAlgo is explicit (fetchurl in nixpkgs).
+		if envAlgo == "" {
+			return "", "", err
+		}
+		algo, aerr := nixhash.ParseAlgorithm(envAlgo)
+		if aerr != nil {
+			return "", "", err
+		}
+		hw, err = nixhash.ParseAny(envHash, &algo)
+		if err != nil {
+			return "", "", err
+		}
 	}
 	base16 = hw.Hash.Format(nixhash.Base16, false)
 	algo := envAlgo

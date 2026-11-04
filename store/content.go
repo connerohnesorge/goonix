@@ -62,10 +62,14 @@ func (c Config) StorePathForFilesystemPath(sourcePath, name string) (string, err
 	if err != nil {
 		return "", err
 	}
-	digest, err := nixbase32.DecodeString(b32)
+	raw, err := nixbase32.DecodeString(b32)
 	if err != nil {
 		return "", fmt.Errorf("decode path hash: %w", err)
 	}
+	base16 := hex.EncodeToString(raw)
+	storeDir := c.storeDir()
+	storeHash := hashStringsModulo("source", "sha256", base16, storeDir, name)
+	digest := nixhash.CompressHash(storeHash, storepath.PathHashSize)
 	return c.MakeStorePath(name, digest)
 }
 
