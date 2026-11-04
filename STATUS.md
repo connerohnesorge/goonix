@@ -28,11 +28,21 @@ No special cases for `self = f self // rhs` or blackhole peeking.
 
 **Root cause:** Nix’s `derivation` is **not** `builtins.derivationStrict`. It is `primops/derivation.nix`, which returns `drvAttrs // … // { drvPath, outPath, type, … }` so argument attributes (`shell`, `initialPath`, …) stay on the stdenv attrset. goonix had `builtins.derivation` identical to `derivationStrict`, whose result only has `type`, `name`, `system`, `builder`, `drvPath`, `outPath`, `args`, and `env`. After `derivation { inherit shell; … } // { mkDerivation; … }`, `shell` was absent, so `make-derivation.nix:426` (`attrs.realBuilder or stdenv.shell`, parsed as **SelectOr**, not cursed `or`) failed on the default branch.
 
-**Fix (eval/):** `builtinDerivation` calls `derivationStrict` then `mergeAttrBindMaps(drvAttrs, strict)` (rhs wins on `drvPath` / `type` like Nix). Test: `TestDerivationExposesEnvAttrsAtTopLevel`.
+**Fix (eval/):** `builtins.derivation` follows Nix `primops/derivation.nix`: lazy `drvAttrs`, per-output thunks, `all`, head `//` overlay (`derivation_builtin.go` / `buildNixDerivation`). Tests: `TestDerivationMatchesNixOutStructure`, `TestDerivationExposesEnvAttrsAtTopLevel` (shell).
 
-Not caused by lazy `map`, `genList` / `imap1` booter, or `evalOrFallback`.
+Import now proceeds past `mkDerivation`; next failure (separate): `all-packages.nix:6681` (`stdenv.cc.isGNU`).
 
-Import now proceeds past `mkDerivation`; next failure (separate): `all-packages.nix:6681` (`stdenv.cc.isGNU` — WHNF / override typing).
+## Blocker: `all-packages.nix:6681` (`stdenv.cc.isGNU`)
+
+**Symptom:** `GOONIX_DEBUG_TYPE=1` → at `6681:8`, want attribute set, got **`kind=null`** (`stdenv.cc` is null when `gccStdenv` runs).
+
+**Oracle:** `builtins.typeOf (import nixpkgs {…}).stdenv.cc` → `"set"` (Nix 2.24.9).
+
+**Force stack (import / `typeOf pkgs`):** Linux boot `dfold` → stage `assert isBuiltByNixpkgsCompiler prevStage.glibc` → forces `pkgs.glibc` → `callPackage … { stdenv = gccStdenv; }` (`all-packages.nix:10294`) → `makeOverridable` (`customisation.nix:165`) → **`gccStdenv` at `:6681`** (`if stdenv.cc.isGNU`) with **`stdenv.cc` null** in goonix.
+
+**Not the cause:** lazy `map`/`genList` overlay at 727 (fixed); `tryEval` deep-forcing (fixed — now WHNF-only like Nix).
+
+**Still to fix:** why boot `pkgs.stdenv.cc` is null when `gccStdenv` is forced (stage stdenv / `prevStage.gcc` / cc-wrapper shape), or match Nix laziness so `glibc`/`gccStdenv` are not forced on that boot path yet.
 
 ## Reverted (wrong semantics)
 
@@ -41,7 +51,7 @@ Import now proceeds past `mkDerivation`; next failure (separate): `all-packages.
 
 ## Laziness (current)
 
-- Lazy list elements, lazy call arguments, lazy `zipAttrsWith`, lazy **`map`** / **`concatMap`** elements; **eager `genList`**.
+- Lazy list elements, lazy call arguments, lazy `zipAttrsWith`, lazy **`map`** / **`concatMap`** / **`genList`** elements (`deferredApplyCall`); **`tryEval`** WHNF-only (not `deepSeq`).
 - **`with`**: deferred attribute-set thunk; `lookupEnv` propagates `forceWHNF` errors.
 - **`TestBuiltinLazinessAudit`**: builtins + forms + xorg-shaped probes + extends/mapNames overlay.
 

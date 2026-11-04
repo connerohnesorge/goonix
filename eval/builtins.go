@@ -643,7 +643,7 @@ func builtinTryEval(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	v, err := ev.deepForceValue(args[0])
+	v, err := ev.forceValue(args[0])
 	out := Attrs(false)
 	successSym := ev.Intern.Intern("success")
 	valueSym := ev.Intern.Intern("value")
@@ -990,13 +990,7 @@ func builtinDerivation(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 	if drvAttrs.Kind != VKAttrs {
 		return nil, evalErr(pos, "derivation expects attribute set")
 	}
-	strict, err := builtinDerivationStrict(ev, pos, []*Value{drvAttrs})
-	if err != nil {
-		return nil, err
-	}
-	// Nix `derivation` (primops/derivation.nix) is not `derivationStrict`: argument
-	// attributes such as stdenv's `shell` remain on the result attrset.
-	return mergeAttrBindMaps(drvAttrs, strict), nil
+	return ev.buildNixDerivation(drvAttrs, pos)
 }
 
 func (ev *Evaluator) attrsToDerivation(attrs *Value) (*DerivationValue, error) {
@@ -1105,6 +1099,9 @@ func (ev *Evaluator) derivationValueToAttrs(drv *DerivationValue) *Value {
 	set("builder", Str(drv.Builder, parser.Pos{}))
 	set("drvPath", Path(drv.DrvPath))
 	if drv.OutPaths != nil {
+		for outName, p := range drv.OutPaths {
+			set(outName, Path(p))
+		}
 		if p, ok := drv.OutPaths["out"]; ok {
 			set("outPath", Path(p))
 		}
@@ -1527,11 +1524,7 @@ func builtinGenList(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	}
 	out := make([]*Value, n.Int)
 	for i := int64(0); i < n.Int; i++ {
-		r, err := ev.applyCall(f, Int(i), pos)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = r
+		out[i] = ev.deferredApplyCall(f, Int(i), pos)
 	}
 	return List(out...), nil
 }
