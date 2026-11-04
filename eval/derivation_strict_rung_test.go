@@ -55,7 +55,6 @@ func TestDerivationStrictRung08ToFile(t *testing.T) {
 }
 
 func TestDerivationStrictRung09InputDrv(t *testing.T) {
-	t.Skip("inputDrvs: replacement must be pathDerivationModulo masked hash (go-nix CalculateDrvReplacement uses unmasked ATerm)")
 	assertDerivationStrictRung(t, `let dep = builtins.derivationStrict { name = "rung09-dep"; system = "x86_64-linux"; builder = "/bin/sh"; }; in {
 	  name = "rung09-top";
 	  system = "x86_64-linux";

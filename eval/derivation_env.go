@@ -49,18 +49,10 @@ func (c *derivationInputCollector) mergeValueContext(v *Value) {
 	if v == nil {
 		return
 	}
-	switch v.Kind {
-	case VKString:
-		if v.String != "" {
-			c.addSrc(v.String)
-		}
-	case VKPath:
-		if v.Path != "" {
-			c.addSrc(v.Path)
-		}
-	}
+	hasDrvCtx := false
 	for _, elem := range v.Ctx {
 		if elem.DrvPath != "" {
+			hasDrvCtx = true
 			out := elem.Output
 			if out == "" {
 				out = "out"
@@ -69,6 +61,19 @@ func (c *derivationInputCollector) mergeValueContext(v *Value) {
 		}
 		if elem.StorePath != "" {
 			c.addSrc(elem.StorePath)
+		}
+	}
+	if hasDrvCtx {
+		return
+	}
+	switch v.Kind {
+	case VKString:
+		if v.String != "" {
+			c.addSrc(v.String)
+		}
+	case VKPath:
+		if v.Path != "" {
+			c.addSrc(v.Path)
 		}
 	}
 }
@@ -201,6 +206,7 @@ func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *de
 		}
 		if drvPath != "" {
 			col.addDrv(drvPath, outName)
+			return outPath, nil
 		}
 		col.addSrc(outPath)
 		return outPath, nil

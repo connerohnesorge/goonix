@@ -24,6 +24,7 @@ import (
 
 	"github.com/connerohnesorge/goonix/data"
 	"github.com/connerohnesorge/goonix/parser"
+	"github.com/connerohnesorge/goonix/store"
 )
 
 // EvalError reports evaluation failures with source context.
@@ -59,6 +60,7 @@ type Evaluator struct {
 	forceFrames []string
 
 	drvStrictByPath map[string]*DerivationValue
+	moduloCache     *store.ModuloCache
 }
 
 type storeConfig struct {

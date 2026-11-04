@@ -27,14 +27,16 @@ func computeDerivationPaths(ev *Evaluator, cfg store.Config, drv *DerivationValu
 	if err != nil {
 		return "", nil, err
 	}
-	var replacements map[string]string
-	if ev != nil {
-		replacements, err = ev.inputDrvReplacements(d, nil)
-		if err != nil {
-			return "", nil, err
-		}
+	cache := ev.moduloCache
+	if cache == nil {
+		cache = store.NewModuloCache()
+		ev.moduloCache = cache
 	}
-	outPaths, err = d.CalculateOutputPaths(replacements)
+	if isFixedOutputDerivation(d) {
+		outPaths, err = d.CalculateOutputPaths(nil)
+	} else {
+		outPaths, err = store.OutputPathsModulo(cfg, d, cache)
+	}
 	if err != nil {
 		return "", nil, err
 	}
@@ -52,6 +54,7 @@ func computeDerivationPaths(ev *Evaluator, cfg store.Config, drv *DerivationValu
 	for k, v := range outPaths {
 		outPaths[k] = cfg.RewriteDefaultStoreDir(v)
 	}
+	cache.Register(drvPath, d)
 	return drvPath, outPaths, nil
 }
 
@@ -63,48 +66,22 @@ func (ev *Evaluator) rememberStrictDerivation(drv *DerivationValue) {
 		ev.drvStrictByPath = make(map[string]*DerivationValue)
 	}
 	ev.drvStrictByPath[drv.DrvPath] = drv
-}
-
-func (ev *Evaluator) inputDrvReplacements(d *gonixdrv.Derivation, memo map[string]string) (map[string]string, error) {
-	if memo == nil {
-		memo = make(map[string]string)
+	if ev.moduloCache == nil {
+		ev.moduloCache = store.NewModuloCache()
 	}
-	out := make(map[string]string, len(d.InputDerivations))
-	for drvPath := range d.InputDerivations {
-		if rep, ok := memo[drvPath]; ok {
-			out[drvPath] = rep
-			continue
-		}
-		child, ok := ev.drvStrictByPath[drvPath]
-		if !ok {
-			return nil, fmt.Errorf("unknown input derivation %q (not in strict cache)", drvPath)
-		}
-		childD, err := derivationValueToGoNix(child)
-		if err != nil {
-			return nil, err
-		}
-		stripDerivationOutputPaths(childD)
-		childSubs, err := ev.inputDrvReplacements(childD, memo)
-		if err != nil {
-			return nil, err
-		}
-		rep, err := childD.CalculateDrvReplacement(childSubs)
-		if err != nil {
-			return nil, err
-		}
-		memo[drvPath] = rep
-		out[drvPath] = rep
+	gd, err := derivationValueToGoNix(drv)
+	if err != nil {
+		return
 	}
-	return out, nil
-}
-
-func stripDerivationOutputPaths(d *gonixdrv.Derivation) {
-	for _, o := range d.Outputs {
-		o.Path = ""
+	if drv.OutPaths != nil {
+		for name, path := range drv.OutPaths {
+			if o, ok := gd.Outputs[name]; ok {
+				o.Path = path
+			}
+			gd.Env[name] = path
+		}
 	}
-	for name := range d.Outputs {
-		d.Env[name] = ""
-	}
+	ev.moduloCache.Register(drv.DrvPath, gd)
 }
 
 func derivationValueToGoNix(drv *DerivationValue) (*gonixdrv.Derivation, error) {
@@ -158,6 +135,18 @@ func derivationValueToGoNix(drv *DerivationValue) (*gonixdrv.Derivation, error) 
 		}
 	}
 	return d, nil
+}
+
+func isFixedOutputDerivation(d *gonixdrv.Derivation) bool {
+	if len(d.Outputs) == 0 {
+		return false
+	}
+	for _, o := range d.Outputs {
+		if o.HashAlgorithm == "" || o.Hash == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // WriteDerivation serialises a derivation value to a .drv file at its drvPath.

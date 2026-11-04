@@ -6,14 +6,15 @@ Oracle: **Nix 2.24.9**, nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. 
 bash scripts/check-cgo.sh
 go test ./eval/... -run TestBuiltinLazinessAudit -count=1
 go test ./eval/... ./lang/... -count=1
-go test ./eval/... -run 'TestBootStagesTakeBisectMatchesNix|TestImportNixpkgsOnly|TestDerivationStrictRung|TestDerivationLazyStrictUntilDrvPath' -count=1
+go test ./eval/... -run 'TestBootStagesTakeBisectMatchesNix|TestImportNixpkgsOnly|TestDerivationStrictRung|TestDerivationLazyStrictUntilDrvPath|TestModulo|TestStdenvNoCCMkDerivation' -count=1
+go test ./store/... -run 'TestHashModuloOracle|TestWriteDerivationForHash' -count=1
 go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 ```
 
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
 | #2 | Eval core / laziness | **partial** — lazy `builtins.derivation` / `derivationStrict` until `drvPath`; lazy `map`/`genList` split |
-| #13 | Ladder / goldens | **partial** — hello evaluates; drv hash ≠ Nix (full stdenv graph / input-drv modulo) |
+| #13 | Ladder / goldens | **partial** — hello evaluates; drv hash ≠ Nix (remaining mkDerivation / stdenv graph gaps) |
 
 ## Bottom-up boot bisect (6681) — **fixed at k=2**
 
@@ -39,23 +40,26 @@ Oracle per rung: `nix-instantiate --eval -E '(builtins.derivationStrict …).drv
 
 | Rung | Status |
 |------|--------|
-| 1 minimal, 2 args, 3 env, 4 multi-output, 5 __ignoreNulls, 6 coercions, 7 path→inputSrcs, 8 toFile, 10 fixed-output (SRI in env) | **match** drvPath (+ ATerm when `.drv` on disk) |
-| 9 inputDrvs | **skip** — Nix `pathDerivationModulo` substitutes **masked** input hashes; go-nix `CalculateDrvReplacement` hashes unmasked ATerm (needs export or fork) |
+| 1 minimal, 2 args, 3 env, 4 multi-output, 5 __ignoreNulls, 6 coercions, 7 path→inputSrcs, 8 toFile, **9 inputDrvs**, 10 fixed-output (SRI in env) | **match** drvPath (+ ATerm when `.drv` on disk) |
+
+**`hashDerivationModulo` (Nix 2.24.9):** implemented in `store/hash_modulo.go` + ATerm writer `store/hash_aterm.go` (no LGPL copy). Memoized by `.drv` path in `ModuloCache`. FOD branch uses `fixed:out:` + `ContentAddress::printMethodAlgo()` (e.g. flat sha256 → `"sha256"`, not `"flat"`) + Base16 hash + output path. Non-FOD input keys use `pathDerivationModulo(dep, maskOutputs=false)` hex; top static outputs use `maskOutputs=true`. Oracle: `store/hash_modulo_oracle_test.go` (2-level, 3-level+FOD, premise that dep env affects top via unmasked dep hash).
+
+**Input collection fix (rung 9):** Derivation output strings (`!<drv>!out` context) go to **`inputDrvs` only**, not **`inputSrcs`** (`eval/derivation_env.go` `mergeValueContext`).
 
 **Lazy `builtins.derivation`:** `eval/derivation_builtin.go` — shared `lazyStrictDerivation` thunk; `drvPath` / outputs select from `derivationStrict` without forcing flatten until needed (`TestDerivationLazyStrictUntilDrvPath`).
 
-**Env flatten:** `eval/derivation_env.go` (`fillDerivationFromAttrs`); `derivationValueToGoNix` ensures every output name has an empty env slot before `CalculateOutputPaths` (multi-out modulo).
+**Env flatten:** `eval/derivation_env.go` (`fillDerivationFromAttrs`); `derivationValueToGoNix` ensures every output name has an empty env slot before output-path modulo (multi-out).
 
 **Store text paths:** `store/content.go` — `text:sha256:<hex>:<storeDir>:<name>` fingerprint (Nix `toFile`).
 
-**String context:** derivation outputs from `derivationStrict` carry `Built` context on strings for `inputDrvs` / `inputSrcs` when coerced into env.
+**String context:** derivation outputs from `derivationStrict` carry `Built` context on strings for `inputDrvs` when coerced into env.
 
-**Strict cache:** `Evaluator.drvStrictByPath` for chained `derivationStrict` in `let` bindings (input replacement precomputation).
+**Strict cache:** `Evaluator.moduloCache` + `drvStrictByPath` register strict derivations for chained `let` bindings and modulo recursion.
 
 ## Hello / stdenvNoCC
 
-- **Hello golden:** goonix `pkgs.hello.drvPath` still differs from Nix (`TestHelloDrvPathMatchesGolden`); golden file matches Nix oracle. Remaining gap is full dependency graph / input-drv modulo on real `mkDerivation`, not import-only regressions.
-- **stdenvNoCC:** covered indirectly by boot bisect + import; dedicated `mkDerivation` oracle test not added yet.
+- **Hello golden:** `TestHelloDrvPathMatchesGolden` still **red** (goonix vs Nix oracle); golden file matches Nix. Remaining gap is real `mkDerivation` / stdenv dependency graph beyond the strict ladder.
+- **stdenvNoCC:** `testdata/oracle/stdenv_nocc_mkderivation_probe.nix` + `TestStdenvNoCCMkDerivationOracleMatchesNix` — **red** (simple `stdenvNoCC.mkDerivation` drvPath); boot bisect + import still green.
 
 ## Fixpoint / xorg overlay (727)
 
@@ -73,7 +77,7 @@ Oracle per rung: `nix-instantiate --eval -E '(builtins.derivationStrict …).drv
 
 ## Tests
 
-- **Green:** CGO, `./lang/...`, `TestBuiltinLazinessAudit`, boot dfold oracles, `TestWithPkgsFixpointProbeMatchesNix`, `TestBootStagesTakeBisectMatchesNix`, `TestImportNixpkgsOnly`, derivation strict rungs (except 9), lazy strict tests
-- **Red / skip:** `TestHelloDrvPathMatchesGolden`, rung 9 inputDrvs, some xorg/scope tests (`allowAliases`, paths)
+- **Green:** CGO, `./lang/...`, `TestBuiltinLazinessAudit`, boot dfold oracles, `TestWithPkgsFixpointProbeMatchesNix`, `TestBootStagesTakeBisectMatchesNix`, `TestImportNixpkgsOnly`, derivation strict rungs **1–10**, lazy strict tests, `store` hash-modulo oracles, `TestModuloTwoLevelOutPathVsNix`
+- **Red / skip:** `TestHelloDrvPathMatchesGolden`, `TestStdenvNoCCMkDerivationOracleMatchesNix`, some xorg/scope tests (`allowAliases`, paths)
 
 Debug: `GOONIX_TRACE_FORCE=1` logs `derivationStrict` when flatten runs.
