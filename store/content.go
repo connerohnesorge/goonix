@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/nix-community/go-nix/pkg/nixbase32"
 	"github.com/nix-community/go-nix/pkg/nixhash"
@@ -70,7 +71,7 @@ func (c Config) StorePathForFilesystemPath(sourcePath, name string) (string, err
 
 // WriteTextToStore writes contents to storePath (must already be computed).
 func WriteTextToStore(storePath, contents string) error {
-	if err := os.MkdirAll(storePath, 0o555); err != nil {
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o555); err != nil {
 		return err
 	}
 	return os.WriteFile(storePath, []byte(contents), 0o444)
@@ -91,7 +92,7 @@ func copyPathRecursive(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(dst, 0o555); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dst), 0o555); err != nil {
 			return err
 		}
 		return os.WriteFile(dst, data, info.Mode()&0o777)

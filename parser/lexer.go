@@ -496,6 +496,11 @@ func lex(src []byte, path string) (*lexResult, error) {
 				i++
 				continue
 			case '/':
+				if pathEnd, ok := scanAbsPath(src, i); ok {
+					emit(tokenPath, start, pathEnd)
+					i = pathEnd
+					continue
+				}
 				emit(tokenSlash, start, start+1)
 				i++
 				continue
@@ -728,6 +733,34 @@ func scanURI(src []byte, i int) (int, bool) {
 func pathChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
 		c == '.' || c == '_' || c == '+' || c == '-'
+}
+
+// scanAbsPath lexes absolute path literals starting with / (including / and /.).
+func scanAbsPath(src []byte, i int) (int, bool) {
+	if i >= len(src) || src[i] != '/' {
+		return 0, false
+	}
+	// "/" followed by whitespace or punctuation is division, not a path ("/" alone at EOF is root).
+	if i+1 < len(src) {
+		c := src[i+1]
+		if c != '/' && !pathChar(c) {
+			return 0, false
+		}
+	}
+	j := i + 1
+	for j < len(src) && pathChar(src[j]) {
+		j++
+	}
+	for j < len(src) && src[j] == '/' {
+		j++
+		for j < len(src) && pathChar(src[j]) {
+			j++
+		}
+	}
+	if j < len(src) && j > i+1 && src[j-1] != '/' && src[j] == '/' {
+		j++
+	}
+	return j, true
 }
 
 func scanPath(src []byte, i int) (int, bool) {
