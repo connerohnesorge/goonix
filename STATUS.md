@@ -30,9 +30,15 @@ go test ./ladder/... -count=1
 
 ## drv-diff (extended)
 
-- Field diffs: env (path-normalized), outputs `.path` / `.hashAlgo` / `.hash`, args/srcs normalized.
-- **`FormatMismatchDetail`:** full env/outputs dump + raw ATerm both sides (`internal/drvdiff/detail.go`); wired in `eval/drvdiff_test.go` and `goonix drv-diff`.
-- **Closure:** 225=225, missing **0**. Deepest mismatch for stdenvNoCC inst is now the **probe mkDerivation** itself (bash/stdenv-linux input drv hashes still differ upstream) — bootstrap hook / FOD leaves no longer deepest.
+- **Leaf-first ATerm byte compare:** `CompareBytesBottomUp` + `FormatByteCulprit` (first paired node whose raw `.drv` bytes differ while input `.drv` bytes all match). Use `AnalyseWithATerm` / `goonix drv-diff`.
+- Normalized field diff retained (`FormatMismatchDetail`) for debugging only.
+- **Byte culprit (stdenvNoCC inst):** `bootstrap-stage0-glibc-bootstrapFiles` (not the probe root at depth 0).
+
+## Fixes (bootstrap chain)
+
+- **`''` strings:** deferred stripIndent, unescape, interpolation line-prefix, `${}` padding trim — bootstrap-stage0 **preHook** matches Nix.
+- **inputSrcs:** space-separated path lists in env are not one `inputSrc`.
+- **Oracle:** `store/aterm_roundtrip_test.go` on Nix store bootstrap-stage0-stdenv-linux `.drv`.
 
 ## Ladder goldens
 
