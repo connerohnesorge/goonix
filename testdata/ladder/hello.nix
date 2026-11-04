@@ -4,4 +4,4 @@ let
     config = { };
     overlays = [ ];
   };
-in pkgs.hello
+in pkgs.hello.drvPath

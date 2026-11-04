@@ -9,10 +9,12 @@ import (
 
 	"github.com/connerohnesorge/goonix/eval"
 	"github.com/connerohnesorge/goonix/internal/golden"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 )
 
-func TestHelloDrvPathMatchesGolden(t *testing.T) {
+func ladderRoot(t *testing.T) string {
+	t.Helper()
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -20,19 +22,23 @@ func TestHelloDrvPathMatchesGolden(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
 		root = filepath.Dir(root)
 	}
-
 	nixpkgs := filepath.Join(root, "testdata", "nixpkgs")
 	if _, err := os.Stat(nixpkgs); err != nil {
 		t.Skip("testdata/nixpkgs not present")
 	}
+	return root
+}
 
-	helloNix := filepath.Join(root, "testdata", "ladder", "hello.nix")
+func evalLadderDrvPath(t *testing.T, nixFile string) string {
+	t.Helper()
+	lay := oracle.MustLayout(t)
+	want := lay.EvalFileRaw(t, nixFile)
+
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
-	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
-	ev.NixPath.PrependEntries("nix=" + filepath.Join(root, "testdata", "nix"))
-	ev.SetCurFile(helloNix)
-
-	expr, err := parser.ParseFile(helloNix)
+	ev.NixPath.PrependEntries("nixpkgs=" + lay.Nixpkgs)
+	ev.NixPath.PrependEntries("nix=" + lay.Nix)
+	ev.SetCurFile(nixFile)
+	expr, err := parser.ParseFile(nixFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,43 +46,92 @@ func TestHelloDrvPathMatchesGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	drvPath, err := extractDrvPath(ev, val)
+	fv, err := ev.ForceValue(val)
 	if err != nil {
 		t.Fatal(err)
 	}
-	drvPath = strings.TrimSpace(drvPath) + "\n"
-	golden.CompareFile(t, "hello.drvPath", []byte(drvPath))
+	got, err := forceDrvPathString(t, ev, fv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("drvPath mismatch\nnix=%q\ngo=%q", want, got)
+	}
+	return got
 }
 
-var drvPathRe = regexp.MustCompile(`(/nix/store/[a-z0-9]+-hello-[^/\s]+\.drv)`)
+func TestHelloDrvPathMatchesGolden(t *testing.T) {
+	got := evalLadderDrvPath(t, filepath.Join(ladderRoot(t), "testdata", "ladder", "hello.nix"))
+	got = strings.TrimSpace(got) + "\n"
+	golden.CompareFile(t, "hello.drvPath", []byte(got))
+}
 
-func extractDrvPath(ev *eval.Evaluator, val *eval.Value) (string, error) {
+func TestInputDrvLadderMatchesGolden(t *testing.T) {
+	got := evalLadderDrvPath(t, filepath.Join(ladderRoot(t), "testdata", "ladder", "input_drv.nix"))
+	got = strings.TrimSpace(got) + "\n"
+	golden.CompareFile(t, "input_drv.drvPath", []byte(got))
+}
+
+func TestToFileLadderMatchesGolden(t *testing.T) {
+	got := evalLadderDrvPath(t, filepath.Join(ladderRoot(t), "testdata", "ladder", "tofile.nix"))
+	got = strings.TrimSpace(got) + "\n"
+	golden.CompareFile(t, "tofile.drvPath", []byte(got))
+}
+
+func TestStdenvNoCCLadderMatchesGolden(t *testing.T) {
+	got := evalLadderDrvPath(t, filepath.Join(ladderRoot(t), "testdata", "ladder", "stdenv_nocc.nix"))
+	got = strings.TrimSpace(got) + "\n"
+	golden.CompareFile(t, "stdenv_nocc.drvPath", []byte(got))
+}
+
+func TestCurlLadderMatchesGolden(t *testing.T) {
+	if testing.Short() {
+		t.Skip("curl instantiates a large closure")
+	}
+	got := evalLadderDrvPath(t, filepath.Join(ladderRoot(t), "testdata", "ladder", "curl.nix"))
+	got = strings.TrimSpace(got) + "\n"
+	golden.CompareFile(t, "curl.drvPath", []byte(got))
+}
+
+var drvPathRe = regexp.MustCompile(`(/nix/store/[a-z0-9]+-[^/\s]+\.drv)`)
+
+func forceDrvPathString(t *testing.T, ev *eval.Evaluator, val *eval.Value) (string, error) {
+	t.Helper()
 	fv, err := ev.ForceValue(val)
 	if err != nil {
 		return "", err
 	}
-	sym := ev.Intern.Intern("drvPath")
-	if b := fv.Attrs.Binds[sym]; b != nil {
-		var raw *eval.Value
-		if b.Thunk != nil {
-			raw = eval.Deferred(b.Thunk)
-		} else {
-			raw = b.Value
+	switch fv.Kind {
+	case eval.VKPath:
+		return fv.Path, nil
+	case eval.VKString:
+		return strings.TrimSpace(fv.String), nil
+	case eval.VKAttrs:
+		sym := ev.Intern.Intern("drvPath")
+		if b := fv.Attrs.Binds[sym]; b != nil {
+			var raw *eval.Value
+			if b.Thunk != nil {
+				raw = eval.Deferred(b.Thunk)
+			} else {
+				raw = b.Value
+			}
+			dv, err := ev.ForceValue(raw)
+			if err != nil {
+				return "", err
+			}
+			if dv.Kind == eval.VKPath && dv.Path != "" {
+				return dv.Path, nil
+			}
+			if dv.Kind == eval.VKString {
+				return strings.TrimSpace(dv.String), nil
+			}
 		}
-		dv, err := ev.ForceValue(raw)
-		if err != nil {
-			return "", err
-		}
-		if dv.Kind == eval.VKPath && dv.Path != "" {
-			return dv.Path, nil
+		text := fv.DisplayString(ev, ev.Intern)
+		if m := drvPathRe.FindString(text); m != "" {
+			return m, nil
 		}
 	}
-	text := fv.DisplayString(ev, ev.Intern)
-	if m := drvPathRe.FindString(text); m != "" {
-		return m, nil
-	}
-	return "", errMissing("drvPath on hello derivation")
+	return "", errMissing("drvPath")
 }
 
 type errMissing string
