@@ -829,19 +829,34 @@ func builtinReplaceStrings(ev *Evaluator, pos parser.Pos, args []*Value) (*Value
 	if err := arity(pos, args, 3); err != nil {
 		return nil, err
 	}
-	from, err := ev.forceString(args[0])
+	fromList, err := forceList(ev, pos, args[0])
 	if err != nil {
 		return nil, err
 	}
-	to, err := ev.forceString(args[1])
+	toList, err := forceList(ev, pos, args[1])
 	if err != nil {
 		return nil, err
 	}
-	s, err := ev.forceString(args[2])
+	if len(fromList) != len(toList) {
+		return nil, evalErr(pos, "replaceStrings: from and to must be the same length")
+	}
+	sv, err := ev.coerceToString(args[2], CoerceContext{Mode: CoerceString, Pos: pos})
 	if err != nil {
 		return nil, err
 	}
-	return Str(strings.ReplaceAll(s, from, to), pos), nil
+	out := sv.String
+	for i := range fromList {
+		from, err := ev.forceString(fromList[i])
+		if err != nil {
+			return nil, err
+		}
+		to, err := ev.forceString(toList[i])
+		if err != nil {
+			return nil, err
+		}
+		out = strings.ReplaceAll(out, from, to)
+	}
+	return StrWithContext(out, copyStringContext(sv.Ctx), pos), nil
 }
 
 func builtinFromJSON(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1039,6 +1054,12 @@ func (ev *Evaluator) derivationValueToAttrs(drv *DerivationValue) *Value {
 	}
 	set("type", Str("derivation", parser.Pos{}))
 	set("name", Str(drv.Name, parser.Pos{}))
+	if p := drv.Env["pname"]; p != "" {
+		set("pname", Str(p, parser.Pos{}))
+	}
+	if v := drv.Env["version"]; v != "" {
+		set("version", Str(v, parser.Pos{}))
+	}
 	set("system", Str(drv.System, parser.Pos{}))
 	set("builder", Str(drv.Builder, parser.Pos{}))
 	set("drvPath", Path(drv.DrvPath))
@@ -1068,7 +1089,28 @@ func builtinGetContext(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	return List(), nil
+	sv, err := ev.coerceToString(args[0], CoerceContext{Mode: CoerceString, Pos: pos})
+	if err != nil {
+		return nil, err
+	}
+	av := Attrs(false)
+	for _, elem := range sv.Ctx {
+		key := elem.DrvPath
+		if key == "" {
+			key = elem.StorePath
+		}
+		if key == "" {
+			continue
+		}
+		out := elem.Output
+		if out == "" {
+			out = "out"
+		}
+		entry := Attrs(false)
+		entry.Attrs.Binds[ev.Intern.Intern("outputs")] = &AttrBinding{Value: List(Str(out, pos))}
+		av.Attrs.Binds[ev.Intern.Intern(key)] = &AttrBinding{Value: entry}
+	}
+	return av, nil
 }
 
 func builtinAppendContext(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1783,7 +1825,7 @@ func builtinSubstring(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 	if err != nil {
 		return nil, err
 	}
-	s, err := ev.forceString(args[2])
+	sv, err := ev.coerceToString(args[2], CoerceContext{Mode: CoerceString, Pos: pos})
 	if err != nil {
 		return nil, err
 	}
@@ -1792,7 +1834,7 @@ func builtinSubstring(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 	}
 	start := int(startV.Int)
 	length := int(lenV.Int)
-	runes := []rune(s)
+	runes := []rune(sv.String)
 	if start < 0 {
 		start = len(runes) + start
 	}
@@ -1809,7 +1851,7 @@ func builtinSubstring(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 	if end < start {
 		end = start
 	}
-	return Str(string(runes[start:end]), pos), nil
+	return StrWithContext(string(runes[start:end]), copyStringContext(sv.Ctx), pos), nil
 }
 
 func builtinStringLength(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
