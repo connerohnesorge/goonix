@@ -56,6 +56,14 @@ func (c *ModuloCache) Register(drvPath string, d *gonixdrv.Derivation) {
 	c.byPath[drvPath] = d
 }
 
+// Count returns registered derivations in the cache.
+func (c *ModuloCache) Count() int {
+	if c == nil || c.byPath == nil {
+		return 0
+	}
+	return len(c.byPath)
+}
+
 // Lookup returns a registered derivation by store path.
 func (c *ModuloCache) Lookup(drvPath string) (*gonixdrv.Derivation, bool) {
 	if c == nil {
@@ -65,7 +73,18 @@ func (c *ModuloCache) Lookup(drvPath string) (*gonixdrv.Derivation, bool) {
 	return d, ok
 }
 
-// HashDerivationModulo implements Nix 2.24.9 hashDerivationModulo semantics.
+// RangeRegistered calls f for each derivation in the cache until f returns false.
+func (c *ModuloCache) RangeRegistered(f func(drvPath string, d *gonixdrv.Derivation) bool) {
+	if c == nil || c.byPath == nil {
+		return
+	}
+	for p, d := range c.byPath {
+		if !f(p, d) {
+			return
+		}
+	}
+}
+
 // When maskOutputs is true, output paths and matching env vars are blanked (static output hashes).
 // Input derivations are replaced with hex keys from pathDerivationModulo (maskOutputs=false on deps).
 func (c *ModuloCache) HashDerivationModulo(d *gonixdrv.Derivation, maskOutputs bool) (ModuloResult, error) {
