@@ -78,6 +78,7 @@ func (ev *Evaluator) registerBuiltins() {
 	register("findFile", builtinFindFile)
 	register("storeDir", builtinStoreDir)
 	register("nixVersion", builtinNixVersion)
+	register("compareVersions", builtinCompareVersions)
 	register("currentSystem", builtinCurrentSystem)
 	register("fetchurl", builtinFetchurl)
 }
@@ -100,18 +101,37 @@ func arity(pos parser.Pos, args []*Value, n int) error {
 }
 
 func builtinImport(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-	if err := arity(pos, args, 1); err != nil {
-		return nil, err
+	if len(args) < 1 || len(args) > 2 {
+		return nil, evalErr(pos, "expected 1 or 2 arguments, got %d", len(args))
 	}
 	path, err := ev.forceString(args[0])
 	if err != nil {
 		return nil, err
 	}
+	path = resolveImportPath(path)
 	expr, err := parser.ParseFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return ev.evalExpr(expr, NewEnv())
+	moduleVal, err := ev.evalExpr(expr, NewEnv())
+	if err != nil {
+		return nil, err
+	}
+	if len(args) == 1 {
+		return moduleVal, nil
+	}
+	return ev.applyCall(moduleVal, args[1], pos)
+}
+
+func resolveImportPath(path string) string {
+	st, err := os.Stat(path)
+	if err != nil {
+		return path
+	}
+	if st.IsDir() {
+		return filepath.Join(path, "default.nix")
+	}
+	return path
 }
 
 func builtinToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -310,11 +330,11 @@ func builtinHasAttr(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	set, err := ev.forceValue(args[0])
+	name, err := ev.forceString(args[0])
 	if err != nil {
 		return nil, err
 	}
-	name, err := ev.forceString(args[1])
+	set, err := ev.forceValue(args[1])
 	if err != nil {
 		return nil, err
 	}
@@ -1005,6 +1025,21 @@ func builtinStoreDir(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 		return nil, evalErr(pos, "storeDir expects no arguments")
 	}
 	return Str(ev.Effects.StoreDir(), pos), nil
+}
+
+func builtinCompareVersions(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
+	}
+	v1, err := ev.forceString(args[0])
+	if err != nil {
+		return nil, err
+	}
+	v2, err := ev.forceString(args[1])
+	if err != nil {
+		return nil, err
+	}
+	return Int(int64(compareVersions(v1, v2))), nil
 }
 
 func builtinNixVersion(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {

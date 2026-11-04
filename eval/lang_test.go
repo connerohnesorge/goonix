@@ -65,6 +65,9 @@ func TestLangSkeleton(t *testing.T) {
 	RunLangCases(t, []LangCase{
 		{Name: "add", Source: `1 + 2`, WantSubstr: "3"},
 		{Name: "builtins.toString", Source: `builtins.toString 42`, WantSubstr: "42"},
+		{Name: "builtins.hasAttr", Source: `builtins.hasAttr "nixVersion" builtins`, WantSubstr: "true"},
+		{Name: "builtins ? nixVersion", Source: `if builtins ? nixVersion then "yes" else "no"`, WantSubstr: "yes"},
+		{Name: "compareVersions", Source: `builtins.toString (builtins.compareVersions "2.0" "1.9")`, WantSubstr: "1"},
 	})
 }
 

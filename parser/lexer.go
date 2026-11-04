@@ -345,6 +345,23 @@ func lex(src []byte, path string) (*lexResult, error) {
 				continue
 			}
 
+			// paths (before '.' and '/' punctuation)
+			if pathEnd, ok := scanSPath(src, i); ok {
+				emit(tokenPath, start, pathEnd)
+				i = pathEnd
+				continue
+			}
+			if pathEnd, ok := scanHPath(src, i); ok {
+				emit(tokenPath, start, pathEnd)
+				i = pathEnd
+				continue
+			}
+			if pathEnd, ok := scanPath(src, i); ok {
+				emit(tokenPath, start, pathEnd)
+				i = pathEnd
+				continue
+			}
+
 			// single-char punct
 			switch src[i] {
 			case '@', ':':
@@ -362,6 +379,11 @@ func lex(src []byte, path string) (*lexResult, error) {
 				i++
 				continue
 			case '.':
+				if pathEnd, ok := scanPath(src, i); ok {
+					emit(tokenPath, start, pathEnd)
+					i = pathEnd
+					continue
+				}
 				emit(tokenDot, start, start+1)
 				i++
 				continue
@@ -448,6 +470,11 @@ func lex(src []byte, path string) (*lexResult, error) {
 				i++
 				continue
 			case '<':
+				if pathEnd, ok := scanSPath(src, i); ok {
+					emit(tokenPath, start, pathEnd)
+					i = pathEnd
+					continue
+				}
 				emit(tokenLt, start, start+1)
 				i++
 				continue
@@ -469,23 +496,6 @@ func lex(src []byte, path string) (*lexResult, error) {
 			if uriEnd, ok := scanURI(src, i); ok {
 				emit(tokenURI, start, uriEnd)
 				i = uriEnd
-				continue
-			}
-
-			// path forms
-			if pathEnd, ok := scanPath(src, i); ok {
-				emit(tokenPath, start, pathEnd)
-				i = pathEnd
-				continue
-			}
-			if pathEnd, ok := scanHPath(src, i); ok {
-				emit(tokenPath, start, pathEnd)
-				i = pathEnd
-				continue
-			}
-			if pathEnd, ok := scanSPath(src, i); ok {
-				emit(tokenPath, start, pathEnd)
-				i = pathEnd
 				continue
 			}
 

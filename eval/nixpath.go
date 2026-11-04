@@ -60,6 +60,12 @@ func ParseNixPath(raw string) *NixPath {
 	return np
 }
 
+// PrependEntries adds parsed NIX_PATH components before existing entries.
+func (np *NixPath) PrependEntries(raw string) {
+	merged := ParseNixPath(raw)
+	np.entries = append(merged.entries, np.entries...)
+}
+
 // WithSearchPath prepends -I path entries (absolute directories).
 func (np *NixPath) WithSearchPath(paths ...string) *NixPath {
 	out := &NixPath{entries: append([]nixPathEntry{}, np.entries...)}
@@ -95,7 +101,10 @@ func (np *NixPath) FindFile(name string) (string, error) {
 			}
 		}
 		for _, c := range candidates {
-			if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			if st, err := os.Stat(c); err == nil {
+				if st.IsDir() {
+					return c, nil
+				}
 				return c, nil
 			}
 		}

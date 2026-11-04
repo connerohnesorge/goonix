@@ -484,7 +484,7 @@ func (p *Parser) parseUnary(prec int) (Expr, error) {
 	}
 	if p.cur().Type == tokenBang {
 		pos := p.advance().Pos
-		inner, err := p.parseUnary(precNot)
+		inner, err := p.parseBinOp(precNot + 1)
 		if err != nil {
 			return nil, err
 		}

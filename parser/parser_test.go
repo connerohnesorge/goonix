@@ -15,6 +15,7 @@
 package parser
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -147,5 +148,48 @@ func TestLexCommentsSkipped(t *testing.T) {
 	}
 	if Print(expr) != "1" {
 		t.Fatalf("got %q", Print(expr))
+	}
+}
+
+func TestParseLetImportPath(t *testing.T) {
+	src := `let requiredVersion = import ./lib/minver.nix; in requiredVersion`
+	if _, err := ParseString(src); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParseBuiltinsHasAttr(t *testing.T) {
+	expr, err := ParseString(`!builtins ? nixVersion`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := Print(expr)
+	want := "(! ((builtins) ? nixVersion))"
+	if got != want {
+		t.Fatalf("Print = %q, want %q", got, want)
+	}
+}
+
+func TestParseCompareVersionsExpr(t *testing.T) {
+	src := `builtins.compareVersions requiredVersion builtins.nixVersion`
+	if _, err := ParseString(src); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParseMultilineIndentedString(t *testing.T) {
+	src := "abort ''\n  line one\n  line two\n''"
+	if _, err := ParseString(src); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParseNixpkgsDefaultNix(t *testing.T) {
+	b, err := os.ReadFile("../testdata/nixpkgs/default.nix")
+	if err != nil {
+		t.Skip(err)
+	}
+	if _, err := ParseString(string(b)); err != nil {
+		t.Fatal(err)
 	}
 }

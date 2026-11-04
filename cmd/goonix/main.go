@@ -90,7 +90,12 @@ func cmdEval(args []string) {
 		ev = ev.WithEffects(eval.IOEffects{})
 	}
 	if *searchPath != "" {
-		ev.NixPath = ev.NixPath.WithSearchPath(*searchPath)
+		for _, part := range strings.Split(*searchPath, ":") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				ev.NixPath.PrependEntries(part)
+			}
+		}
 	}
 	expr, err := parser.ParseFile(rest[0])
 	if err != nil {
