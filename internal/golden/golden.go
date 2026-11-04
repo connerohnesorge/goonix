@@ -12,12 +12,30 @@ import (
 	"testing"
 )
 
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found")
+		}
+		dir = parent
+	}
+}
+
 var update = flag.Bool("update", false, "regenerate golden files")
 
-// CompareFile checks got against testdata/golden/<name>.
+// CompareFile checks got against testdata/golden/<name> under the module root.
 func CompareFile(t *testing.T, name string, got []byte) {
 	t.Helper()
-	goldenPath := filepath.Join("testdata", "golden", name)
+	goldenPath := filepath.Join(moduleRoot(t), "testdata", "golden", name)
 	if *update {
 		if err := os.MkdirAll(filepath.Dir(goldenPath), 0o755); err != nil {
 			t.Fatal(err)
@@ -37,7 +55,8 @@ func CompareFile(t *testing.T, name string, got []byte) {
 	}
 }
 
-// ReadGolden loads a committed golden file.
-func ReadGolden(name string) ([]byte, error) {
-	return os.ReadFile(filepath.Join("testdata", "golden", name))
+// ReadGolden loads a committed golden file from the module tree.
+func ReadGolden(t *testing.T, name string) ([]byte, error) {
+	t.Helper()
+	return os.ReadFile(filepath.Join(moduleRoot(t), "testdata", "golden", name))
 }

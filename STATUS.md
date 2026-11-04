@@ -6,74 +6,58 @@ Oracle: **Nix 2.24.9**, nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. 
 bash scripts/check-cgo.sh
 go test ./eval/... -run TestBuiltinLazinessAudit -count=1
 go test ./eval/... ./lang/... -count=1
+go test ./eval/... -run 'TestBootStagesTakeBisectMatchesNix|TestImportNixpkgsOnly' -count=1
 go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 ```
 
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
 | #2 | Eval core / laziness | **partial** — lazy `map`/`genList` split; fixpoint overlay path fixed |
-| #13 | Ladder / goldens | **blocked** on `stdenv.cc.isGNU` in `all-packages` |
+| #13 | Ladder / goldens | **partial** — hello evaluates; drv hash ≠ Nix (derivationStrict env/inputs) |
+
+## Bottom-up boot bisect (6681) — **fixed at k=2**
+
+**Method:** `stdenvStages = args: lib.take k (import <nixpkgs/pkgs/stdenv> args)` for `k = 1..11`; compare goonix vs Nix 2.24.9 via `testdata/oracle/boot_stages_take_bisect_probe.nix`.
+
+| k | Stage (linux list) | First divergence |
+|---|-------------------|------------------|
+| 1 | `__raw` only | None (degenerate row; no stdenv probes by design) |
+| 2 | bootstrap-stage0 | **`glibcDrvTryOk`** — goonix forced `pkgs.glibc` via all-packages `callPackage` instead of bootstrap dummy |
+| 3+ | bootstrap-stage1… | Was **`tryPkgs`** @6681 until k=2 fixed; now **match** through k=11 |
+
+**Root cause (k=2):** Dynamic attribute names in attrsets (`${localSystem.libc} = …` in stdenv overrides) were dropped because `insertBinding` ignored `bind.Path[0].Expr != nil`.
+
+**Fix:** `eval/attrset.go` — resolve dynamic names at bind time; propagate errors from `populateAttrSet`. **Follow-up:** `builtins.splitVersion` (lib `versions.nix`) for k≥5.
+
+**Tests kept:** `TestBootStagesTakeBisectMatchesNix`, `TestBootStagesTakeFirstDivergence`, `TestBootTake2GlibcPassthruMatchesNix`, `TestDynamicAttrNameFromSetMatchesNix`.
+
+**Import:** `TestImportNixpkgsOnly` **green** (evaluates pinned nixpkgs import without forcing full `pkgs`).
+
+## Blocker: hello golden / ladder drvPath hash
+
+**Symptom:** `pkgs.hello` evaluates; `drvPath` thunk forces to a path, but **store hash** differs from Nix / committed golden (`gciipqhq…` vs goonix `0kn0nr4…`).
+
+**Cause:** `attrsToDerivation` does not implement Nix `derivationStrict` env flattening or string-context `inputDrvs`/`inputSrcs`. Full flattening was attempted but forces boot attrs (e.g. stdenv overrides / `perl.override`) and hits infinite recursion at `pkgs/stdenv/linux/default.nix:347`.
+
+**Next:** Nix-compatible `derivationStrict` env + input collection without over-forcing (string context / selective coercion).
 
 ## Fixpoint / xorg overlay (727)
 
-**Root cause:** `lib.extends` applies an overlay whose body is `{ … } // (mapNamesToAttrs (setLicense …) names)`. WHNF of that `//` runs `map f names`; eager `builtins.map` applied `setLicense` for every name immediately. Each `setLicense` forced `super.${name}` (e.g. `callPackage` at xorg `default.nix:374`), which forced the fixpoint `self` at `customisation.nix:727` while it was still blackholed.
+**Root cause:** `lib.extends` overlay `// mapNamesToAttrs (setLicense …)` + eager `map` forced fixpoint `self` during WHNF.
 
-**Fix:** **`builtins.map` (and `concatMap` list elements) defer function application** via `deferredApplyCall` — same laziness as Nix. `genList` stays eager so stdenv `booter.nix` / `imap1` bootstrapping is unchanged.
-
-**Reproducer:** `testdata/oracle/extends_overlay_map_super.nix` (PASS on Nix 2.24.9). Tests: `TestExtendsOverlayMapNamesDoesNotForceAllSuperDuringFixpoint`, `TestLetSelfRecursiveBindsOneThunk`, laziness audit case `extends overlay mapNames super`.
-
-No special cases for `self = f self // rhs` or blackhole peeking.
+**Fix:** Lazy **`builtins.map`** / **`concatMap`** via `deferredApplyCall`. **`genList`** stays eager for boot `imap1`/`dfold`.
 
 ## Blocker: `stdenv.shell` missing — **fixed**
 
-**Root cause:** Nix’s `derivation` is **not** `builtins.derivationStrict`. It is `primops/derivation.nix`, which returns `drvAttrs // … // { drvPath, outPath, type, … }` so argument attributes (`shell`, `initialPath`, …) stay on the stdenv attrset. goonix had `builtins.derivation` identical to `derivationStrict`, whose result only has `type`, `name`, `system`, `builder`, `drvPath`, `outPath`, `args`, and `env`. After `derivation { inherit shell; … } // { mkDerivation; … }`, `shell` was absent, so `make-derivation.nix:426` (`attrs.realBuilder or stdenv.shell`, parsed as **SelectOr**, not cursed `or`) failed on the default branch.
+**Fix:** `builtins.derivation` matches Nix `primops/derivation.nix` (top-level drv attrs + lazy outputs).
 
-**Fix (eval/):** `builtins.derivation` follows Nix `primops/derivation.nix`: lazy `drvAttrs`, per-output thunks, `all`, head `//` overlay (`derivation_builtin.go` / `buildNixDerivation`). Tests: `TestDerivationMatchesNixOutStructure`, `TestDerivationExposesEnvAttrsAtTopLevel` (shell).
+## Top-down boot bisect (historical)
 
-Import now proceeds past `mkDerivation`; next failure (separate): `all-packages.nix:6681` (`stdenv.cc.isGNU`).
-
-## Blocker: `all-packages.nix:6681` (`stdenv.cc.isGNU`)
-
-**Symptom:** `(builtins.tryEval pkgs).success` is **false** in goonix (error at `6681:8`, `stdenv.cc` null in `gccStdenv`); Nix 2.24.9 returns **true**.
-
-**Oracle:** `builtins.typeOf (import nixpkgs {…}).stdenv.cc` → `"set"` (Nix 2.24.9).
-
-**Force stack (import / `tryEval pkgs`):** Linux boot `dfold` → stage `assert isBuiltByNixpkgsCompiler prevStage.glibc` → forces `pkgs.glibc` → `callPackage … { stdenv = gccStdenv; }` (`all-packages.nix:10294`) → `makeOverridable` (`customisation.nix:165`) → **`gccStdenv` at `:6681`** (`if stdenv.cc.isGNU`) with **`stdenv.cc` null** in goonix.
-
-**Boot / dfold audit (goonix vs Nix 2.24.9):**
-
-| Oracle | Result |
-|--------|--------|
-| `testdata/oracle/dfold_stage_order.nix` (3 stages) | **match** |
-| `testdata/oracle/dfold_nine_stage_order.nix` (9 stages, linux count) | **match** |
-| `testdata/oracle/dfold_succ_binding.nix` (`succ = go cur (n+1)`) | **match** |
-| `testdata/oracle/list_boot_primitives.nix` (`imap1`, `reverseList`, `genList`, `foldl'`, …) | **match** |
-| `testdata/oracle/linux_boot_stage_dfold.nix` (real stageFuns + stub merge) | Nix **cannot** strict-eval chain (asserts); goonix logs `chainByDfoldIndex` in test |
-
-**Eval change:** `builtins.genList` is **eager** again (map/`concatMap` stay lazy via `deferredApplyCall`) so boot `imap1`/`dfold` list cells match Nix bootstrapping expectations.
-
-**Still to fix:** why real boot + `allPackages` forces `gccStdenv` with null `stdenv.cc` under `tryEval pkgs` while Nix does not (stage `prevStage` / cc-wrapper / laziness on the glibc assert path).
-
-**Probe (Nix 2.24.9 vs goonix):** `testdata/oracle/import_head_probe.nix` — `{ tryPkgs, hasOverrides, ccType, tryStdenv }`. Nix: all true / `"set"`. Goonix: `tryPkgs=false` @6681.
-
-**Boot-chain bisect (`testdata/oracle/boot_chain_bisect_probe.nix`, `TestBootChainBisectMatchesNix`):** Walk `pkgs.stdenv.__bootPackages…` with `pick = d` per depth. Nix: depth 0–7 `stageTryOk`, final has `overrides`, `ccType=set`. Goonix: **depth 0** fails forcing `pkgs.stdenv` (same 6681 stack); depth ≥1 `stageTryOk=false` (cannot walk `__bootPackages` until depth 0 passes). **First divergence = depth 0 (final import stdenv head), not a deeper `linux/default.nix` stage index** until go can WHNF final `pkgs.stdenv`.
-
-**Root (unchanged):** `tryEval pkgs` WHNF runs boot `dfold` → stage `assert isBuiltByNixpkgsCompiler prevStage.glibc` → `callPackage { stdenv = gccStdenv }` → `with pkgs` `stdenv.cc.isGNU` with **`stdenv.cc` null** in goonix. Synthetic `lib.fix` + `with pkgs` + `stdenvOverrides` matches Nix (`TestWithPkgsFixpointProbeMatchesNix`); failure is real boot + full `all-packages` on the assert/glibc path, not abstract `extends`/`//` folder merge (`TestStdenvFolderMergePreservesOverrides`).
-
-## Reverted (wrong semantics)
-
-- **`//` empty-LHS fallback** on infinite recursion — reverted.
-- **Lazy `applyLambda` (deferred body)** — broke WHNF at call sites; reverted.
-
-## Laziness (current)
-
-- Lazy list elements, lazy call arguments, lazy `zipAttrsWith`, lazy **`map`** / **`concatMap`** / **`genList`** elements (`deferredApplyCall`); **`tryEval`** WHNF-only (not `deepSeq`).
-- **`with`**: deferred attribute-set thunk; `lookupEnv` propagates `forceWHNF` errors.
-- **`TestBuiltinLazinessAudit`**: builtins + forms + xorg-shaped probes + extends/mapNames overlay.
-
-Debug: `GOONIX_TRACE_FORCE=1` on infinite recursion.
+`testdata/oracle/boot_chain_bisect_probe.nix` — goonix failed at depth 0 (same 6681 stack). Bottom-up bisect isolated the earlier bootstrap **glibc** override bug (k=2).
 
 ## Tests
 
-- **Green**: CGO, `./lang/...`, `TestEvalModulesTopLevelConfigNix`, `TestBuiltinLazinessAudit`, `TestExtendsOverlayMapNamesDoesNotForceAllSuperDuringFixpoint`, `TestLetSelfRecursiveBindsOneThunk`, `TestDerivationExposesEnvAttrsAtTopLevel`, `TestPendingMergeWithSelfAndFixpointIntersectAttrs`
-- **Red**: full `import <nixpkgs>`, hello golden, ladder (`all-packages.nix:6681` / `stdenv.cc.isGNU`)
+- **Green:** CGO, `./lang/...`, `TestBuiltinLazinessAudit`, boot dfold oracles, `TestWithPkgsFixpointProbeMatchesNix`, `TestBootStagesTakeBisectMatchesNix`, `TestImportNixpkgsOnly`, derivation shell/oracle tests
+- **Red:** `TestHelloDrvPathMatchesGolden` (drv hash), some xorg/scope tests (`allowAliases`, paths)
+
+Debug: `GOONIX_TRACE_FORCE=1` on infinite recursion.

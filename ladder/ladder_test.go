@@ -57,8 +57,20 @@ func extractDrvPath(ev *eval.Evaluator, val *eval.Value) (string, error) {
 		return "", err
 	}
 	sym := ev.Intern.Intern("drvPath")
-	if b := fv.Attrs.Binds[sym]; b != nil && b.Value != nil && b.Value.Kind == eval.VKPath {
-		return b.Value.Path, nil
+	if b := fv.Attrs.Binds[sym]; b != nil {
+		var raw *eval.Value
+		if b.Thunk != nil {
+			raw = eval.Deferred(b.Thunk)
+		} else {
+			raw = b.Value
+		}
+		dv, err := ev.ForceValue(raw)
+		if err != nil {
+			return "", err
+		}
+		if dv.Kind == eval.VKPath && dv.Path != "" {
+			return dv.Path, nil
+		}
 	}
 	text := fv.DisplayString(ev, ev.Intern)
 	if m := drvPathRe.FindString(text); m != "" {
