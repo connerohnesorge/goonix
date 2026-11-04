@@ -318,7 +318,7 @@ func (ev *Evaluator) evalIndentedString(s *parser.IndentedString, env *Env) (*Va
 		}
 		prefix := currentLineIndent(b.String())
 		trimInterpolationLineSuffix(&b)
-		if prefix != "" {
+		if prefix != "" && interpolationAtLineStart(b.String()) {
 			frag = indentMultilinePrefix(frag, prefix)
 		}
 		b.WriteString(frag)
@@ -368,6 +368,20 @@ func currentLineIndent(s string) string {
 		break
 	}
 	return b.String()
+}
+
+// interpolationAtLineStart reports whether the next interpolated value begins the
+// line (only whitespace may appear after the last newline). Nix does not pad
+// interpolated text when non-whitespace already appears on the line.
+func interpolationAtLineStart(buf string) bool {
+	i := strings.LastIndexByte(buf, '\n')
+	rest := buf[i+1:]
+	for _, r := range rest {
+		if r != ' ' && r != '\t' {
+			return false
+		}
+	}
+	return true
 }
 
 func (ev *Evaluator) indentedStringFragment(v *Value, cc CoerceContext) (string, []StringContextElem, error) {
@@ -1169,9 +1183,40 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 		}
 		return Int(sum), nil
 	}
+	hasIndented := false
+	for _, fv := range vals {
+		if fv.Kind == VKString && fv.IndentedRaw {
+			hasIndented = true
+			break
+		}
+	}
+	cc := CoerceContext{Mode: CoerceString, Pos: c.P}
+	if hasIndented {
+		var rawParts []string
+		var ctx []StringContextElem
+		for _, fv := range vals {
+			if fv.Kind == VKString && fv.IndentedRaw {
+				rawParts = append(rawParts, fv.String)
+				ctx = mergeStringContexts(ctx, fv.Ctx)
+				continue
+			}
+			sv, err := ev.coerceToString(fv, cc)
+			if err != nil {
+				return nil, err
+			}
+			if len(rawParts) > 0 {
+				combined := joinIndentedRawBodies(rawParts)
+				combined += sv.String
+				return strIndentedUnescaped(combined, mergeStringContexts(ctx, sv.Ctx), c.P), nil
+			}
+			// fall through to plain concat below for prefix plain strings
+		}
+		if len(rawParts) > 0 {
+			return strIndentedUnescaped(joinIndentedRawBodies(rawParts), ctx, c.P), nil
+		}
+	}
 	var b strings.Builder
 	var ctx []StringContextElem
-	cc := CoerceContext{Mode: CoerceString, Pos: c.P}
 	for _, fv := range vals {
 		sv, err := ev.coerceToString(fv, cc)
 		if err != nil {

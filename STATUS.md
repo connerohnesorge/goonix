@@ -32,13 +32,14 @@ go test ./ladder/... -count=1
 
 - **Leaf-first ATerm byte compare:** `CompareBytesBottomUp` + `FormatByteCulprit` (first paired node whose raw `.drv` bytes differ while input `.drv` bytes all match). Use `AnalyseWithATerm` / `goonix drv-diff`.
 - Normalized field diff retained (`FormatMismatchDetail`) for debugging only.
-- **Byte culprit (stdenvNoCC inst):** `bootstrap-stage0-glibc-bootstrapFiles` (not the probe root at depth 0).
+- **Byte culprit (stdenvNoCC inst):** `bootstrap-stage0-binutils-wrapper-` (glibc-bootstrapFiles + bootstrap-stage0-stdenv-linux ATerm oracles **green**).
 
 ## Fixes (bootstrap chain)
 
-- **`''` strings:** deferred stripIndent, unescape, interpolation line-prefix, `${}` padding trim — bootstrap-stage0 **preHook** matches Nix.
-- **inputSrcs:** space-separated path lists in env are not one `inputSrc`.
-- **Oracle:** `store/aterm_roundtrip_test.go` on Nix store bootstrap-stage0-stdenv-linux `.drv`.
+- **`''` strings:** deferred stripIndent; unescape; interpolation padding only when `${` starts the line; `evalConcatStrings` merges IndentedRaw before one strip; `joinIndentedRawBodies` for `+`/`++` concat.
+- **inputSrcs / inputDrvs:** only from string **context** at coercion time (`mergeValueContext` on `Ctx` only); no scanning env text or path fallback.
+- **Derivation env newlines:** `coerceDerivationEnvString` trailing newline rules for multi-line `.drv` env (e.g. preHook, buildCommand).
+- **Oracles:** `eval/derivation_env_inputsrc_test.go`, `eval/indented_string_oracle_test.go`, `eval/glibc_bootstrap_files_aterm_test.go`, `eval/bootstrap_stdenv_linux_aterm_test.go`.
 
 ## Ladder goldens
 
@@ -52,8 +53,8 @@ go test ./ladder/... -count=1
 
 ## Still red
 
-- `TestStdenvNoCCMkDerivationOracleMatchesNix`, `TestDrvDiffStdenvNoCCProbeReportsDeepest` (depth 0 until bash/stdenv-linux `.drv` bytes match Nix)
-- `TestHelloDrvPathMatchesGolden` (same bootstrap graph)
+- `TestStdenvNoCCMkDerivationOracleMatchesNix`, `TestDrvDiffStdenvNoCCProbeReportsDeepest` (next: `bootstrap-stage0-binutils-wrapper-`)
+- `TestHelloDrvPathMatchesGolden`, stdenv/curl ladder (downstream)
 
 ## derivationStrict rungs 1–10
 

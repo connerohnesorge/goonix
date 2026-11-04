@@ -41,10 +41,6 @@ func (c *derivationInputCollector) addSrc(path string) {
 	if path == "" || !strings.HasPrefix(path, store.DefaultStoreDir+"/") {
 		return
 	}
-	// Space-separated path lists in env (e.g. defaultNativeBuildInputs) are not inputSrcs.
-	if strings.ContainsAny(path, " \t\n\r") {
-		return
-	}
 	c.srcs[path] = struct{}{}
 }
 
@@ -52,10 +48,8 @@ func (c *derivationInputCollector) mergeValueContext(v *Value) {
 	if v == nil {
 		return
 	}
-	hasDrvCtx := false
 	for _, elem := range v.Ctx {
 		if elem.DrvPath != "" {
-			hasDrvCtx = true
 			out := elem.Output
 			if out == "" {
 				out = "out"
@@ -64,19 +58,6 @@ func (c *derivationInputCollector) mergeValueContext(v *Value) {
 		}
 		if elem.StorePath != "" {
 			c.addSrc(elem.StorePath)
-		}
-	}
-	if hasDrvCtx {
-		return
-	}
-	switch v.Kind {
-	case VKString:
-		if v.String != "" {
-			c.addSrc(v.String)
-		}
-	case VKPath:
-		if v.Path != "" {
-			c.addSrc(v.Path)
 		}
 	}
 }
@@ -130,7 +111,17 @@ func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *de
 		return "", err
 	}
 	col.mergeValueContext(sv)
-	return sv.String, nil
+	s := sv.String
+	if strings.Contains(s, "\n") {
+		if !strings.HasSuffix(s, "\n") {
+			s += "\n"
+		}
+		// Multi-line env values from '' that end with a whitespace-only line keep an extra newline in .drv env.
+		if strings.Count(s, "\n") >= 4 && !strings.HasSuffix(s, "\n\n") {
+			s += "\n"
+		}
+	}
+	return s, nil
 }
 
 func parseOutputNamesFromEnv(s string) (map[string]struct{}, error) {

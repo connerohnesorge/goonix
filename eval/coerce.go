@@ -223,6 +223,36 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 		}
 		return Path(as.String + fb.Path), nil
 	}
+	if fa.Kind == VKString && fb.Kind == VKString && fa.IndentedRaw && fb.IndentedRaw {
+		return strIndentedUnescaped(joinIndentedRawBodies([]string{fa.String, fb.String}), mergeStringContexts(fa.Ctx, fb.Ctx), pos), nil
+	}
+	if fa.Kind == VKString && fb.Kind == VKString && (fa.IndentedRaw || fb.IndentedRaw) {
+		var left, right string
+		var ctx []StringContextElem
+		if fa.IndentedRaw {
+			left = fa.String
+			ctx = copyStringContext(fa.Ctx)
+		} else {
+			ls, err := ev.coerceToString(fa, cc)
+			if err != nil {
+				return nil, err
+			}
+			left = ls.String
+			ctx = mergeStringContexts(ctx, ls.Ctx)
+		}
+		if fb.IndentedRaw {
+			right = fb.String
+			ctx = mergeStringContexts(ctx, fb.Ctx)
+		} else {
+			rs, err := ev.coerceToString(fb, cc)
+			if err != nil {
+				return nil, err
+			}
+			right = rs.String
+			ctx = mergeStringContexts(ctx, rs.Ctx)
+		}
+		return strIndentedUnescaped(left+right, ctx, pos), nil
+	}
 	as, err := ev.coerceToString(fa, cc)
 	if err != nil {
 		return nil, err

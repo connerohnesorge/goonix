@@ -86,9 +86,19 @@ func stripIndentedString(s string) string {
 	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 		lines = lines[:len(lines)-1]
 	}
-	out := strings.Join(lines, "\n")
-	if len(lines) > 1 {
-		out += "\n\n"
+	return strings.Join(lines, "\n")
+}
+
+// joinIndentedRawBodies concatenates '' string bodies before a single stripIndentedString.
+func joinIndentedRawBodies(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	out := parts[0]
+	for _, p := range parts[1:] {
+		out = strings.TrimRight(out, " \t")
+		p = strings.TrimLeft(p, " \t")
+		out = strings.TrimRight(out, "\n") + "\n" + strings.TrimLeft(p, "\n")
 	}
 	return out
 }
