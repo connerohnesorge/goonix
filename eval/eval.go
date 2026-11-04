@@ -550,11 +550,12 @@ func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	ff, err := ev.forceValueDeep(fun)
+	ff, err := ev.mustWHNF(fun, c.P)
 	if err != nil {
 		return nil, err
 	}
 	if !ev.isCallableValue(ff, c.P) {
+		ev.logTypeMismatchWant(c.P, ff, "function")
 		return nil, evalErr(c.P, "attempt to call non-function")
 	}
 	args := make([]*Value, len(c.Args))
@@ -698,6 +699,7 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 		if hasDefault {
 			return ev.evalExpr(defaultExpr, env)
 		}
+		ev.logTypeMismatchWant(s.P, fb, "attribute set")
 		return nil, evalErr(s.P, "value is not an attribute set")
 	}
 	if fb.Kind == VKBuiltin && fb.Builtin != nil && fb.Builtin.Nullary {
@@ -759,7 +761,7 @@ func (ev *Evaluator) evalUnary(u *parser.UnaryOp, env *Env) (*Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	fv, err := ev.forceValue(v)
+	fv, err := ev.mustWHNF(v, u.P)
 	if err != nil {
 		return nil, err
 	}
@@ -892,11 +894,11 @@ func (ev *Evaluator) evalArithmetic(b *parser.BinaryOp, env *Env) (*Value, error
 	if err != nil {
 		return nil, err
 	}
-	fl, err := ev.forceValue(l)
+	fl, err := ev.mustWHNF(l, b.P)
 	if err != nil {
 		return nil, err
 	}
-	fr, err := ev.forceValue(r)
+	fr, err := ev.mustWHNF(r, b.P)
 	if err != nil {
 		return nil, err
 	}
@@ -1156,30 +1158,20 @@ func (ev *Evaluator) forceValue(v *Value) (*Value, error) {
 	return v, nil
 }
 
-// forceValueDeep peels deferred thunks (for call targets); does not force inside aggregates.
+// forceValueDeep is forceWHNF (legacy name for call sites).
 func (ev *Evaluator) forceValueDeep(v *Value) (*Value, error) {
-	const maxSteps = 64
-	seen := make(map[*Thunk]struct{})
-	for step := 0; step < maxSteps && v != nil && v.Kind == VKDeferred && v.Deferred != nil; step++ {
-		t := v.Deferred
-		if _, ok := seen[t]; ok {
-			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
-		}
-		seen[t] = struct{}{}
-		var err error
-		v, err = ev.forceValue(v)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return v, nil
+	return ev.mustWHNF(v, parser.Pos{})
 }
 
 func (ev *Evaluator) forceBool(e *Evaluator, v *Value, env *Env) (bool, error) {
 	if v == nil {
 		return false, nil
 	}
-	fv, err := ev.forceValue(v)
+	pos := parser.Pos{}
+	if v.Kind == VKDeferred && v.Deferred != nil {
+		pos = v.Deferred.pos
+	}
+	fv, err := ev.mustWHNF(v, pos)
 	if err != nil {
 		return false, err
 	}
@@ -1206,7 +1198,11 @@ func (ev *Evaluator) valueToBool(v *Value) (bool, error) {
 }
 
 func (ev *Evaluator) forceString(v *Value) (string, error) {
-	fv, err := ev.forceValue(v)
+	pos := parser.Pos{}
+	if v != nil && v.Kind == VKDeferred && v.Deferred != nil {
+		pos = v.Deferred.pos
+	}
+	fv, err := ev.mustWHNF(v, pos)
 	if err != nil {
 		return "", err
 	}

@@ -8,38 +8,49 @@ go test ./eval/... ./lang/... -count=1
 go test ./ladder/... -run TestHelloDrvPathMatchesGolden -count=1
 ```
 
+Debug type mismatches (thunk kind, memo, thunk source pos):
+
+```bash
+GOONIX_DEBUG_TYPE=1 go test ./eval/... -run TestImportNixpkgsOnly -count=1
+```
+
 | Issue | Title (short) | Status |
 |-------|----------------|--------|
-| #2 | Eval core / laziness | **partial** — Nix WHNF select/`?`; top-level `checked` chain; stdenv cross still blocked |
+| #2 | Eval core / laziness | **partial** — `forceWHNF` / `mustWHNF` split; cross line 23 still blocked |
 | #13 | Ladder / goldens | **partial** — same stdenv cross blocker |
 
-## Eval laziness (Nix 2.24.9)
+## WHNF (Nix 2.24.9)
 
-- **`//`**: `evalOpUpdate` + `mergeAttrBindMaps` (no deep force of attr values).
-- **Select / `?`**: `forceWHNF` (thunk peel only, stop on locked fixpoint thunks); **final path segment is not WHNF-forced** (lazy attr binding).
-- **`isList` / `forceList`**: two-step `forceValue` to WHNF list (not select-style deep walk).
-- **Calls**: `evalCall` uses `forceValueDeep` on the function; **`applyCallable` does a second `forceValue` when the head is still deferred** so curried `throwIfNot … lib.foldr …` chains work with lazy select results.
-- **Fixpoint**: blackhole + **`shouldPrimeUpdateLHS` RHS-first `//` priming** remains **load-bearing** (`TestFixpointIntersectAttrsSeesPublishedBinds`).
-- **Removed (oracle-green without them)**: `primeUpdateRhsMemo`, `publishAttrSetIfForcing`.
+- **`forceWHNF`**: peel memo chains then `forceValue`; locked without memo → infinite-recursion error (no pass-through); soft cap 512 steps then may still return a thunk.
+- **`mustWHNF`**: `forceWHNF` + error if still `VKDeferred` — used for **calls**, **`//` / forceAttrs**, **lists**, **`if`/bool/arithmetic/strings**, **`typeOf`**.
+- **Select / `?`**: **soft `forceWHNF` only** (never `mustWHNF` on select — re-enters module `equalValues` and hangs); final path segment stays lazy.
+- **`applyCallable` / `evalCall`**: `mustWHNF` on function head (removed double `forceValue` hack).
 
-Regression tests: `eval/whnf_regression_test.go` (`TestLibInitBootStagesCrossShape`), `eval/whnf_internal_test.go`, `eval/checked_expr_test.go`, fixpoint/with/callPackage oracles.
+## Fixpoint (load-bearing)
 
-## Hello golden (gate)
+- **`shouldPrimeUpdateLHS` RHS-first `//` priming**: required (`TestFixpointIntersectAttrsSeesPublishedBinds`).
+- Removed: `primeUpdateRhsMemo`, `publishAttrSetIfForcing`.
 
-- **Target:** `/nix/store/gciipqhqkdlqqn803zd4a389v86ran45-hello-2.12.1.drv`
-- **goonix:** evaluates through lib, modules, and `checked` overlays; fails at `pkgs/stdenv/cross/default.nix:23` (`value is not an attribute set` on `lib.init bootStages` path).
+## stdenv cross line 23 (`lib.init bootStages`)
+
+With `GOONIX_DEBUG_TYPE=1`, import fails with:
+
+`want attribute set; got kind=thunk locked=false memo=true thunkPos=.../pkgs/top-level/default.nix:58:17`
+
+(pristineLib import) when select needs `lib` as attrset at `cross/default.nix:23`. Eager `mustWHNF` on whole `lib` at applyFormals hits `lib/default.nix:11` fixpoint blackhole.
+
+Regression: `eval/stdenv_cross_oracle_test.go` (subexpr types vs Nix when `nix-instantiate` on PATH).
 
 ## Tests
 
 - `bash scripts/check-cgo.sh`: **green**
 - `go test ./lang/...`: **green**
-- `go test ./eval/...`: unit + oracle **green**; full/minimal `pkgs` import and xorg/scope integration **red** at stdenv cross (same site)
-- `go test ./ladder/... -run TestHelloDrvPathMatchesGolden`: **red** (stdenv cross)
+- Fixpoint / with / callPackage / checked / WHNF unit tests: **green**
+- Full `pkgs` import / hello golden: **red** at stdenv cross (above)
 
-## Ladder rungs
+## Ladder
 
 | Rung | Status |
 |------|--------|
-| hello `.drvPath` | **blocked** (stdenv cross / `lib.init bootStages`) |
-| dependent / toFile / stdenvNoCC / curl | **not started** |
-| network `nix-build` rungs | **skipped** |
+| hello `.drvPath` | **blocked** (stdenv cross) |
+| later rungs | **not started** |

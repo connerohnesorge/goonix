@@ -1338,17 +1338,12 @@ func getAttrString(ev *Evaluator, set *Value, name string) (string, error) {
 }
 
 func forceList(ev *Evaluator, pos parser.Pos, v *Value) ([]*Value, error) {
-	fv, err := ev.forceValue(v)
+	fv, err := ev.mustWHNF(v, pos)
 	if err != nil {
 		return nil, err
 	}
-	if fv.Kind == VKDeferred {
-		fv, err = ev.forceValue(fv)
-		if err != nil {
-			return nil, err
-		}
-	}
 	if fv.Kind != VKList {
+		ev.logTypeMismatchWant(pos, fv, "list")
 		return nil, evalErr(pos, "expected a list")
 	}
 	return fv.List, nil
@@ -1369,15 +1364,9 @@ func builtinIsList(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	fv, err := ev.forceValue(args[0])
+	fv, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
-	}
-	if fv.Kind == VKDeferred {
-		fv, err = ev.forceValue(fv)
-		if err != nil {
-			return nil, err
-		}
 	}
 	return Bool(fv.Kind == VKList), nil
 }
@@ -1817,7 +1806,7 @@ func builtinTypeOf(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	fv, err := ev.forceValue(args[0])
+	fv, err := ev.mustWHNF(args[0], pos)
 	if err != nil {
 		return nil, err
 	}

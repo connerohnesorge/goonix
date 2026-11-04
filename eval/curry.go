@@ -36,17 +36,12 @@ func parseArityError(err error) (expected, got int, ok bool) {
 
 // applyCallable applies one argument to a function-like value.
 func (ev *Evaluator) applyCallable(f *Value, arg *Value, pos parser.Pos) (*Value, error) {
-	fv, err := ev.forceValue(f)
+	fv, err := ev.mustWHNF(f, pos)
 	if err != nil {
 		return nil, err
 	}
-	if !ev.isCallableValue(fv, pos) && fv != nil && fv.Kind == VKDeferred {
-		fv, err = ev.forceValue(fv)
-		if err != nil {
-			return nil, err
-		}
-	}
 	if !ev.isCallableValue(fv, pos) {
+		ev.logTypeMismatchWant(pos, fv, "function")
 		return nil, evalErr(pos, "attempt to call non-function")
 	}
 	switch fv.Kind {

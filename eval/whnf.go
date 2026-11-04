@@ -8,21 +8,28 @@ import (
 	"github.com/connerohnesorge/goonix/parser"
 )
 
-// forceWHNF forces v to weak head normal form for select / hasAttr (Nix: peel
-// thunks only; never force inside aggregates). Stops on locked fixpoint thunks.
+// forceWHNF peels thunks toward WHNF (memo chains first, then forceValue).
+// If still deferred after maxSteps, returns the deferred value (select navigation).
 func (ev *Evaluator) forceWHNF(v *Value, pos parser.Pos) (*Value, error) {
-	_ = pos
-	const maxSteps = 64
+	const maxSteps = 512
 	seen := make(map[*Thunk]struct{})
 	for step := 0; step < maxSteps && v != nil && v.Kind == VKDeferred && v.Deferred != nil; step++ {
 		t := v.Deferred
 		if t.locked {
-			return v, nil
+			if t.memo != nil {
+				v = t.memo
+				continue
+			}
+			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 		}
 		if _, ok := seen[t]; ok {
-			return v, nil
+			return nil, evalErr(t.pos, "infinite recursion encountered at %s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
 		}
 		seen[t] = struct{}{}
+		if t.memo != nil {
+			v = t.memo
+			continue
+		}
 		var err error
 		v, err = ev.forceValue(v)
 		if err != nil {
@@ -32,13 +39,27 @@ func (ev *Evaluator) forceWHNF(v *Value, pos parser.Pos) (*Value, error) {
 	return v, nil
 }
 
+// mustWHNF is forceWHNF for contexts that require a WHNF head (never a bare thunk).
+func (ev *Evaluator) mustWHNF(v *Value, pos parser.Pos) (*Value, error) {
+	fv, err := ev.forceWHNF(v, pos)
+	if err != nil {
+		return nil, err
+	}
+	if fv != nil && fv.Kind == VKDeferred {
+		ev.logTypeMismatchWant(pos, fv, "WHNF head (not thunk)")
+		return nil, evalErr(pos, "infinite recursion encountered")
+	}
+	return fv, nil
+}
+
 // forceAttrs is WHNF coercion to an attribute set (Nix forceAttrs).
 func (ev *Evaluator) forceAttrs(v *Value, pos parser.Pos) (*Value, error) {
-	fv, err := ev.forceValue(v)
+	fv, err := ev.mustWHNF(v, pos)
 	if err != nil {
 		return nil, err
 	}
 	if fv == nil || fv.Kind != VKAttrs {
+		ev.logTypeMismatchWant(pos, fv, "attribute set")
 		return nil, evalErr(pos, "// expects attribute sets")
 	}
 	return fv, nil
