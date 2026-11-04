@@ -53,8 +53,10 @@ type Evaluator struct {
 	curFile     string
 	importDepth int
 	importCache map[string]*Value
-	forceHideSym data.Symbol // hide attr name from lookup while forcing its thunk
-	selfMergeThunk *Thunk     // while forcing, propagate // self-reference through let bodies
+	forceHideSym     data.Symbol // hide self attr only while forcing its own thunk
+	currentForce     *Thunk      // thunk currently being forceThunk'd
+	inMergeLeft      bool        // true while evaluating left operand of // under force
+	selfMergeThunk   *Thunk      // while forcing, propagate // self-reference through let bodies
 }
 
 type storeConfig struct {
@@ -258,9 +260,6 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 	}
 	sym := ev.Intern.Intern(v.Name)
 	if bind, ok := ev.lookupEnv(env, sym); ok {
-		if bind.Thunk != nil && ev.selfMergeThunk != nil && bind.Thunk == ev.selfMergeThunk && ev.selfMergeThunk.memo != nil {
-			return ev.selfMergeThunk.memo, nil
-		}
 		if bind.Thunk != nil {
 		 if bind.Thunk.locked && bind.Thunk.memo != nil {
 				return bind.Thunk.memo, nil
@@ -353,7 +352,7 @@ func (ev *Evaluator) populateAttrSet(a *parser.AttrSet, env *Env, av *Value) err
 		return ev.bindAttrInherit(inh, env, bindEnv, av, a.Recursive)
 	}
 	applyBind := func(bind parser.Binding) {
-		ev.insertBinding(av, bindEnv, bind, a.Recursive)
+		ev.insertBinding(av, env, bindEnv, bind, a.Recursive)
 	}
 
 	if len(a.Members) > 0 {
@@ -1058,7 +1057,13 @@ func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk
 
 func (ev *Evaluator) evalWithSelfMerge(expr parser.Expr, env *Env, self *Thunk) (*Value, error) {
 	if bo, ok := expr.(*parser.BinaryOp); ok && bo.Op == "//" {
-		lv, err := ev.evalWithSelfMerge(bo.Left, env, self)
+		lv, err := func() (*Value, error) {
+			if self != nil && self.selfHideSym != 0 {
+				ev.inMergeLeft = true
+				defer func() { ev.inMergeLeft = false }()
+			}
+			return ev.evalWithSelfMerge(bo.Left, env, self)
+		}()
 		if err != nil {
 			return nil, err
 		}
@@ -1106,11 +1111,14 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 	}
 	t.locked = true
 	prevHide := ev.forceHideSym
+	prevForce := ev.currentForce
+	ev.currentForce = t
 	if t.selfHideSym != 0 {
 		ev.forceHideSym = t.selfHideSym
 	}
 	defer func() {
 		ev.forceHideSym = prevHide
+		ev.currentForce = prevForce
 	}()
 	var v *Value
 	var err error
