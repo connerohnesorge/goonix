@@ -341,31 +341,18 @@ func (ev *Evaluator) evalAttrSet(a *parser.AttrSet, env *Env, fromLet bool) (*Va
 	av := Attrs(a.Recursive)
 	bindEnv := env.extend()
 
-	if a.Recursive {
-		for _, bind := range a.Binds {
-			sym := ev.bindingSym(bind)
-			if sym == 0 {
-				continue
-			}
-			t := ev.newThunk(bind.Value, bindEnv, bind.Pos)
-			bindEnv.bindThunk(sym, t)
-			av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
-		}
-	} else {
-		for _, bind := range a.Binds {
-			sym := ev.bindingSym(bind)
-			if sym == 0 {
-				continue
-			}
-			t := ev.newThunk(bind.Value, bindEnv, bind.Pos)
-			av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
-		}
+	for _, bind := range a.Binds {
+		ev.insertBinding(av, bindEnv, bind, a.Recursive)
 	}
 
 	for _, inh := range a.Inherit {
 		if err := ev.bindAttrInherit(inh, bindEnv, av); err != nil {
 			return nil, err
 		}
+	}
+
+	if a.Recursive {
+		ev.syncRecTopLevel(av, bindEnv)
 	}
 
 	return av, nil
@@ -602,11 +589,7 @@ func (ev *Evaluator) applyFormals(l *LambdaValue, args []*Value, child *Env, pos
 			continue
 		}
 		if f.Default != nil {
-			dv, err := ev.evalExpr(f.Default, child)
-			if err != nil {
-				return nil, err
-			}
-			child.bind(formalSym, dv)
+			child.bindThunk(formalSym, ev.newThunk(f.Default, child, pos))
 			continue
 		}
 		if len(rest) > 0 {
