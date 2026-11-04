@@ -1246,7 +1246,9 @@ func builtinFetchurl(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	}
 	if hash != "" {
 		drv.Env["outputHash"] = hash
-		drv.Env["outputHashAlgo"] = "sha256"
+		if !isSRIHashString(hash) {
+			drv.Env["outputHashAlgo"] = "sha256"
+		}
 	}
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
 	drvPath, outPaths, err := computeDerivationPaths(ev, cfg, drv)
@@ -1255,6 +1257,7 @@ func builtinFetchurl(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	}
 	drv.DrvPath = drvPath
 	drv.OutPaths = outPaths
+	ev.rememberStrictDerivation(drv)
 	return ev.derivationValueToAttrs(drv), nil
 }
 

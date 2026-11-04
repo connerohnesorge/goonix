@@ -109,21 +109,15 @@ func (c *derivationInputCollector) toGoNixMaps() (map[string][]string, []string)
 	return drvs, srcs
 }
 
-func (ev *Evaluator) isDerivationAttrSet(v *Value) (bool, error) {
-	fv, err := ev.forceValue(v)
-	if err != nil || fv == nil || fv.Kind != VKAttrs {
-		return false, err
+func isSRIHashString(h string) bool {
+	if h == "" {
+		return false
 	}
-	b := fv.Attrs.Binds[ev.Intern.Intern("type")]
-	if b == nil {
-		return false, nil
+	if strings.HasPrefix(h, "sha256-") || strings.HasPrefix(h, "sha512-") ||
+		strings.HasPrefix(h, "sha1-") || strings.HasPrefix(h, "md5-") {
+		return true
 	}
-	tv, err := ev.attrsBindingForce(b)
-	if err != nil {
-		return false, err
-	}
-	s, err := ev.forceString(tv)
-	return s == "derivation", err
+	return false
 }
 
 func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *derivationInputCollector) (string, error) {
@@ -176,7 +170,7 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 
 	col := newDerivationInputCollector()
 	drv.Env = make(map[string]string)
-	var outputHash, outputHashAlgo, outputHashMode string
+	var outputHash, outputHashMode string
 
 	for _, sym := range syms {
 		key := ev.Intern.Lookup(sym)
@@ -229,7 +223,7 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 		case "outputHash":
 			outputHash = s
 		case "outputHashAlgo":
-			outputHashAlgo = s
+			// stored in drv.Env[key] above
 		case "outputHashMode":
 			outputHashMode = s
 		case "outputs":
@@ -242,8 +236,12 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 	}
 
 	_ = outputHash
-	_ = outputHashAlgo
 	_ = outputHashMode
+
+	// Nix fetchurl.nix: SRI outputHash uses an empty outputHashAlgo in the .drv env.
+	if h := drv.Env["outputHash"]; isSRIHashString(h) {
+		drv.Env["outputHashAlgo"] = ""
+	}
 
 	if drv.Builder == "" {
 		return evalErr(pos, "required attribute 'builder' missing")

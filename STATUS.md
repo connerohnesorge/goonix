@@ -67,7 +67,9 @@ NIXPATH=nixpkgs=$PWD/testdata/nixpkgs go run ./cmd/goonix drv-diff \
   -I nixpkgs=$PWD/testdata/nixpkgs
 ```
 
-**Stdenv probe finding (updated):** `coerceToString` (`eval/coerce.go`) now drives env flatten, `+`, and interpolation — attrsets use `__toString` / `outPath` (hard error otherwise; no `{ ... }` in env). Path literals `/.` lex as absolute paths (`parser/lexer.go` `scanAbsPath`). Derivation env copies non-store paths into the store (`CopyPaths`); general `forceString` keeps filesystem paths literal. After this, goonix builds a **partial** bootstrap closure (modulo cache ≫ 1) and stdenv/hello **`.drvPath` hashes still differ** from Nix — chase with `drv-diff` / modulo oracles on deepest leaves (missing closure nodes vs field mismatch).
+**Closure export:** `strictDrvs` records every `derivationStrict` result; `DerivationShowClosure` walks `inputDrvs` through that map only (missing registration = error). Do not merge modulo-cache dumps into drv-diff.
+
+**Next leaves:** SRI `fetchurl` uses empty `outputHashAlgo` in env (oracle `TestFetchurlSRIOutputHashAlgoEmptyMatchesNix`). Top `stdenvNoCC.mkDerivation` still differs in `builder` / `inputDrvs` (`bash-5.3p20` + `stdenv-linux-no-cc` vs go `bash-5.2p37` + `stdenv-linux`); bootstrap closure gap (~423 logical names only on nix materialised side) until mkDerivation/stdenv parity.
 
 
 - **Hello golden:** `TestHelloDrvPathMatchesGolden` still **red** — hello evaluates end-to-end; remaining gap is **`hashDerivationModulo` / closure inputs** vs Nix (not env `{ ... }` coercion).
