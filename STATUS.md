@@ -1,6 +1,6 @@
 # goonix v0 status (issues #2–#14)
 
-Oracle: **Nix 2.24.9** (`internal/nixversion`, CI **ladder** job via `cachix/install-nix-action` + `install_url` for 2.24.9). Optional **Nix 2.35.1** job (`nix-2-35`, `continue-on-error: true`) runs ATerm / strict-rung / FOD smoke. nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. Latest green CI: https://github.com/connerohnesorge/goonix/actions/runs/41957523327 (commit `e980c1672`).
+Oracle: **Nix 2.24.9** (`internal/nixversion`, CI **ladder** job via `cachix/install-nix-action` + `install_url` for 2.24.9). Optional **Nix 2.35.1** job (`nix-2-35`, `continue-on-error: true`) runs ATerm / strict-rung / FOD smoke. nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. Latest green CI: https://github.com/connerohnesorge/goonix/actions/runs/41959199295 (commit `f2a3055c0`).
 
 ```bash
 bash scripts/check-cgo.sh
@@ -61,6 +61,7 @@ After removing eval shortcuts (`lookupEnv` / `systemPredicates` / cross `fn` hac
 | `TestSubstituteHelloFromCache` network / cache miss | Same (ladder runs this test) |
 | `TestDrvDiffHelloGoldenClosure` | Large hello closure |
 | `TestImportHeadProbe` | Known red probe until import head fixed |
+| `TestPkgsDrvPathSmokeMatchesNixOracle/git` | `pkgs.git` eager-evaluates `all-packages` (infinite recursion); Nix oracle still verified |
 | `eval/or_invoke_test.go` | `null or 7` not Nix strict semantics (intentional) |
 | `eval/pkg_config_debug_test.go`, wrapper debug tests | Require `GOONIX_DEBUG_*` env |
 | `store/local/store_test.go` | `nix-store` not on PATH |
