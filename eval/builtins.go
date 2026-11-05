@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -754,6 +755,9 @@ func builtinReadDir(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	}
 	entries, err := ev.Effects.ReadDir(p)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, evalErr(pos, "reading directory %s: No such file or directory", p)
+		}
 		return nil, err
 	}
 	out := Attrs(false)
@@ -949,9 +953,14 @@ func valueToJSON(ev *Evaluator, v *Value) (any, error) {
 	case VKInt:
 		return fv.Int, nil
 	case VKFloat:
+		if math.IsNaN(fv.Float) || math.IsInf(fv.Float, 0) {
+			return nil, nil
+		}
 		return fv.Float, nil
 	case VKString:
 		return fv.String, nil
+	case VKPath:
+		return ev.jsonCopiedPath(fv.Path)
 	case VKList:
 		out := make([]any, len(fv.List))
 		for i, el := range fv.List {
@@ -963,6 +972,9 @@ func valueToJSON(ev *Evaluator, v *Value) (any, error) {
 		}
 		return out, nil
 	case VKAttrs:
+		if s, ok, err := ev.jsonAttrsCoerce(fv); err != nil || ok {
+			return s, err
+		}
 		m := make(map[string]any)
 		for sym, bind := range fv.Attrs.Binds {
 			name := ev.Intern.Lookup(sym)
@@ -982,9 +994,69 @@ func valueToJSON(ev *Evaluator, v *Value) (any, error) {
 			m[name] = x
 		}
 		return m, nil
+	case VKLambda, VKBuiltin, VKPartialBuiltin:
+		return nil, fmt.Errorf("cannot convert a function to JSON")
 	default:
-		return fmt.Sprintf("<%v>", fv.Kind), nil
+		return nil, fmt.Errorf("cannot convert a %s to JSON", valueKindName(fv.Kind))
 	}
+}
+
+// jsonAttrsCoerce applies Nix printValueAsJSON's attrset rules.
+// __toString is called and the result is coerced to a string. Otherwise an
+// outPath attribute is printed on its own, which is why a derivation does
+// not walk the `out` attribute back into itself.
+func (ev *Evaluator) jsonAttrsCoerce(fv *Value) (any, bool, error) {
+	if b := fv.Attrs.Binds[ev.Intern.Intern("__toString")]; b != nil {
+		tv, err := ev.attrsBindingForce(b)
+		if err != nil {
+			return nil, true, err
+		}
+		result, err := ev.applyCallable(tv, fv, parser.Pos{})
+		if err != nil {
+			return nil, true, err
+		}
+		result, err = ev.forceValue(result)
+		if err != nil {
+			return nil, true, err
+		}
+		if result.Kind == VKPath {
+			s, err := ev.jsonCopiedPath(result.Path)
+			return s, true, err
+		}
+		sv, err := ev.coerceToString(result, CoerceContext{Mode: CoerceString, Pos: parser.Pos{}, CopyPaths: true})
+		if err != nil {
+			return nil, true, err
+		}
+		return sv.String, true, nil
+	}
+	if b := fv.Attrs.Binds[ev.Intern.Intern("outPath")]; b != nil {
+		tv, err := ev.attrsBindingForce(b)
+		if err != nil {
+			return nil, true, err
+		}
+		s, err := valueToJSON(ev, tv)
+		return s, true, err
+	}
+	return nil, false, nil
+}
+
+func (ev *Evaluator) jsonCopiedPath(p string) (string, error) {
+	storeDir := ev.Effects.StoreDir()
+	if storeDir == "" {
+		storeDir = store.DefaultStoreDir
+	}
+	if p == storeDir || strings.HasPrefix(p, storeDir+"/") {
+		return p, nil
+	}
+	name := filepath.Base(p)
+	if name == "" || name == "." || name == "/" {
+		name = "source"
+	}
+	v, err := ev.materializeTreeSource(p, name)
+	if err != nil {
+		return "", err
+	}
+	return v.String, nil
 }
 
 func builtinStorePath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1270,7 +1342,7 @@ func builtinPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 			// Nix 2.24.9: addToStore on a directory with a flat method.
 			return nil, evalErr(pos, "reading from file '%s': Is a directory", p)
 		}
-		return ev.materializeFlatFile(pos, p, name, optionalAttrString(ev, set, "sha256"))
+		return ev.materializeFlatFile(pos, p, name, optionalAttrString(ev, set, "sha256"), addedFrom)
 	}
 	if filter, ok, err := attrValue(ev, set, "filter"); err != nil {
 		return nil, err
@@ -1485,7 +1557,7 @@ func getAttrBool(ev *Evaluator, set *Value, name string) (bool, bool, error) {
 	return b, true, err
 }
 
-func (ev *Evaluator) materializeFlatFile(pos parser.Pos, path, name, sha string) (*Value, error) {
+func (ev *Evaluator) materializeFlatFile(pos parser.Pos, path, name, sha, addedFrom string) (*Value, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -1505,7 +1577,11 @@ func (ev *Evaluator) materializeFlatFile(pos parser.Pos, path, name, sha string)
 			return nil, gerr
 		}
 		if specified.Format(nixhash.Base16, false) != got.Format(nixhash.Base16, false) {
-			return nil, evalErr(pos, "hash mismatch in file '%s'", path)
+			from := addedFrom
+			if from == "" {
+				from = path
+			}
+			return nil, evalErr(pos, "store path mismatch in (possibly filtered) path added from '%s'", from)
 		}
 	}
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
