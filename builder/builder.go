@@ -49,6 +49,10 @@ type Config struct {
 	Sandbox bool
 	// Substituter is optional; when set, output paths are fetched before building.
 	Substituter Substituter
+	// AllowRelocated permits physical-path rewriting when a /nix/store bind mount
+	// is unavailable. Default false: builds fail unless the builder runs with logical
+	// store paths under /nix/store (see execBuildCommandMount).
+	AllowRelocated bool
 }
 
 // Builder executes derivations into a local store.
@@ -289,6 +293,10 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 	if b.Config.Sandbox {
 		return fmt.Errorf("sandbox mode not implemented")
 	}
+	cfg := b.Store.Config()
+	if cfg.LogicalStoreDir() != store.DefaultStoreDir && !b.Config.AllowRelocated {
+		return fmt.Errorf("logical store directory is %q (expected %q); set AllowRelocated only for tests", cfg.LogicalStoreDir(), store.DefaultStoreDir)
+	}
 	tmpDir, err := os.MkdirTemp("", "goonix-build-")
 	if err != nil {
 		return err
@@ -310,16 +318,12 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 	cmd.Env = b.buildEnvLogical(d, outPaths, tmpDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if b.outputsNeedPrecreatedDirs(d, outPaths) {
-		for _, phys := range physOuts {
-			if err := os.MkdirAll(phys, 0o755); err != nil {
-				return err
-			}
-		}
-	}
 	if err := b.execBuildCommand(cmd); err != nil {
 		if err != errMountFallback {
 			return err
+		}
+		if !b.Config.AllowRelocated {
+			return fmt.Errorf("cannot build with logical /nix/store paths: %w (set AllowRelocated for tests only, or enable user namespaces for bind mount)", err)
 		}
 		for i, a := range args {
 			args[i] = b.rewriteValuePhys(a, d, outPaths, physOuts)
@@ -415,6 +419,15 @@ func (b *Builder) rewriteValuePhys(val string, d *gonixdrv.Derivation, outPaths,
 	}
 	for inp := range d.InputDerivations {
 		out = strings.ReplaceAll(out, inp, local.PhysicalPath(b.Store.Root, inp))
+		if b.Load != nil {
+			if dep, err := b.Load(inp); err == nil && dep != nil {
+				if depOuts, err := store.LogicalOutputPaths(dep); err == nil {
+					for _, logical := range depOuts {
+						out = strings.ReplaceAll(out, logical, local.PhysicalPath(b.Store.Root, logical))
+					}
+				}
+			}
+		}
 	}
 	return cfg.RewriteDefaultStoreDir(out)
 }
@@ -433,31 +446,6 @@ func (b *Builder) rewriteValueLogical(val string, d *gonixdrv.Derivation, outPat
 		out = strings.ReplaceAll(out, inp, inp)
 	}
 	return cfg.RewriteDefaultStoreDir(out)
-}
-
-func (b *Builder) outputsNeedPrecreatedDirs(d *gonixdrv.Derivation, outPaths map[string]string) bool {
-	check := func(s string) bool {
-		for name := range outPaths {
-			if strings.Contains(s, "$"+name+"/") || strings.Contains(s, "${"+name+"}/") {
-				return true
-			}
-			if logical, ok := outPaths[name]; ok && strings.Contains(s, logical+"/") {
-				return true
-			}
-		}
-		return false
-	}
-	for _, a := range d.Arguments {
-		if check(a) {
-			return true
-		}
-	}
-	for _, v := range d.Env {
-		if check(v) {
-			return true
-		}
-	}
-	return false
 }
 
 // DefaultSubstituter returns a cache.nixos.org client.

@@ -68,7 +68,7 @@ func TestBuildTrivialShAndToFileDep(t *testing.T) {
 		InputSources: []string{docPath},
 		Platform:     "x86_64-linux",
 		Builder:      "/bin/sh",
-		Arguments:    []string{"-c", "/bin/cat " + docPath + " > $out/doc"},
+		Arguments:    []string{"-c", "/bin/mkdir -p $out && /bin/cat " + docPath + " > $out/doc"},
 		Env: map[string]string{
 			"name":    "with-doc",
 			"out":     store.OutputPlaceholder("out"),
@@ -88,7 +88,7 @@ func TestBuildTrivialShAndToFileDep(t *testing.T) {
 		InputDerivations: map[string][]string{textDrvPath: {"out"}},
 		Platform:         "x86_64-linux",
 		Builder:          "/bin/sh",
-		Arguments:        []string{"-c", "echo ok > $out/status"},
+		Arguments:        []string{"-c", "/bin/mkdir -p $out && echo ok > $out/status"},
 		Env: map[string]string{
 			"name":    "trivial",
 			"out":     store.OutputPlaceholder("out"),
@@ -101,7 +101,7 @@ func TestBuildTrivialShAndToFileDep(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b := &builder.Builder{Store: st}
+	b := &builder.Builder{Store: st, Config: builder.Config{AllowRelocated: true}}
 	if err := b.BuildRealisation(rootDrv); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestBuildEchoHiMatchesNixBuild(t *testing.T) {
 	if err := st.WriteDerivation(buf.Bytes(), drvPath); err != nil {
 		t.Fatal(err)
 	}
-	b := &builder.Builder{Store: st}
+	b := &builder.Builder{Store: st, Config: builder.Config{AllowRelocated: true}}
 	if err := b.BuildRealisation(drvPath); err != nil {
 		t.Fatal(err)
 	}

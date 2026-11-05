@@ -21,6 +21,7 @@ func cmdBuild(args []string) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	storeFlag := fs.String("store", "", "physical store root (contains store/ subdirectory)")
 	searchPath := fs.String("I", "", "add search path entry")
+	allowRelocated := fs.Bool("allow-relocated-store", false, "allow physical store path rewriting when /nix/store bind mount is unavailable (testing only)")
 	_ = fs.Parse(args)
 	rest := fs.Args()
 	if len(rest) != 1 {
@@ -90,7 +91,8 @@ func cmdBuild(args []string) {
 	b := &builder.Builder{
 		Store: st,
 		Config: builder.Config{
-			Substituter: sub,
+			Substituter:    sub,
+			AllowRelocated: *allowRelocated,
 		},
 		Load: func(p string) (*gonixdrv.Derivation, error) {
 			if d, ok := ev.RegisteredDerivation(p); ok {

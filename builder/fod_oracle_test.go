@@ -152,7 +152,7 @@ func buildStrictFOD(t *testing.T, st *local.Store, attrs string) (string, error)
 	if err := st.WriteDerivation(aterm, drvPath); err != nil {
 		return "", err
 	}
-	b := &builder.Builder{Store: st}
+	b := &builder.Builder{Store: st, Config: builder.Config{AllowRelocated: true}}
 	if err := b.BuildRealisation(drvPath); err != nil {
 		return "", err
 	}

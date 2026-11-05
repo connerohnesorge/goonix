@@ -37,7 +37,12 @@ func TestGoonixBuildEchoHiInTempStore(t *testing.T) {
 		}
 		bin = out
 	}
-	cmd := exec.Command(bin, "build", "--store", storeRoot, nixFile)
+	args := []string{"build", "--store", storeRoot}
+	if err := exec.Command("unshare", "-m", "true").Run(); err != nil {
+		args = append(args, "--allow-relocated-store")
+	}
+	args = append(args, nixFile)
+	cmd := exec.Command(bin, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("goonix build: %v\n%s", err, out)
