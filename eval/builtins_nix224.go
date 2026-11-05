@@ -793,9 +793,10 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 
 func downloadChecked(rawURL string) ([]byte, error) {
 	if u, err := url.Parse(rawURL); err == nil && strings.HasSuffix(u.Hostname(), "sr.ht") {
-		// git.sr.ht answers Nix's libcurl with HTTP error 404. Go's client
-		// and a default curl do not: the connection sits until the
-		// deadline. Match Nix's fetch: HTTP/2, IPv4, and no proxy.
+		// git.sr.ht answers Nix's libcurl with HTTP error 404, often only
+		// after the TLS handshake has sat for a couple of minutes. A 20s
+		// client gives up first. Match that fetch: HTTP/2, IPv4, no
+		// proxy, and a wait long enough for the 404.
 		return downloadWithCurl(rawURL)
 	}
 	client := &http.Client{Timeout: 20 * time.Second}
@@ -839,7 +840,7 @@ func downloadWithCurl(rawURL string) ([]byte, error) {
 	}
 	defer os.RemoveAll(dir)
 	bodyPath := filepath.Join(dir, "body")
-	cmd := exec.Command("curl", "-4", "--http2", "-sS", "-L", "--max-redirs", "10", "--connect-timeout", "10", "--max-time", "20", "-o", bodyPath, "-w", "%{http_code}", rawURL)
+	cmd := exec.Command("curl", "-4", "--http2", "-sS", "-L", "--max-redirs", "10", "--connect-timeout", "30", "--max-time", "240", "-o", bodyPath, "-w", "%{http_code}", rawURL)
 	cmd.Env = curlEnvWithoutProxy()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
