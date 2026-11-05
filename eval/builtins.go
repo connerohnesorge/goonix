@@ -575,10 +575,11 @@ func builtinListToAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, e
 		if err != nil {
 			return nil, err
 		}
+		// Nix reports the position of the `value` attribute.
 		if vb.Thunk != nil {
-			out.Attrs.Binds[ev.Intern.Intern(ns)] = &AttrBinding{Thunk: vb.Thunk}
+			out.Attrs.Binds[ev.Intern.Intern(ns)] = &AttrBinding{Thunk: vb.Thunk, Pos: vb.Pos}
 		} else {
-			out.Attrs.Binds[ev.Intern.Intern(ns)] = &AttrBinding{Value: vb.Value}
+			out.Attrs.Binds[ev.Intern.Intern(ns)] = &AttrBinding{Value: vb.Value, Pos: vb.Pos}
 		}
 	}
 	return out, nil

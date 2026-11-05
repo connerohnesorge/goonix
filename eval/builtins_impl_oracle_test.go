@@ -55,6 +55,37 @@ func TestBuiltinImplementationsMatchNix(t *testing.T) {
 	}
 }
 
+func TestUnsafeGetAttrPosInheritAndListToAttrsMatchNix(t *testing.T) {
+	lay := oracle.MustLayout(t)
+	dir := t.TempDir()
+	inh := filepath.Join(dir, "inh.nix")
+	if err := os.WriteFile(inh, []byte("let\n  x = 1;\nin {\n  inherit x;\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	from := filepath.Join(dir, "from.nix")
+	if err := os.WriteFile(from, []byte("let\n  s = { x = 1; };\nin {\n  inherit (s) x;\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l2a := filepath.Join(dir, "l2a.nix")
+	if err := os.WriteFile(l2a, []byte("builtins.listToAttrs [\n  {\n    name = \"a\";\n    value = 1;\n  }\n]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, expr := range []string{
+		`builtins.toJSON (builtins.unsafeGetAttrPos "x" (import ` + nixPath(inh) + `))`,
+		`builtins.toJSON (builtins.unsafeGetAttrPos "x" (import ` + nixPath(from) + `))`,
+		`builtins.toJSON (builtins.unsafeGetAttrPos "a" (import ` + nixPath(l2a) + `))`,
+	} {
+		want := lay.EvalRaw(t, expr)
+		got := evalPkgsExprString(t, expr)
+		if want != got {
+			t.Fatalf("%s\nnix=%s\ngo=%s", expr, want, got)
+		}
+		if !strings.Contains(want, `"column"`) {
+			t.Fatalf("nix returned no position: %s", want)
+		}
+	}
+}
+
 func TestFromTOMLDuplicateAndReadFileTypeMatchNix(t *testing.T) {
 	lay := oracle.MustLayout(t)
 	dup := "builtins.fromTOML ''\na = 1\na = 2\n''"

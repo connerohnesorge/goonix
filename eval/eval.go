@@ -444,8 +444,15 @@ func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, populateEnv, bindEnv *E
 		if inh.From != nil && recursive {
 			lookupEnv = bindEnv
 		}
-		t := ev.newThunk(expr, lookupEnv, inh.Pos)
-		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t, Pos: inh.Pos}
+		namePos := n.Pos
+		if namePos.Line == 0 && namePos.File == "" && n.Expr != nil {
+			namePos = n.Expr.Pos()
+		}
+		if namePos.Line == 0 && namePos.File == "" {
+			namePos = inh.Pos
+		}
+		t := ev.newThunk(expr, lookupEnv, namePos)
+		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t, Pos: namePos}
 		if inh.From != nil && recursive {
 			bindEnv.bindThunk(sym, t)
 		}
