@@ -345,9 +345,18 @@ func VerifyFlatOutput(filePath, wantBase16, algo string) error {
 		return fmt.Errorf("unknown hash algorithm '%s', expect 'md5', 'sha1', 'sha256', or 'sha512'", algo)
 	}
 	if gotBase16 != wantBase16 {
-		return fmt.Errorf("fixed-output hash mismatch: got %s want %s", gotBase16, wantBase16)
+		return &OutputHashMismatch{GotBase16: gotBase16}
 	}
 	return nil
+}
+
+// OutputHashMismatch is a fixed-output digest that is not the one the derivation specified.
+type OutputHashMismatch struct {
+	GotBase16 string
+}
+
+func (e *OutputHashMismatch) Error() string {
+	return "hash mismatch"
 }
 
 // VerifyRecursiveOutput checks a fixed-output recursive hash.
@@ -362,7 +371,7 @@ func VerifyRecursiveOutput(path, wantBase16 string) error {
 	}
 	gotBase16 := raw.Hash.Format(nixhash.Base16, false)
 	if gotBase16 != wantBase16 {
-		return fmt.Errorf("fixed-output hash mismatch: got %s want %s", gotBase16, wantBase16)
+		return &OutputHashMismatch{GotBase16: gotBase16}
 	}
 	return nil
 }

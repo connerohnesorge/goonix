@@ -79,7 +79,7 @@ func sandboxSetup() error {
 		return err
 	}
 	defer os.RemoveAll(root)
-	for _, d := range []string{"bin", "dev", "nix/store", "tmp", "proc", "old", "homeless-shelter"} {
+	for _, d := range []string{"bin", "dev", "nix/store", "tmp", "proc", "old", "build"} {
 		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
 			return err
 		}
@@ -129,10 +129,8 @@ func sandboxSetup() error {
 	if spec.BuildDir == "" || !filepath.IsAbs(spec.BuildDir) {
 		return fmt.Errorf("build directory %q is not absolute", spec.BuildDir)
 	}
-	buildDest := root + spec.BuildDir
-	if err := os.MkdirAll(buildDest, 0o755); err != nil {
-		return err
-	}
+	// Nix builds with cwd /build. The host temp directory is bind-mounted there.
+	buildDest := filepath.Join(root, "build")
 	if err := unix.Mount(spec.BuildDir, buildDest, "", unix.MS_BIND, ""); err != nil {
 		return err
 	}
@@ -155,7 +153,7 @@ func sandboxSetup() error {
 	}
 
 	attr := &syscall.ProcAttr{
-		Dir:   spec.BuildDir,
+		Dir:   "/build",
 		Env:   spec.Env,
 		Files: []uintptr{os.Stdin.Fd(), os.Stdout.Fd(), os.Stderr.Fd()},
 		Sys: &syscall.SysProcAttr{

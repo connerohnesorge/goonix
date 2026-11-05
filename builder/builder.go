@@ -5,6 +5,8 @@
 package builder
 
 import (
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 	"strings"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
+	"github.com/nix-community/go-nix/pkg/nixhash"
 
 	"github.com/connerohnesorge/goonix/store"
 	"github.com/connerohnesorge/goonix/store/local"
@@ -38,10 +41,6 @@ type Substituter interface {
 
 // Config controls builder behaviour.
 type Config struct {
-	// Sandbox is retained for callers. Linux builds already run inside a
-	// user and mount namespace (see execBuildCommandMount); the flag does not
-	// select a second backend.
-	Sandbox bool
 	// Substituter is optional; when set, output paths are fetched before building.
 	Substituter Substituter
 	// AllowRelocated permits physical-path rewriting when a /nix/store bind mount
@@ -62,8 +61,9 @@ type Builder struct {
 // buildPlan lists the store paths mounted into the sandbox and the outputs
 // copied back to the host store after a successful builder.
 type buildPlan struct {
-	closure []string
-	outputs []string
+	closure    []string
+	outputs    []string
+	isolateNet bool
 }
 
 // BuildRealisation builds rootDrv and everything it depends on.
@@ -197,22 +197,22 @@ func (b *Builder) buildFixedOutput(drvPath string, d *gonixdrv.Derivation, outPa
 	case "flat", "":
 		if err := local.VerifyFlatOutput(phys, want, algo); err != nil {
 			os.RemoveAll(phys)
-			return err
+			return fixedOutputHashError(drvPath, algo, want, err)
 		}
 	case "nar", "recursive":
 		if err := local.VerifyRecursiveOutput(phys, want); err != nil {
 			os.RemoveAll(phys)
-			return err
+			return fixedOutputHashError(drvPath, algo, want, err)
 		}
 	case "text":
 		if err := verifyTextOutput(outPath, phys, want, algo); err != nil {
 			os.RemoveAll(phys)
-			return err
+			return fixedOutputHashError(drvPath, algo, want, err)
 		}
 	case "git":
 		if err := local.VerifyGitOutput(phys, want, algo); err != nil {
 			os.RemoveAll(phys)
-			return err
+			return fixedOutputHashError(drvPath, algo, want, err)
 		}
 	default:
 		return fmt.Errorf("invalid value '%s' for 'outputHashMode' attribute", mode)
@@ -225,6 +225,49 @@ func (b *Builder) buildFixedOutput(drvPath string, d *gonixdrv.Derivation, outPa
 		return err
 	}
 	return b.registerBuilt(outPath, phys, refs)
+}
+
+func fixedOutputHashError(drvPath, algo, want string, err error) error {
+	var mm *local.OutputHashMismatch
+	if !errors.As(err, &mm) {
+		return err
+	}
+	spec, err1 := sriFromBase16(algo, want)
+	got, err2 := sriFromBase16(algo, mm.GotBase16)
+	if err1 != nil || err2 != nil {
+		return fmt.Errorf("hash mismatch in fixed-output derivation '%s':\n  specified: %s\n     got:    %s", drvPath, want, mm.GotBase16)
+	}
+	return fmt.Errorf("hash mismatch in fixed-output derivation '%s':\n  specified: %s\n     got:    %s", drvPath, spec, got)
+}
+
+func sriFromBase16(algo, base16 string) (string, error) {
+	algo = strings.TrimPrefix(algo, "text:")
+	algo = strings.TrimPrefix(algo, "git:")
+	if algo == "" {
+		algo = "sha256"
+	}
+	raw, err := hex.DecodeString(base16)
+	if err != nil {
+		return "", err
+	}
+	var kind nixhash.Algorithm
+	switch algo {
+	case "md5":
+		kind = nixhash.MD5
+	case "sha1":
+		kind = nixhash.SHA1
+	case "sha256":
+		kind = nixhash.SHA256
+	case "sha512":
+		kind = nixhash.SHA512
+	default:
+		return "", fmt.Errorf("unknown hash algorithm '%s'", algo)
+	}
+	h, err := nixhash.NewHash(kind, raw)
+	if err != nil {
+		return "", err
+	}
+	return h.Format(nixhash.SRI, true), nil
 }
 
 func verifyTextOutput(logical, phys, want, algo string) error {
@@ -336,8 +379,9 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 		physOuts[name] = local.PhysicalPath(b.Store.Root, logical)
 	}
 	b.plan = buildPlan{
-		closure: b.closurePhys(d, outPaths),
-		outputs: outputPhysList(physOuts),
+		closure:    b.closurePhys(d, outPaths),
+		outputs:    outputPhysList(physOuts),
+		isolateNet: !isFixedOutput(d),
 	}
 	defer func() { b.plan = buildPlan{} }()
 	builder := d.Builder

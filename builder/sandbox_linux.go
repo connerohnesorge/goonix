@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 func (b *Builder) execBuildCommand(cmd *exec.Cmd) error {
@@ -26,10 +27,12 @@ func absTool(name string) (string, error) {
 }
 
 // execBuildCommandMount runs the builder in a user, mount, and pid namespace.
-// The builder is uid 1000 and is pivoted into a root that contains only the
-// build directory, the inputs' closure, /bin/sh and its loader, /dev basics,
-// and /proc. errMountFallback is returned only when that setup does not start.
-// The mount marker is a sibling of the build directory, not a file inside it.
+// Builds that are not fixed-output also enter a network namespace. The builder
+// is uid 1000 and is pivoted into a root whose working directory is /build.
+// The root contains that directory, the inputs' closure, /bin/sh and its
+// loader, /dev basics, and /proc. errMountFallback is returned only when that
+// setup does not start. The mount marker is a sibling of the host build
+// directory and is removed after the build.
 func (b *Builder) execBuildCommandMount(cmd *exec.Cmd) error {
 	if cmd.Dir == "" {
 		return errMountFallback
@@ -48,6 +51,7 @@ func (b *Builder) execBuildCommandMount(cmd *exec.Cmd) error {
 	}
 	sentinel := cmd.Dir + ".goonix-mount-ok"
 	_ = os.Remove(sentinel)
+	defer os.Remove(sentinel)
 	args := cmd.Args
 	if len(args) == 0 {
 		args = []string{cmd.Path}
@@ -58,7 +62,7 @@ func (b *Builder) execBuildCommandMount(cmd *exec.Cmd) error {
 		Sentinel:  sentinel,
 		Builder:   cmd.Path,
 		Args:      args,
-		Env:       cmd.Env,
+		Env:       sandboxBuildEnv(cmd.Env, cmd.Dir),
 		Closure:   append([]string(nil), b.plan.closure...),
 		Outputs:   append([]string(nil), b.plan.outputs...),
 	}
@@ -79,7 +83,12 @@ func (b *Builder) execBuildCommandMount(cmd *exec.Cmd) error {
 		"GOONIX_SANDBOX_STAGE=setup",
 		"GOONIX_SANDBOX_SPEC="+specPath,
 	)
-	wrapped := exec.Command(unsharePath, "-rmp", "--fork", "--propagation", "private", exe)
+	unshareArgs := []string{"-rmp", "--fork", "--propagation", "private"}
+	if b.plan.isolateNet {
+		unshareArgs = []string{"-n", "-rmp", "--fork", "--propagation", "private"}
+	}
+	unshareArgs = append(unshareArgs, exe)
+	wrapped := exec.Command(unsharePath, unshareArgs...)
 	wrapped.Env = env
 	wrapped.Stdout = cmd.Stdout
 	wrapped.Stderr = cmd.Stderr
@@ -93,4 +102,22 @@ func (b *Builder) execBuildCommandMount(cmd *exec.Cmd) error {
 		return errMountFallback
 	}
 	return err
+}
+
+// sandboxBuildEnv points the builder at /build, which is where the host build
+// directory is mounted inside the sandbox. The fallback path keeps the host
+// directory because this rewrite is applied only to the sandboxed command.
+func sandboxBuildEnv(env []string, hostDir string) []string {
+	out := append([]string(nil), env...)
+	for i, e := range out {
+		k, v, ok := strings.Cut(e, "=")
+		if !ok || v != hostDir {
+			continue
+		}
+		switch k {
+		case "NIX_BUILD_TOP", "TMPDIR", "TEMP", "TMP", "TEMPDIR":
+			out[i] = k + "=/build"
+		}
+	}
+	return out
 }

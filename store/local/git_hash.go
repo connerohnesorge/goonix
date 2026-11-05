@@ -50,7 +50,7 @@ func VerifyGitOutput(path, wantBase16, algo string) error {
 		return err
 	}
 	if got != wantBase16 {
-		return fmt.Errorf("fixed-output hash mismatch: got %s want %s", got, wantBase16)
+		return &OutputHashMismatch{GotBase16: got}
 	}
 	return nil
 }
