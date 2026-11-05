@@ -54,6 +54,7 @@ let
 in
 {
   inherit chain chainByDfoldIndex stageCount;
-  finalCcType = builtins.typeOf result.stdenv.cc;
   finalStdenvName = result.stdenv.name or null;
+  finalCcType =
+    if result.stdenv.cc or null == null then "null" else builtins.typeOf result.stdenv.cc;
 }

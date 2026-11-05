@@ -8,6 +8,7 @@ import (
 
 	"github.com/connerohnesorge/goonix/eval"
 	"github.com/connerohnesorge/goonix/internal/oracle"
+	"github.com/connerohnesorge/goonix/internal/testutil"
 	"github.com/connerohnesorge/goonix/parser"
 )
 
@@ -28,13 +29,12 @@ func evalOracleNix(t *testing.T, path string) map[string]any {
 
 func evalGoonixFile(t *testing.T, importPath string) map[string]any {
 	t.Helper()
-	root := modRoot(t)
 	abs, _ := filepath.Abs(importPath)
 	src := `import "` + abs + `" {}`
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
-	nixpkgs := filepath.Join(root, "testdata", "nixpkgs")
+	nixpkgs := testutil.NixpkgsPath(t)
 	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
-	ev.NixPath.PrependEntries("nix=" + filepath.Join(root, "testdata", "nix"))
+	ev.NixPath.PrependEntries("nix=" + filepath.Join(testutil.ModuleRoot(t), "testdata", "nix"))
 	expr, err := parser.ParseString(src)
 	if err != nil {
 		t.Fatal(err)
@@ -48,13 +48,12 @@ func evalGoonixFile(t *testing.T, importPath string) map[string]any {
 
 func evalGoonixFileAllowErr(t *testing.T, importPath string) (map[string]any, error) {
 	t.Helper()
-	root := modRoot(t)
 	abs, _ := filepath.Abs(importPath)
 	src := `import "` + abs + `" {}`
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
-	nixpkgs := filepath.Join(root, "testdata", "nixpkgs")
+	nixpkgs := testutil.NixpkgsPath(t)
 	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
-	ev.NixPath.PrependEntries("nix=" + filepath.Join(root, "testdata", "nix"))
+	ev.NixPath.PrependEntries("nix=" + filepath.Join(testutil.ModuleRoot(t), "testdata", "nix"))
 	expr, err := parser.ParseString(src)
 	if err != nil {
 		return nil, err
@@ -270,7 +269,43 @@ func evalOracleNixOptional(path string) (map[string]any, error) {
 }
 
 func TestLinuxBootStageChainMatchesNixOracle(t *testing.T) {
-	t.Skip("oracle fixture linux_boot_stage_chain.nix fails on pinned nixpkgs (allowAliases / booter); use bootstrap ATerm ladder instead")
+	root := modRoot(t)
+	path := filepath.Join(root, "testdata", "oracle", "linux_boot_stage_chain.nix")
+	nixV := evalOracleNix(t, path)
+	goV := evalGoonixFile(t, path)
+	nixChain := parseChain(t, nixV["chain"])
+	goChain := parseChain(t, goV["chain"])
+	if len(nixChain) != len(goChain) {
+		t.Fatalf("chain length nix=%d go=%d", len(nixChain), len(goChain))
+	}
+	for i := range nixChain {
+		if !rowEqual(nixChain[i], goChain[i]) {
+			t.Fatalf("first diff at chain[%d]:\nnix=%+v\ngo=%+v", i, nixChain[i], goChain[i])
+		}
+	}
+	if !jsonScalarEqual(nixV["stageCount"], goV["stageCount"]) {
+		t.Fatalf("stageCount nix=%v go=%v", nixV["stageCount"], goV["stageCount"])
+	}
+	if !jsonScalarEqual(nixV["linuxStageCount"], goV["linuxStageCount"]) {
+		t.Fatalf("linuxStageCount nix=%v go=%v", nixV["linuxStageCount"], goV["linuxStageCount"])
+	}
+}
+
+func TestLinuxBootStageChainImportPath(t *testing.T) {
+	root := modRoot(t)
+	path := filepath.Join(root, "testdata", "oracle", "linux_boot_stage_chain.nix")
+	nixV := evalOracleNix(t, path)
+	goV := evalGoonixFile(t, path)
+	nixByIdx := parseChain(t, nixV["chainByDfoldIndex"])
+	goByIdx := parseChain(t, goV["chainByDfoldIndex"])
+	if len(nixByIdx) != len(goByIdx) {
+		t.Fatalf("dfold index count nix=%d go=%d", len(nixByIdx), len(goByIdx))
+	}
+	for i := range nixByIdx {
+		if !rowEqual(nixByIdx[i], goByIdx[i]) {
+			t.Fatalf("dfold index %d:\nnix=%+v\ngo=%+v", i, nixByIdx[i], goByIdx[i])
+		}
+	}
 }
 
 func ptrStr(p *string) string {
@@ -280,6 +315,11 @@ func ptrStr(p *string) string {
 	return *p
 }
 
-func TestLinuxBootStageChainImportPath(t *testing.T) {
-	t.Skip("linux_boot_stage_chain.nix oracle fails on pinned nixpkgs; bootstrap ladder covers stage chain")
+func jsonScalarEqual(a, b any) bool {
+	ab, err1 := json.Marshal(a)
+	bb, err2 := json.Marshal(b)
+	if err1 != nil || err2 != nil {
+		return fmt.Sprint(a) == fmt.Sprint(b)
+	}
+	return string(ab) == string(bb)
 }

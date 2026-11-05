@@ -26,6 +26,14 @@ import (
 )
 
 func computeDerivationPaths(ev *Evaluator, cfg store.Config, drv *DerivationValue) (drvPath string, outPaths map[string]string, err error) {
+	if err := store.ValidateDerivationName(drv.Name); err != nil {
+		return "", nil, err
+	}
+	for outName := range drv.Outputs {
+		if err := store.ValidateOutputName(outName); err != nil {
+			return "", nil, err
+		}
+	}
 	d, err := derivationValueToGoNix(drv)
 	if err != nil {
 		return "", nil, err

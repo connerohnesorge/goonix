@@ -6,9 +6,26 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 )
+
+// ValidateDerivationName checks Nix store path name rules for derivation names.
+func ValidateDerivationName(name string) error {
+	for i := 0; i < len(name); i++ {
+		switch name[i] {
+		case '"', '\\':
+			return fmt.Errorf("invalid derivation name: name %q contains illegal character %q", name, string(name[i]))
+		}
+	}
+	return nil
+}
+
+// ValidateOutputName checks output id strings (out, dev, etc.).
+func ValidateOutputName(name string) error {
+	return ValidateDerivationName(name)
+}
 
 func structuredNameFromJSON(raw string) string {
 	if raw == "" {
@@ -31,6 +48,17 @@ func derivationName(d *gonixdrv.Derivation) string {
 		return n
 	}
 	return structuredNameFromJSON(d.Env["__json"])
+}
+
+// NameFromDerivationValue returns the logical derivation name for validation.
+func NameFromDerivationValue(env map[string]string, structured bool, jsonEnv string) string {
+	if structured {
+		return structuredNameFromJSON(jsonEnv)
+	}
+	if env == nil {
+		return ""
+	}
+	return env["name"]
 }
 
 func ensureStructuredName(d *gonixdrv.Derivation) {

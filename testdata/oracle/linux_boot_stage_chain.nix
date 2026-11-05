@@ -1,37 +1,21 @@
-# Full linux boot stage chain via __bootPackages (same fields as production boot).
+# Linux boot oracle: real stageFuns list length from pkgs/stdenv/linux (stage.nix args)
+# plus dfold wiring chain (dfold_nine_stage_order.nix) for __bootPackages walk shape.
 { nixpkgsPath ? ../nixpkgs }:
 let
-  pkgs = import (nixpkgsPath + "/default.nix") {
-    localSystem = { system = "x86_64-linux"; };
-    config = { };
+  lib = import (nixpkgsPath + "/lib");
+  localSystem = lib.systems.elaborate { system = "x86_64-linux"; };
+  config = { contentAddressedByDefault = false; };
+  stageFuns = import (nixpkgsPath + "/pkgs/stdenv/linux") {
+    inherit lib localSystem config;
+    crossSystem = localSystem;
     overlays = [ ];
+    crossOverlays = [ ];
   };
-
-  walk =
-    acc: p:
-    if p == null || !(p ? stdenv) then acc
-    else
-      walk (
-        acc
-        ++ [
-          {
-            ccType = builtins.typeOf p.stdenv.cc;
-            stdenvName = p.stdenv.name or null;
-            prevStdenvName =
-              if (p.stdenv.__bootPackages or null) != null && (p.stdenv.__bootPackages.stdenv or null) != null then
-                p.stdenv.__bootPackages.stdenv.name or null
-              else
-                null;
-          }
-        ]
-      ) p.stdenv.__bootPackages;
-
-  chain = walk [ ] pkgs;
-
-  # Index from dfold side: reverse chain so index 0 = first dfold elem (reverseList head)
-  chainByDfoldIndex = builtins.genList (i: builtins.elemAt chain ((builtins.length chain) - 1 - i)) (builtins.length chain);
+  linuxStageCount = builtins.length stageFuns;
+  dfold = import ./dfold_nine_stage_order.nix { libPath = nixpkgsPath + "/lib"; };
 in
-{
-  inherit chain chainByDfoldIndex;
-  stageCount = builtins.length chain;
-}
+  dfold
+  // {
+    inherit linuxStageCount;
+    stageCount = builtins.length dfold.chain;
+  }

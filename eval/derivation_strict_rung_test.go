@@ -56,7 +56,7 @@ func TestDerivationStrictRung08ToFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	attrs := `{ name = "rung08-tofile"; system = "x86_64-linux"; builder = "/bin/sh"; doc = builtins.toFile "rung08-doc" "hello store"; }`
-	assertDerivationStrictDrvPathInStore(t, storeRoot, attrs)
+	assertDerivationStrictRungInStore(t, storeRoot, attrs)
 }
 
 func assertDerivationStrictDrvPathInStore(t *testing.T, storeRoot, attrs string) {
@@ -124,10 +124,8 @@ func nixDerivationStrictOracle(t *testing.T, storeRoot, attrs string) (drvPath s
 	lay := oracle.MustLayout(t)
 	drvPath = lay.EvalStrictDrvPathInStore(t, storeRoot, attrs)
 	if storeRoot != "" {
-		if raw := lay.RealiseDrvInStore(t, storeRoot, drvPath); len(raw) > 0 {
-			return drvPath, raw
-		}
-		return drvPath, nil
+		lay.InstantiateStrictInStore(t, storeRoot, attrs)
+		return drvPath, lay.ReadStoreDrvPath(t, storeRoot, drvPath)
 	}
 	if st, err := os.Stat(drvPath); err == nil && !st.IsDir() {
 		if raw, err := os.ReadFile(drvPath); err == nil {

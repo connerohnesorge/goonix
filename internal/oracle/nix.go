@@ -216,10 +216,13 @@ func (l Layout) RealiseDrvInStore(t *testing.T, storeDir, drvPath string) []byte
 
 func (l Layout) storeDrvPath(storeDir, logicalDrvPath string) string {
 	base := strings.TrimPrefix(logicalDrvPath, "/nix/store/")
-	if storeDir == "" {
-		storeDir = "/nix/store"
+	if !strings.HasSuffix(base, ".drv") {
+		base += ".drv"
 	}
-	return filepath.Join(storeDir, base)
+	if storeDir == "" {
+		return filepath.Join("/nix/store", base)
+	}
+	return filepath.Join(storeDir, "nix", "store", base)
 }
 
 // InstantiateStrictInStore materialises (builtins.derivationStrict attrs) into storeDir.
@@ -311,6 +314,56 @@ func (l Layout) EvalImportJSONAllowError(absPath string) (map[string]any, error)
 	return v, nil
 }
 
+// EvalDerivationDrvPath evaluates (derivation attrs).drvPath hermetically (Nix derivation, not strict).
+func (l Layout) EvalDerivationDrvPath(t *testing.T, attrs string) string {
+	return l.EvalDerivationDrvPathInStore(t, "", attrs)
+}
+
+// EvalDerivationDrvPathInStore is like EvalDerivationDrvPath with --store.
+func (l Layout) EvalDerivationDrvPathInStore(t *testing.T, storeDir, attrs string) string {
+	t.Helper()
+	strictArg := attrs
+	if strings.HasPrefix(strings.TrimSpace(attrs), "let") {
+		strictArg = "(" + attrs + ")"
+	}
+	pathExpr := fmt.Sprintf(`(derivation %s).drvPath`, strictArg)
+	args := append(append([]string{}, l.instantiateArgsWithStore(storeDir)...), "--eval", "--json", "-E", pathExpr)
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			t.Fatalf("nix-instantiate: %v\n%s", err, ee.Stderr)
+		}
+		t.Fatal(err)
+	}
+	s, err := decodeNixInstantiateJSON(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// EvalDerivationDrvPathAllowError returns an error when nix-instantiate fails.
+func (l Layout) EvalDerivationDrvPathAllowError(attrs string) (string, error) {
+	strictArg := attrs
+	if strings.HasPrefix(strings.TrimSpace(attrs), "let") {
+		strictArg = "(" + attrs + ")"
+	}
+	pathExpr := fmt.Sprintf(`(derivation %s).drvPath`, strictArg)
+	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--json", "-E", pathExpr)
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("nix-instantiate: %w\n%s", err, ee.Stderr)
+		}
+		return "", fmt.Errorf("nix-instantiate: %w", err)
+	}
+	return decodeNixInstantiateJSON(out)
+}
+
 // EvalStrictDrvPath evaluates (builtins.derivationStrict attrs).drvPath hermetically.
 func (l Layout) EvalStrictDrvPath(t *testing.T, attrs string) string {
 	return l.EvalStrictDrvPathInStore(t, "", attrs)
@@ -344,16 +397,7 @@ func (l Layout) EvalStrictDrvPathInStore(t *testing.T, storeDir, attrs string) s
 // ReadStoreDrvPath reads a .drv file from a logical store path (honours --store layout).
 func (l Layout) ReadStoreDrvPath(t *testing.T, storeDir, logicalDrvPath string) []byte {
 	t.Helper()
-	base := strings.TrimPrefix(logicalDrvPath, "/nix/store/")
-	if storeDir == "" {
-		storeDir = "/nix/store"
-	}
-	path := filepath.Join(storeDir, base)
-	if strings.HasSuffix(path, ".drv") {
-		// already basename
-	} else if !strings.HasSuffix(base, ".drv") {
-		path += ".drv"
-	}
+	path := l.storeDrvPath(storeDir, logicalDrvPath)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
