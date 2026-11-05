@@ -58,7 +58,7 @@ in d.drvPath
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fv.Kind != eval.VKPath || fv.Path == "" {
+	if fv.Kind != eval.VKString || fv.String == "" {
 		t.Fatalf("expected drvPath, got %v", fv)
 	}
 }

@@ -53,7 +53,7 @@ builtins.derivationStrict {
 	if db == nil || db.Value == nil {
 		t.Fatal("missing drvPath")
 	}
-	if db.Value.Kind != eval.VKPath || !strings.HasPrefix(db.Value.Path, "/nix/store/") {
+	if db.Value.Kind != eval.VKString || !strings.HasPrefix(db.Value.String, "/nix/store/") {
 		t.Fatalf("drvPath = %v", db.Value)
 	}
 }

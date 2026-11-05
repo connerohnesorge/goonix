@@ -27,6 +27,8 @@ func TestBuiltinImplementationsMatchNix(t *testing.T) {
 		`builtins.hashFile "sha1" "` + hosts + `"`,
 		"builtins.toJSON (builtins.fromTOML ''\na = 1\nb = \"x\"\nn = 1.5\nflag = true\n'')",
 		`builtins.toXML { a = 1; b = "x"; }`,
+		`builtins.toXML (derivation { name = "x"; builder = "/bin/sh"; system = "x86_64-linux"; })`,
+		`let d = derivation { name = "x"; builder = "/bin/sh"; system = "x86_64-linux"; }; in builtins.toXML (d // { self = d; })`,
 		`builtins.readFileType "` + hosts + `"`,
 		`builtins.toPath "/tmp"`,
 		`builtins.toJSON (builtins.hasContext "")`,

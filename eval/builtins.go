@@ -1021,7 +1021,7 @@ func (ev *Evaluator) strictDerivationResultAttrs(drv *DerivationValue, outputNam
 	set := func(name string, v *Value) {
 		av.Attrs.Binds[ev.Intern.Intern(name)] = &AttrBinding{Value: v}
 	}
-	set("drvPath", Path(drv.DrvPath))
+	set("drvPath", Str(drv.DrvPath, parser.Pos{}))
 	for _, outName := range outputNames {
 		p := drv.OutPaths[outName]
 		ctx := []StringContextElem{{DrvPath: drv.DrvPath, Output: outName}}
@@ -1115,7 +1115,7 @@ func (ev *Evaluator) derivationValueToAttrs(drv *DerivationValue) *Value {
 	set("name", Str(drv.Name, parser.Pos{}))
 	set("system", Str(drv.System, parser.Pos{}))
 	set("builder", Str(drv.Builder, parser.Pos{}))
-	set("drvPath", Path(drv.DrvPath))
+	set("drvPath", Str(drv.DrvPath, parser.Pos{}))
 	if drv.OutPaths != nil {
 		for outName, p := range drv.OutPaths {
 			ctx := []StringContextElem{{DrvPath: drv.DrvPath, Output: outName}}

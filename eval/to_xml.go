@@ -19,15 +19,16 @@ func builtinToXML(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) 
 	}
 	var b strings.Builder
 	var ctx []StringContextElem
+	seen := map[string]bool{}
 	b.WriteString("<?xml version='1.0' encoding='utf-8'?>\n<expr>\n")
-	if err := writeXMLValue(ev, &b, &ctx, args[0], 1); err != nil {
+	if err := writeXMLValue(ev, &b, &ctx, seen, args[0], 1); err != nil {
 		return nil, err
 	}
 	b.WriteString("</expr>")
 	return StrWithContext(b.String(), ctx, pos), nil
 }
 
-func writeXMLValue(ev *Evaluator, b *strings.Builder, ctx *[]StringContextElem, v *Value, depth int) error {
+func writeXMLValue(ev *Evaluator, b *strings.Builder, ctx *[]StringContextElem, seen map[string]bool, v *Value, depth int) error {
 	fv, err := ev.forceValue(v)
 	if err != nil {
 		return err
@@ -72,7 +73,7 @@ func writeXMLValue(ev *Evaluator, b *strings.Builder, ctx *[]StringContextElem, 
 		b.WriteString(pad)
 		b.WriteString("<list>\n")
 		for _, el := range fv.List {
-			if err := writeXMLValue(ev, b, ctx, el, depth+1); err != nil {
+			if err := writeXMLValue(ev, b, ctx, seen, el, depth+1); err != nil {
 				return err
 			}
 		}
@@ -80,11 +81,11 @@ func writeXMLValue(ev *Evaluator, b *strings.Builder, ctx *[]StringContextElem, 
 		b.WriteString("</list>\n")
 	case VKAttrs:
 		if typ, err := getAttrString(ev, fv, "type"); err == nil && typ == "derivation" {
-			return writeXMLDerivation(ev, b, ctx, fv, depth)
+			return writeXMLDerivation(ev, b, ctx, seen, fv, depth)
 		}
 		b.WriteString(pad)
 		b.WriteString("<attrs>\n")
-		if err := writeXMLAttrs(ev, b, ctx, fv, depth+1); err != nil {
+		if err := writeXMLAttrs(ev, b, ctx, seen, fv, depth+1); err != nil {
 			return err
 		}
 		b.WriteString(pad)
@@ -102,7 +103,7 @@ func writeXMLValue(ev *Evaluator, b *strings.Builder, ctx *[]StringContextElem, 
 	return nil
 }
 
-func writeXMLDerivation(ev *Evaluator, b *strings.Builder, ctx *[]StringContextElem, fv *Value, depth int) error {
+func writeXMLDerivation(ev *Evaluator, b *strings.Builder, ctx *[]StringContextElem, seen map[string]bool, fv *Value, depth int) error {
 	pad := strings.Repeat("  ", depth)
 	drvPath, _ := getAttrString(ev, fv, "drvPath")
 	outPath, _ := getAttrString(ev, fv, "outPath")
@@ -119,15 +120,24 @@ func writeXMLDerivation(ev *Evaluator, b *strings.Builder, ctx *[]StringContextE
 		b.WriteString(`"`)
 	}
 	b.WriteString(">\n")
-	if err := writeXMLAttrs(ev, b, ctx, fv, depth+1); err != nil {
-		return err
+	// Nix prints children only the first time a drvPath is seen. A missing
+	// drvPath, or one already printed, is <repeated /> so a derivation that
+	// points at itself cannot recurse forever.
+	if drvPath != "" && !seen[drvPath] {
+		seen[drvPath] = true
+		if err := writeXMLAttrs(ev, b, ctx, seen, fv, depth+1); err != nil {
+			return err
+		}
+	} else {
+		b.WriteString(pad)
+		b.WriteString("  <repeated />\n")
 	}
 	b.WriteString(pad)
 	b.WriteString("</derivation>\n")
 	return nil
 }
 
-func writeXMLAttrs(ev *Evaluator, b *strings.Builder, ctx *[]StringContextElem, set *Value, depth int) error {
+func writeXMLAttrs(ev *Evaluator, b *strings.Builder, ctx *[]StringContextElem, seen map[string]bool, set *Value, depth int) error {
 	pad := strings.Repeat("  ", depth)
 	for _, name := range attrNames(ev, set) {
 		sym := ev.Intern.Intern(name)
@@ -146,7 +156,7 @@ func writeXMLAttrs(ev *Evaluator, b *strings.Builder, ctx *[]StringContextElem, 
 		b.WriteString(`<attr name="`)
 		b.WriteString(xmlEscape(name))
 		b.WriteString("\">\n")
-		if err := writeXMLValue(ev, b, ctx, v, depth+1); err != nil {
+		if err := writeXMLValue(ev, b, ctx, seen, v, depth+1); err != nil {
 			return err
 		}
 		b.WriteString(pad)
