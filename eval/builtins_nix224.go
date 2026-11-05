@@ -840,7 +840,13 @@ func downloadWithCurl(rawURL string) ([]byte, error) {
 	}
 	defer os.RemoveAll(dir)
 	bodyPath := filepath.Join(dir, "body")
-	cmd := exec.Command("curl", "-4", "--http2", "-sS", "-L", "--max-redirs", "10", "--connect-timeout", "30", "--max-time", "240", "-o", bodyPath, "-w", "%{http_code}", rawURL)
+	// Nix retries a failed download (download-attempts defaults to 5).
+	// git.sr.ht sometimes refuses the connection and sometimes answers
+	// only after a long TLS handshake.
+	cmd := exec.Command("curl", "-4", "--http2", "-sS", "-L", "--max-redirs", "10",
+		"--connect-timeout", "15", "--max-time", "240",
+		"--retry", "4", "--retry-all-errors", "--retry-delay", "1", "--retry-max-time", "180",
+		"-o", bodyPath, "-w", "%{http_code}", rawURL)
 	cmd.Env = curlEnvWithoutProxy()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
