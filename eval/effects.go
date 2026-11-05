@@ -1,25 +1,19 @@
 // Copyright 2026 The goonix authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package eval
 
 import (
 	"io/fs"
 	"os"
+	"strings"
 
+	"github.com/connerohnesorge/goonix/store"
 	"github.com/connerohnesorge/goonix/store/local"
 )
+
+const chrootPhysEnv = "GOONIX_CHROOT_PHYS"
 
 // Effects abstracts filesystem and store mutation for pure vs IO evaluation modes.
 type Effects interface {
@@ -31,33 +25,76 @@ type Effects interface {
 	StoreDir() string
 }
 
-// PureEffects rejects IO that would mutate the store; read-only filesystem access is allowed.
-type PureEffects struct {
-	Root string
+func chrootPhysRootFromEnv() string {
+	return os.Getenv(chrootPhysEnv)
 }
 
-func (PureEffects) ReadFile(path string) ([]byte, error) {
+func mapLogicalStorePath(physRoot, path string) string {
+	if physRoot == "" || !strings.HasPrefix(path, store.DefaultStoreDir+"/") {
+		return path
+	}
+	return local.PhysicalPath(physRoot, path)
+}
+
+func readFileChroot(physRoot, path string) ([]byte, error) {
+	mapped := mapLogicalStorePath(physRoot, path)
+	b, err := os.ReadFile(mapped)
+	if err == nil || physRoot == "" || !strings.HasPrefix(path, store.DefaultStoreDir+"/") {
+		return b, err
+	}
+	if !os.IsNotExist(err) {
+		return b, err
+	}
 	return os.ReadFile(path)
 }
 
-func (PureEffects) ReadDir(path string) ([]fs.DirEntry, error) {
-	return os.ReadDir(path)
+func readDirChroot(physRoot, path string) ([]fs.DirEntry, error) {
+	return os.ReadDir(mapLogicalStorePath(physRoot, path))
 }
 
-func (PureEffects) Stat(path string) (fs.FileInfo, error) {
-	return os.Stat(path)
+func statChroot(physRoot, path string) (fs.FileInfo, error) {
+	return os.Stat(mapLogicalStorePath(physRoot, path))
 }
 
-func (PureEffects) RealiseStorePath(storePath string, produce func() error) error {
-	if storePathMaterialised(storePath) {
+func realiseChroot(physRoot, storePath string, produce func() error) error {
+	phys := mapLogicalStorePath(physRoot, storePath)
+	if storePathMaterialised(phys) {
 		return nil
 	}
 	return produce()
 }
 
+// PureEffects rejects IO that would mutate the store; read-only filesystem access is allowed.
+type PureEffects struct {
+	Root string
+}
+
+func (p PureEffects) physRoot() string {
+	if p.Root != "" {
+		return p.Root
+	}
+	return chrootPhysRootFromEnv()
+}
+
+func (p PureEffects) ReadFile(path string) ([]byte, error) {
+	return readFileChroot(p.physRoot(), path)
+}
+
+func (p PureEffects) ReadDir(path string) ([]fs.DirEntry, error) {
+	return readDirChroot(p.physRoot(), path)
+}
+
+func (p PureEffects) Stat(path string) (fs.FileInfo, error) {
+	return statChroot(p.physRoot(), path)
+}
+
+func (p PureEffects) RealiseStorePath(storePath string, produce func() error) error {
+	return realiseChroot(p.physRoot(), storePath, produce)
+}
+
 func (p PureEffects) StoreDir() string {
 	if p.Root == "" {
-		return "/nix/store"
+		return store.DefaultStoreDir
 	}
 	return p.Root
 }
@@ -67,26 +104,31 @@ type IOEffects struct {
 	Root string
 }
 
-func (IOEffects) ReadFile(path string) ([]byte, error) {
-	return os.ReadFile(path)
+func (e IOEffects) physRoot() string {
+	return chrootPhysRootFromEnv()
 }
 
-func (IOEffects) ReadDir(path string) ([]fs.DirEntry, error) {
-	return os.ReadDir(path)
+func (e IOEffects) ReadFile(path string) ([]byte, error) {
+	return readFileChroot(e.physRoot(), path)
 }
 
-func (IOEffects) Stat(path string) (fs.FileInfo, error) {
-	return os.Stat(path)
+func (e IOEffects) ReadDir(path string) ([]fs.DirEntry, error) {
+	return readDirChroot(e.physRoot(), path)
+}
+
+func (e IOEffects) Stat(path string) (fs.FileInfo, error) {
+	return statChroot(e.physRoot(), path)
 }
 
 func (e IOEffects) RealiseStorePath(storePath string, produce func() error) error {
-	if storePathMaterialised(storePath) {
-		return nil
+	return realiseChroot(e.physRoot(), storePath, produce)
+}
+
+func (e IOEffects) StoreDir() string {
+	if e.Root == "" {
+		return store.DefaultStoreDir
 	}
-	if err := produce(); err != nil {
-		return err
-	}
-	return nil
+	return e.Root
 }
 
 // storePathMaterialised reports whether storePath already holds a non-empty object.
@@ -102,54 +144,65 @@ func storePathMaterialised(storePath string) bool {
 	return true
 }
 
-func (e IOEffects) StoreDir() string {
-	if e.Root == "" {
-		return "/nix/store"
-	}
-	return e.Root
-}
-
 // ChrootIOEffects keeps logical paths under /nix/store but materialises objects under
 // local.OpenStore's physical layout (PhysRoot/store/<basename>).
 type ChrootIOEffects struct {
 	PhysRoot string
 }
 
-func (ChrootIOEffects) ReadFile(path string) ([]byte, error) {
-	return os.ReadFile(path)
+func (e ChrootIOEffects) ReadFile(path string) ([]byte, error) {
+	return readFileChroot(e.PhysRoot, path)
 }
 
-func (ChrootIOEffects) ReadDir(path string) ([]fs.DirEntry, error) {
-	return os.ReadDir(path)
+func (e ChrootIOEffects) ReadDir(path string) ([]fs.DirEntry, error) {
+	return readDirChroot(e.PhysRoot, path)
 }
 
-func (ChrootIOEffects) Stat(path string) (fs.FileInfo, error) {
-	return os.Stat(path)
+func (e ChrootIOEffects) Stat(path string) (fs.FileInfo, error) {
+	return statChroot(e.PhysRoot, path)
 }
 
 func (ChrootIOEffects) StoreDir() string {
-	return "/nix/store"
+	return store.DefaultStoreDir
 }
 
 func (e ChrootIOEffects) physicalStorePath(logical string) string {
-	if e.PhysRoot == "" {
-		return logical
-	}
-	return local.PhysicalPath(e.PhysRoot, logical)
+	return mapLogicalStorePath(e.PhysRoot, logical)
 }
 
 func (e ChrootIOEffects) RealiseStorePath(storePath string, produce func() error) error {
-	phys := e.physicalStorePath(storePath)
-	if storePathMaterialised(phys) {
-		return nil
+	return realiseChroot(e.PhysRoot, storePath, produce)
+}
+
+func defaultEffects() Effects {
+	if root := chrootPhysRootFromEnv(); root != "" {
+		return ChrootIOEffects{PhysRoot: root}
 	}
-	return produce()
+	return PureEffects{}
+}
+
+func coalesceEffects(eff Effects) Effects {
+	if eff != nil {
+		if root := chrootPhysRootFromEnv(); root != "" {
+			switch eff.(type) {
+			case IOEffects, PureEffects:
+				return ChrootIOEffects{PhysRoot: root}
+			}
+		}
+		return eff
+	}
+	return defaultEffects()
 }
 
 // physicalStorePath maps a logical store path to the filesystem path used for IO.
 func (ev *Evaluator) physicalStorePath(logical string) string {
-	if ch, ok := ev.Effects.(ChrootIOEffects); ok {
-		return ch.physicalStorePath(logical)
+	switch e := ev.Effects.(type) {
+	case ChrootIOEffects:
+		return e.physicalStorePath(logical)
+	default:
+		if root := chrootPhysRootFromEnv(); root != "" {
+			return mapLogicalStorePath(root, logical)
+		}
 	}
 	return logical
 }

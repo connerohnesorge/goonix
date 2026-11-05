@@ -15,10 +15,14 @@
 package eval
 
 import (
+	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 	"github.com/connerohnesorge/goonix/store"
+	"github.com/connerohnesorge/goonix/store/local"
 )
 
 func computeDerivationPaths(ev *Evaluator, cfg store.Config, drv *DerivationValue) (drvPath string, outPaths map[string]string, err error) {
@@ -86,6 +90,21 @@ func (ev *Evaluator) rememberStrictDerivation(drv *DerivationValue) {
 		ev.moduloCache = store.NewModuloCache()
 	}
 	ev.moduloCache.Register(drv.DrvPath, gd)
+	ev.persistStrictDrvToChroot(drv.DrvPath, gd)
+}
+
+func (ev *Evaluator) persistStrictDrvToChroot(drvPath string, gd *gonixdrv.Derivation) {
+	root := chrootPhysRootFromEnv()
+	if root == "" || gd == nil {
+		return
+	}
+	phys := local.PhysicalPath(root, drvPath)
+	var buf bytes.Buffer
+	if err := gd.WriteDerivation(&buf); err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(phys), 0o755)
+	_ = os.WriteFile(phys, buf.Bytes(), 0o444)
 }
 
 func derivationValueToGoNix(drv *DerivationValue) (*gonixdrv.Derivation, error) {

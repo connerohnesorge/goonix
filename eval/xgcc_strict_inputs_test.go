@@ -20,9 +20,9 @@ func TestBootstrapXgccStrictInputDrvsMatchesNix(t *testing.T) {
 		t.Fatal(err)
 	}
 	nixDrvPath := lay.EvalStrictDrvPath(t, string(raw))
-	nixATerm, err := os.ReadFile(nixDrvPath)
-	if err != nil {
-		t.Fatal(err)
+	nixATerm := lay.RealiseDrvInStore(t, "", nixDrvPath)
+	if len(nixATerm) == 0 {
+		t.Fatalf("materialise nix drv %s", nixDrvPath)
 	}
 	nd, err := gonixdrv.ReadDerivation(bytes.NewReader(nixATerm))
 	if err != nil {

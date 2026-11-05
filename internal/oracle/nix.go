@@ -243,6 +243,27 @@ func (l Layout) InstantiateStrictInStore(t *testing.T, storeDir, attrs string) s
 	return strings.Trim(strings.TrimSpace(string(out)), `"`)
 }
 
+// EvalStrictOutPath evaluates (builtins.derivationStrict attrs).out hermetically (raw string).
+func (l Layout) EvalStrictOutPath(t *testing.T, attrs string) string {
+	t.Helper()
+	strictArg := attrs
+	if strings.HasPrefix(strings.TrimSpace(attrs), "let") {
+		strictArg = "(" + attrs + ")"
+	}
+	pathExpr := fmt.Sprintf(`(builtins.derivationStrict %s).out`, strictArg)
+	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--raw", "-E", pathExpr)
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			t.Fatalf("nix-instantiate: %v\n%s", err, ee.Stderr)
+		}
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // EvalStrictDrvPath evaluates (builtins.derivationStrict attrs).drvPath hermetically.
 func (l Layout) EvalStrictDrvPath(t *testing.T, attrs string) string {
 	return l.EvalStrictDrvPathInStore(t, "", attrs)

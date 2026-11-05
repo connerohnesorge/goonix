@@ -184,7 +184,7 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 		}
 		ev.recordCopyPathTrace(p, pos, reason)
 		err = ev.Effects.RealiseStorePath(storePath, func() error {
-			return store.CopyPathToStore(p, storePath)
+			return store.CopyPathToStore(p, ev.physicalStorePath(storePath))
 		})
 		if err != nil {
 			return nil, err

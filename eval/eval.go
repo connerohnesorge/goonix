@@ -90,7 +90,7 @@ func NewEvaluator() *Evaluator {
 	intern := data.NewInterner()
 	e := &Evaluator{
 		Intern:      intern,
-		Effects:     PureEffects{},
+		Effects:     defaultEffects(),
 		Builtins:    make(map[string]*Builtin),
 		NixPath:     NewNixPathFromEnv(),
 		importCache: make(map[string]*Value),
@@ -105,7 +105,7 @@ func NewEvaluator() *Evaluator {
 // WithEffects returns a copy using the given effects implementation.
 func (ev *Evaluator) WithEffects(eff Effects) *Evaluator {
 	c := *ev
-	c.Effects = eff
+	c.Effects = coalesceEffects(eff)
 	if eff != nil {
 		c.StoreCfg.storeDir = eff.StoreDir()
 	}

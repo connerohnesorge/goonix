@@ -5,10 +5,10 @@
 package eval
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store"
 )
@@ -55,19 +55,8 @@ func strictEvalTop(t *testing.T, attrs string) (drvPath string, outPath string, 
 
 func nixStrictOutPath(t *testing.T, attrs string) string {
 	t.Helper()
-	if _, err := exec.LookPath("nix-instantiate"); err != nil {
-		t.Skip("nix-instantiate not available")
-	}
-	strictArg := attrs
-	if strings.HasPrefix(strings.TrimSpace(attrs), "let") {
-		strictArg = "(" + attrs + ")"
-	}
-	pathExpr := "(builtins.derivationStrict " + strictArg + ").out"
-	out, err := exec.Command("nix-instantiate", "--eval", "--raw", "-E", pathExpr).Output()
-	if err != nil {
-		t.Fatalf("nix: %v", err)
-	}
-	return strings.TrimSpace(string(out))
+	lay := oracle.MustLayout(t)
+	return lay.EvalStrictOutPath(t, attrs)
 }
 
 func TestModuloTwoLevelOutPathVsNix(t *testing.T) {
