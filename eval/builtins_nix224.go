@@ -12,7 +12,6 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -793,34 +792,15 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 }
 
 func downloadChecked(rawURL string) ([]byte, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
+	if u, err := url.Parse(rawURL); err == nil && strings.HasSuffix(u.Hostname(), "sr.ht") {
+		// git.sr.ht answers Nix's libcurl with HTTP error 404. Go's HTTP
+		// client does not: HTTP/2 waits until the deadline, and HTTP/1.1
+		// never receives the status line. Nix downloads this host with
+		// curl, so this path does too.
+		return downloadWithCurl(rawURL)
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
-	}
-	if strings.HasSuffix(u.Hostname(), "sr.ht") {
-		// Clone() already put "h2" in NextProtos. Clearing TLSNextProto
-		// after that negotiates HTTP/2 and then reads the frames as
-		// HTTP/1.1 ("malformed HTTP response"). Go's HTTP/2 client also
-		// never receives the 404 Nix's curl gets. Advertise http/1.1
-		// only, with Nix's user agent.
-		transport = &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			ForceAttemptHTTP2:     false,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 15 * time.Second,
-			TLSClientConfig:       &tls.Config{NextProtos: []string{"http/1.1"}},
-			TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
-		}
-		req.Header.Set("User-Agent", "curl/8.5.0 Nix/2.24.9")
-		req.Header.Set("Accept", "*/*")
-	}
-	client := &http.Client{Timeout: 20 * time.Second, Transport: transport}
-	resp, err := client.Do(req)
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Get(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
 	}
@@ -831,6 +811,41 @@ func downloadChecked(rawURL string) ([]byte, error) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unable to download '%s': HTTP error %d\n\nresponse body:\n\n%s", rawURL, resp.StatusCode, body)
+	}
+	return body, nil
+}
+
+func downloadWithCurl(rawURL string) ([]byte, error) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
+	}
+	dir, err := os.MkdirTemp("", "goonix-curl-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	bodyPath := filepath.Join(dir, "body")
+	cmd := exec.Command("curl", "-sS", "-L", "--max-redirs", "10", "--max-time", "20", "-o", bodyPath, "-w", "%{http_code}", rawURL)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	body, readErr := os.ReadFile(bodyPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return nil, readErr
+	}
+	if runErr != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = runErr.Error()
+		}
+		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, msg)
+	}
+	code := strings.TrimSpace(stdout.String())
+	if code != "200" {
+		status := 0
+		fmt.Sscanf(code, "%d", &status)
+		return nil, fmt.Errorf("unable to download '%s': HTTP error %d\n\nresponse body:\n\n%s", rawURL, status, body)
 	}
 	return body, nil
 }
