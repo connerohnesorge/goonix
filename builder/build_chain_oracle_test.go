@@ -70,9 +70,9 @@ func TestBuildChainQuotedArgsMatchesNixBuild(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name string
-		want string
-		got  string
+		name     string
+		want     string
+		got      string
 		buildNix func(root string) string
 	}{
 		{"bottom", wantBottom, goBottom, func(r string) string { return oracle.NixBuildDerivation(t, r, bottomAttrs) }},
@@ -128,11 +128,7 @@ func buildStrictEval(t *testing.T, st *local.Store, expr string) (string, error)
 	if !ok {
 		return "", errNotRegistered
 	}
-	var buf bytes.Buffer
-	if err := gd.WriteDerivation(&buf); err != nil {
-		return "", err
-	}
-	if err := st.WriteDerivation(buf.Bytes(), drvPath); err != nil {
+	if err := writeRegisteredClosure(st, ev, drvPath, map[string]bool{}); err != nil {
 		return "", err
 	}
 	outs, err := store.LogicalOutputPaths(gd)
@@ -144,6 +140,27 @@ func buildStrictEval(t *testing.T, st *local.Store, expr string) (string, error)
 		return "", err
 	}
 	return outs["out"], nil
+}
+
+func writeRegisteredClosure(st *local.Store, ev *eval.Evaluator, drvPath string, seen map[string]bool) error {
+	if seen[drvPath] {
+		return nil
+	}
+	seen[drvPath] = true
+	gd, ok := ev.RegisteredDerivation(drvPath)
+	if !ok {
+		return errNotRegistered
+	}
+	for dep := range gd.InputDerivations {
+		if err := writeRegisteredClosure(st, ev, dep, seen); err != nil {
+			return err
+		}
+	}
+	var buf bytes.Buffer
+	if err := gd.WriteDerivation(&buf); err != nil {
+		return err
+	}
+	return st.WriteDerivation(buf.Bytes(), drvPath)
 }
 
 var errNotRegistered = evalErrMsg("derivation not registered")

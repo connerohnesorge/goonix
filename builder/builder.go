@@ -390,6 +390,9 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 		args[i] = b.rewriteValueLogical(a, d, outPaths)
 	}
 
+	if err := b.writeStructuredAttrsFiles(d, outPaths, tmpDir); err != nil {
+		return err
+	}
 	cmd := exec.Command(builder, args...)
 	cmd.Dir = tmpDir
 	cmd.Env = b.buildEnvLogical(d, outPaths, tmpDir)
@@ -414,16 +417,32 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 			return err
 		}
 	}
+	infos := make(map[string]builtOutput, len(outPaths))
 	for outName, logicalOut := range outPaths {
 		physOut := physOuts[outName]
 		refs, err := b.Store.ScanPathReferences(logicalOut)
 		if err != nil {
+			removePhysOutputs(physOuts)
 			return err
 		}
+		_, narSize, err := local.NarHashAndSize(physOut)
+		if err != nil {
+			removePhysOutputs(physOuts)
+			return err
+		}
+		infos[outName] = builtOutput{refs: refs, narSize: narSize}
+	}
+	if err := b.finishStructuredOutputs(drvPath, d, outPaths, infos); err != nil {
+		removePhysOutputs(physOuts)
+		return err
+	}
+	for outName, logicalOut := range outPaths {
+		physOut := physOuts[outName]
+		info := infos[outName]
 		if err := b.Store.RecordDerivationOutput(drvPath, outName, logicalOut); err != nil {
 			return err
 		}
-		if err := b.registerBuilt(logicalOut, physOut, refs); err != nil {
+		if err := b.registerBuilt(logicalOut, physOut, info.refs); err != nil {
 			return err
 		}
 	}
@@ -433,18 +452,24 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 func (b *Builder) buildEnvLogical(d *gonixdrv.Derivation, outPaths map[string]string, tmpDir string) []string {
 	cfg := b.Store.Config()
 	storeDir := cfg.LogicalStoreDir()
+	structured := d.Env["__json"] != ""
 	keys := make([]string, 0, len(d.Env)+8)
-	for k := range d.Env {
-		keys = append(keys, k)
+	if !structured {
+		for k := range d.Env {
+			keys = append(keys, k)
+		}
 	}
 	sort.Strings(keys)
 	env := make([]string, 0, len(keys)+12)
 	for _, k := range keys {
 		env = append(env, k+"="+b.rewriteValueLogical(d.Env[k], d, outPaths))
 	}
-	for name, logical := range outPaths {
-		env = append(env, name+"="+logical)
+	if !structured {
+		for name, logical := range outPaths {
+			env = append(env, name+"="+logical)
+		}
 	}
+	env = append(env, b.structuredAttrsEnv(d, tmpDir)...)
 	cores := d.Env["NIX_BUILD_CORES"]
 	if cores == "" {
 		cores = "1"

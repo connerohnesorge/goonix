@@ -6,6 +6,8 @@ package eval
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"sort"
 
 	"github.com/connerohnesorge/goonix/data"
@@ -117,6 +119,9 @@ func (ev *Evaluator) fillStructuredDerivationFromAttrs(attrs *Value, drv *Deriva
 				if err != nil {
 					return err
 				}
+				if _, dup := outs[s]; dup {
+					return evalErr(pos, "duplicate derivation output '%s'", s)
+				}
 				if s == "drvPath" {
 					return evalErr(pos, "invalid derivation output name 'drvPath'")
 				}
@@ -126,6 +131,8 @@ func (ev *Evaluator) fillStructuredDerivationFromAttrs(attrs *Value, drv *Deriva
 				return evalErr(pos, "derivation cannot have an empty set of outputs")
 			}
 			drv.Outputs = outs
+		case "allowedReferences", "allowedRequisites", "disallowedReferences", "disallowedRequisites", "maxSize", "maxClosureSize":
+			fmt.Fprintf(os.Stderr, "warning: In a derivation named '%s', 'structuredAttrs' disables the effect of the derivation attribute '%s'; use 'outputChecks.<output>.%s' instead\n", drv.Name, key, key)
 		}
 
 		jv, err := ev.valueToStructuredJSON(val, pos, col)

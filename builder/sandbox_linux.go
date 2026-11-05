@@ -111,12 +111,18 @@ func sandboxBuildEnv(env []string, hostDir string) []string {
 	out := append([]string(nil), env...)
 	for i, e := range out {
 		k, v, ok := strings.Cut(e, "=")
-		if !ok || v != hostDir {
+		if !ok {
 			continue
 		}
 		switch k {
 		case "NIX_BUILD_TOP", "TMPDIR", "TEMP", "TMP", "TEMPDIR":
-			out[i] = k + "=/build"
+			if v == hostDir {
+				out[i] = k + "=/build"
+			}
+		case "NIX_ATTRS_JSON_FILE", "NIX_ATTRS_SH_FILE":
+			if strings.HasPrefix(v, hostDir+"/") {
+				out[i] = k + "=/build" + strings.TrimPrefix(v, hostDir)
+			}
 		}
 	}
 	return out

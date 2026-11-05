@@ -156,6 +156,27 @@ func (s *Store) IsValidPath(logicalPath string) (bool, error) {
 	return s.isValidPathQuery(logicalPath)
 }
 
+// PathMeta is the registered NAR metadata Nix puts in structured-attrs path info.
+type PathMeta struct {
+	NarHash string
+	NarSize int64
+	Refs    []string
+}
+
+// QueryPathMeta returns the registered NAR hash (nixbase32, no prefix), size, and references.
+func (s *Store) QueryPathMeta(logicalPath string) (PathMeta, error) {
+	var meta PathMeta
+	err := s.DB.QueryRow(`SELECT narHash, narSize FROM ValidPaths WHERE path = ?`, logicalPath).Scan(&meta.NarHash, &meta.NarSize)
+	if err != nil {
+		return PathMeta{}, err
+	}
+	meta.Refs, err = s.QueryReferences(logicalPath)
+	if err != nil {
+		return PathMeta{}, err
+	}
+	return meta, nil
+}
+
 // QueryReferences returns direct references of logicalPath.
 func (s *Store) QueryReferences(logicalPath string) ([]string, error) {
 	rows, err := s.DB.Query(`SELECT reference FROM Refs WHERE referrer = ? ORDER BY reference`, logicalPath)

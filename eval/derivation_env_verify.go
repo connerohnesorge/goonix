@@ -93,6 +93,21 @@ func (ev *Evaluator) outputStorePath(drvPath, output string) (string, bool) {
 	return "", false
 }
 
+func structuredArgsContain(drv *DerivationValue, want string) bool {
+	if drv == nil || want == "" {
+		return false
+	}
+	if strings.Contains(drv.Builder, want) {
+		return true
+	}
+	for _, arg := range drv.Args {
+		if strings.Contains(arg, want) {
+			return true
+		}
+	}
+	return false
+}
+
 func (ev *Evaluator) verifyStructuredDerivationEnvContext(drv *DerivationValue, col *derivationInputCollector) error {
 	if drv == nil || col == nil {
 		return nil
@@ -104,9 +119,10 @@ func (ev *Evaluator) verifyStructuredDerivationEnvContext(drv *DerivationValue, 
 			if !ok {
 				return fmt.Errorf("derivation %q structured attrs: input drv %q output %q not in store cache", drv.Name, p, out)
 			}
-			if !strings.Contains(jsonText, want) {
-				return fmt.Errorf("derivation %q __json does not contain output path %q from input drv %q", drv.Name, want, p)
+			if strings.Contains(jsonText, want) || structuredArgsContain(drv, want) {
+				continue
 			}
+			return fmt.Errorf("derivation %q __json does not contain output path %q from input drv %q", drv.Name, want, p)
 		}
 	}
 	return nil
