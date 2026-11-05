@@ -77,11 +77,13 @@ func TestSubstituteHelloFromCache(t *testing.T) {
 	if testing.Short() {
 		t.Skip("network")
 	}
-	st, err := local.OpenStore(t.TempDir())
+	root := t.TempDir()
+	st, err := local.OpenStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
+	t.Cleanup(func() { _ = local.ChmodStoreTreeWritable(root) })
 	c := substituter.NewClient(substituter.Config{})
 	// Small path with a tiny reference closure (pinned from cache.nixos.org).
 	path := "/nix/store/hwz2l7ihv2skq7gr5l3paavs3rr9il7z-hello-2.12.1"

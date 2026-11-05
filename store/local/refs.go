@@ -53,6 +53,9 @@ func (s *Store) ScanPathReferences(logicalPath string) ([]string, error) {
 		if d.IsDir() {
 			return nil
 		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
