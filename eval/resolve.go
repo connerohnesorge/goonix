@@ -60,43 +60,28 @@ func (e *Env) lookup(sym data.Symbol) (*AttrBinding, bool) {
 }
 
 func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, error) {
-	if env == nil {
-		return nil, false, nil
-	}
-	if b, ok := env.Vars[sym]; ok {
-		if b.Thunk != nil && b.Thunk.locked && envHasWith(env) {
-			// `with` on the scope chain provides alternate bindings (rec + with self-skip).
-		} else {
+	// Nix ExprVar: walk lexical scopes (let/rec/lambda Vars only), then innermost-first `with`.
+	for cur := env; cur != nil; cur = cur.Parent {
+		if b, ok := cur.Vars[sym]; ok {
 			return b, true, nil
 		}
 	}
-	if b, ok, err := ev.lookupEnv(env.Parent, sym); err != nil {
-		return nil, false, err
-	} else if ok {
-		return b, true, nil
-	}
-	if env.With != nil {
-		w, err := ev.forceWHNF(env.With, parser.Pos{})
+	for cur := env; cur != nil; cur = cur.Parent {
+		if cur.With == nil {
+			continue
+		}
+		w, err := ev.forceWHNF(cur.With, parser.Pos{})
 		if err != nil {
 			return nil, false, err
 		}
 		if w == nil || w.Kind != VKAttrs {
-			return nil, false, nil
+			continue
 		}
 		if v, ok := getAttr(w, sym); ok {
 			return &AttrBinding{Value: v}, true, nil
 		}
 	}
 	return nil, false, nil
-}
-
-func envHasWith(env *Env) bool {
-	for cur := env; cur != nil; cur = cur.Parent {
-		if cur.With != nil {
-			return true
-		}
-	}
-	return false
 }
 
 func getAttr(v *Value, sym data.Symbol) (*Value, bool) {

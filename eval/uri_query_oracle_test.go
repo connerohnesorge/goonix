@@ -54,7 +54,7 @@ func TestPkgsDrvPathSmokeMatchesNixOracle(t *testing.T) {
 		{name: "openssl", expr: `pkgs.openssl.drvPath`},
 		{name: "xorg_libXext", expr: `pkgs.xorg.libXext.drvPath`},
 		{name: "xorg_xcbproto", expr: `pkgs.xorg.xcbproto.drvPath`},
-		{name: "git", expr: `pkgs.git.out.drvPath`, nixOnly: true},
+		{name: "git", expr: `pkgs.git.out.drvPath`},
 	}
 	nixpkgs := testutil.NixpkgsPath(t)
 	for _, tc := range cases {
