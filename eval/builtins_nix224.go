@@ -12,6 +12,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -792,7 +793,12 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 }
 
 func downloadChecked(rawURL string) ([]byte, error) {
-	client := &http.Client{Timeout: 20 * time.Second}
+	// git.sr.ht answers curl (HTTP/1.1) with 404 and does not answer an
+	// HTTP/2 Go client. Nix's fetch reports that 404.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ForceAttemptHTTP2 = false
+	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	client := &http.Client{Timeout: 20 * time.Second, Transport: transport}
 	resp, err := client.Get(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())

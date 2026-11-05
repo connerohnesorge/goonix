@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/connerohnesorge/goonix/store"
 	"github.com/connerohnesorge/goonix/store/local"
@@ -198,7 +199,21 @@ func WriteDerivation(cfg store.Config, drv *DerivationValue) error {
 	if err := store.WriteDerivationForHash(content, d, false, nil); err != nil {
 		return err
 	}
-	return store.WriteTextToStore(drv.DrvPath, content.String())
+	dest := derivationOnDisk(drv.DrvPath)
+	// A previous realisation may have left the .drv read-only.
+	_ = os.Remove(dest)
+	return store.WriteTextToStore(dest, content.String())
+}
+
+// derivationOnDisk is the filesystem path for a logical .drv. When evaluation
+// is using a chroot store, the logical path stays /nix/store/... and the bytes
+// are written under that root.
+func derivationOnDisk(logical string) string {
+	root := chrootPhysRootFromEnv()
+	if root != "" && strings.HasPrefix(logical, store.DefaultStoreDir+"/") {
+		return local.PhysicalPath(root, logical)
+	}
+	return logical
 }
 
 // SerializeDerivation returns the ATerm bytes for d (same as a .drv file body).

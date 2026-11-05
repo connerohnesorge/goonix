@@ -49,7 +49,7 @@ in builtins.derivationStrict { name = "top"; builder = dep.out; system = "x86_64
 	sawDep := false
 	for path := range top.InputDerivations {
 		sawDep = true
-		if _, err := os.Stat(path); err != nil {
+		if _, err := os.Stat(derivationOnDisk(path)); err != nil {
 			t.Fatalf("dependency %s was not written: %v", path, err)
 		}
 		if !strings.HasSuffix(path, "-dep.drv") {
@@ -59,7 +59,7 @@ in builtins.derivationStrict { name = "top"; builder = dep.out; system = "x86_64
 	if !sawDep {
 		t.Fatal("no dependency drv")
 	}
-	if _, err := os.Stat(top.DrvPath); err != nil {
+	if _, err := os.Stat(derivationOnDisk(top.DrvPath)); err != nil {
 		t.Fatalf("top drv: %v", err)
 	}
 }
