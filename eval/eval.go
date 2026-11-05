@@ -95,6 +95,7 @@ func NewEvaluator() *Evaluator {
 		NixPath:     NewNixPathFromEnv(),
 		importCache: make(map[string]*Value),
 	}
+	prependEmbeddedNixPath(e.NixPath)
 	e.registerBuiltins()
 	if os.Getenv("GOONIX_TRACE_FORCE") != "" {
 		e.forceTrace = true
@@ -284,9 +285,6 @@ func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
 		}
 		return bind.Value, nil
 	}
-	if b, ok := ev.Builtins[v.Name]; ok {
-		return &Value{Kind: VKBuiltin, Builtin: b}, nil
-	}
 	return nil, evalErr(v.P, "undefined variable %q", v.Name)
 }
 
@@ -411,7 +409,7 @@ func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, populateEnv, bindEnv *E
 			lookupEnv = bindEnv
 		}
 		t := ev.newThunk(expr, lookupEnv, inh.Pos)
-		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
+		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t, Pos: inh.Pos}
 		if inh.From != nil && recursive {
 			bindEnv.bindThunk(sym, t)
 		}
@@ -489,7 +487,7 @@ func (ev *Evaluator) evalInherit(inh parser.Inherit, env *Env, av *Value) error 
 				return evalErr(inh.Pos, "undefined variable %q in inherit", name)
 			}
 		}
-		av.Attrs.Binds[sym] = &AttrBinding{Value: val}
+		av.Attrs.Binds[sym] = &AttrBinding{Value: val, Pos: inh.Pos}
 	}
 	return nil
 }

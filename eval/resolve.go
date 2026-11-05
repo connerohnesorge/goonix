@@ -60,10 +60,15 @@ func (e *Env) lookup(sym data.Symbol) (*AttrBinding, bool) {
 }
 
 func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, error) {
-	// Nix ExprVar: walk lexical scopes (let/rec/lambda Vars only), then innermost-first `with`.
+	// Nix ExprVar: lexical scopes, then static builtins, then innermost-first `with`.
 	for cur := env; cur != nil; cur = cur.Parent {
 		if b, ok := cur.Vars[sym]; ok {
 			return b, true, nil
+		}
+	}
+	if name := ev.Intern.Lookup(sym); name != "" {
+		if b, ok := ev.Builtins[name]; ok {
+			return &AttrBinding{Value: &Value{Kind: VKBuiltin, Builtin: b}}, true, nil
 		}
 	}
 	for cur := env; cur != nil; cur = cur.Parent {

@@ -7,6 +7,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"unicode"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
@@ -14,6 +15,15 @@ import (
 
 // ValidateDerivationName checks Nix store path name rules for derivation names.
 func ValidateDerivationName(name string) error {
+	if name == "." || name == ".." {
+		return fmt.Errorf("invalid derivation name %q", name)
+	}
+	if strings.HasSuffix(name, ".drv") {
+		return fmt.Errorf("invalid derivation name %q: must not end in .drv", name)
+	}
+	if len(name) > 211 {
+		return fmt.Errorf("invalid derivation name %q: length %d exceeds 211", name, len(name))
+	}
 	for i, r := range name {
 		if r == '"' || r == '\\' {
 			return fmt.Errorf("invalid derivation name: name %q contains illegal character %q", name, string(r))

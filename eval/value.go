@@ -91,6 +91,7 @@ type AttrSet struct {
 type AttrBinding struct {
 	Value *Value
 	Thunk *Thunk
+	Pos   parser.Pos
 }
 
 // LambdaValue is a user-defined function closure.

@@ -19,6 +19,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+
+	"github.com/connerohnesorge/goonix/internal/nixfiles"
 )
 
 // NixPath resolves <name> paths using NIX_PATH and -I entries.
@@ -135,4 +138,19 @@ func (np *NixPath) ResolveAnglePath(lit string) (string, error) {
 	}
 	name := strings.TrimSuffix(strings.TrimPrefix(lit, "<"), ">")
 	return np.FindFile(name)
+}
+
+var embeddedNixOnce sync.Once
+var embeddedNixDir string
+
+func prependEmbeddedNixPath(np *NixPath) {
+	if np == nil {
+		return
+	}
+	embeddedNixOnce.Do(func() {
+		embeddedNixDir, _ = nixfiles.MaterializedDir()
+	})
+	if embeddedNixDir != "" {
+		np.PrependEntries("nix=" + embeddedNixDir)
+	}
 }

@@ -132,6 +132,7 @@ func (ev *Evaluator) registerBuiltins() {
 	register("unsafeGetAttrPos", builtinUnsafeGetAttrPos)
 	register("functionArgs", builtinFunctionArgs)
 	register("addErrorContext", builtinAddErrorContext)
+	ev.registerExtendedBuiltins()
 }
 
 // BuiltinAttrSet returns an attribute set of all registered builtins.
@@ -435,11 +436,11 @@ func builtinGetAttr(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	set, err := ev.forceAttrs(args[0], pos)
+	name, err := ev.forceString(args[0])
 	if err != nil {
 		return nil, err
 	}
-	name, err := ev.forceString(args[1])
+	set, err := ev.forceAttrs(args[1], pos)
 	if err != nil {
 		return nil, err
 	}
@@ -757,21 +758,22 @@ func readDirEntryType(e fs.DirEntry) string {
 }
 
 func builtinHashString(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-	if len(args) < 2 {
-		return nil, evalErr(pos, "hashString expects at least 2 arguments")
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
 	}
 	algo, err := ev.forceString(args[0])
 	if err != nil {
 		return nil, err
 	}
-	if algo != "sha256" {
-		return nil, evalErr(pos, "unsupported hash algorithm %q", algo)
-	}
 	s, err := ev.forceString(args[1])
 	if err != nil {
 		return nil, err
 	}
-	return Str(store.TextHash(s), pos), nil
+	h, err := store.HashStringDigest(algo, s)
+	if err != nil {
+		return nil, evalErr(pos, "%v", err)
+	}
+	return Str(h, pos), nil
 }
 
 func builtinMatch(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -788,16 +790,12 @@ func builtinMatch(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) 
 	}
 	groups, ok, err := nixRegexMatch(re, s)
 	if err != nil {
-		return nil, evalErr(pos, "invalid regex: %v", err)
+		return nil, evalErr(pos, "%v", err)
 	}
 	if !ok {
 		return Null(), nil
 	}
-	elems := make([]*Value, len(groups))
-	for i, g := range groups {
-		elems[i] = Str(g, pos)
-	}
-	return List(elems...), nil
+	return matchGroupsToValues(ev, groups, pos)
 }
 
 func builtinSplit(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -2151,17 +2149,18 @@ func builtinUnsafeGetAttrPos(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 		return nil, evalErr(pos, "unsafeGetAttrPos expects an attribute set")
 	}
 	sym := ev.Intern.Intern(name)
-	if _, ok := set.Attrs.Binds[sym]; !ok {
+	b, ok := set.Attrs.Binds[sym]
+	if !ok || b == nil {
 		return Null(), nil
 	}
-	// functionArgs / __functionArgs maps formal names to bool; no position metadata.
-	for _, bind := range set.Attrs.Binds {
-		if bind.Value != nil && bind.Value.Kind == VKBool {
-			return Null(), nil
-		}
-		break
+	if b.Pos.File == "" && b.Pos.Line == 0 && b.Pos.Col == 0 {
+		return Null(), nil
 	}
-	return Null(), nil
+	out := Attrs(false)
+	out.Attrs.Binds[ev.Intern.Intern("file")] = &AttrBinding{Value: Str(b.Pos.File, pos)}
+	out.Attrs.Binds[ev.Intern.Intern("line")] = &AttrBinding{Value: Int(int64(b.Pos.Line))}
+	out.Attrs.Binds[ev.Intern.Intern("column")] = &AttrBinding{Value: Int(int64(b.Pos.Col))}
+	return out, nil
 }
 
 func builtinGenericClosure(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {

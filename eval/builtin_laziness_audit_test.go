@@ -61,7 +61,7 @@ func TestBuiltinLazinessAudit(t *testing.T) {
 		{name: "zipAttrsWith one key", expr: `(builtins.zipAttrsWith (n: vals: builtins.head vals) [ { a = 1; b = ` + throwVal + `; } { a = 2; } ]).a`},
 		{name: "removeAttrs keeps lazy attrs", expr: `(builtins.removeAttrs { a = 1; b = ` + throwVal + `; } [ "c" ]).a`},
 		{name: "intersectAttrs", expr: `(builtins.intersectAttrs { a = 1; b = ` + throwVal + `; } { a = 2; c = 3; }).a`},
-		{name: "getAttr", expr: `builtins.getAttr { a = 1; b = ` + throwVal + `; } "a"`},
+		{name: "getAttr", expr: `builtins.getAttr "a" { a = 1; b = ` + throwVal + `; }`},
 		{name: "hasAttr", expr: `builtins.hasAttr "a" { a = 1; b = ` + throwVal + `; }`},
 		{name: "attrNames", expr: `builtins.length (builtins.attrNames { a = 1; b = ` + throwVal + `; })`},
 		{name: "attrValues head", expr: `builtins.head (builtins.attrValues { a = 1; b = ` + throwVal + `; })`},

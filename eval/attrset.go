@@ -41,7 +41,7 @@ func (ev *Evaluator) insertBinding(av *Value, bindEnv *Env, bind parser.Binding,
 	}
 	t := ev.newThunk(bind.Value, bindEnv, bind.Pos)
 	if len(bind.Path) == 1 {
-		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
+		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t, Pos: bind.Pos}
 		if recursive {
 			bindEnv.bindThunk(sym, t)
 		}
@@ -77,7 +77,7 @@ func (ev *Evaluator) insertBindingInto(av *Value, bindEnv *Env, path []parser.At
 		return nil
 	}
 	if len(path) == 1 {
-		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t}
+		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t, Pos: t.pos}
 		return nil
 	}
 	name := ev.Intern.Lookup(sym)
