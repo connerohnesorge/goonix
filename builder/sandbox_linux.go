@@ -25,10 +25,19 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\'\''`) + "'"
 }
 
-// execBuildCommandMount runs the builder inside a mount namespace where the
-// physical store is bind-mounted at /nix/store. It returns errMountFallback only
-// when unshare or the bind mount itself fails. A nonzero builder exit is returned
-// unchanged so the caller does not retry with physical paths.
+func absTool(name string) (string, error) {
+	p, err := exec.LookPath(name)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(p)
+}
+
+// execBuildCommandMount runs the builder inside a user and mount namespace where
+// the physical store is bind-mounted at /nix/store. The wrapper resolves mkdir,
+// mount, and sh by absolute path so it does not depend on the builder environment.
+// The builder process still receives cmd.Env unchanged (PATH=/path-not-set).
+// errMountFallback is returned only when unshare or the bind mount fails.
 func (b *Builder) execBuildCommandMount(cmd *exec.Cmd) error {
 	if cmd.Dir == "" {
 		return errMountFallback
@@ -37,11 +46,30 @@ func (b *Builder) execBuildCommandMount(cmd *exec.Cmd) error {
 	if err != nil {
 		return errMountFallback
 	}
+	unsharePath, err := absTool("unshare")
+	if err != nil {
+		return errMountFallback
+	}
+	shPath, err := absTool("sh")
+	if err != nil {
+		return errMountFallback
+	}
+	mkdirPath, err := absTool("mkdir")
+	if err != nil {
+		return errMountFallback
+	}
+	mountPath, err := absTool("mount")
+	if err != nil {
+		return errMountFallback
+	}
 	sentinel := filepath.Join(cmd.Dir, ".goonix-mount-ok")
 	_ = os.Remove(sentinel)
 
+	// Absolute paths: the shell inherits PATH=/path-not-set from the builder env.
 	inner := fmt.Sprintf(
-		"set -e; mkdir -p /nix/store; mount --bind %s /nix/store; : > %s; cd %s; exec %s",
+		"set -e; %s -p /nix/store; %s --bind %s /nix/store; : > %s; cd %s; exec %s",
+		mkdirPath,
+		mountPath,
 		shellQuote(storePhys),
 		shellQuote(sentinel),
 		shellQuote(cmd.Dir),
@@ -50,7 +78,7 @@ func (b *Builder) execBuildCommandMount(cmd *exec.Cmd) error {
 	for _, a := range cmd.Args[1:] {
 		inner += " " + shellQuote(a)
 	}
-	wrapped := exec.Command("unshare", "-m", "--propagation", "private", "sh", "-c", inner)
+	wrapped := exec.Command(unsharePath, "-rm", "--propagation", "private", shPath, "-c", inner)
 	wrapped.Env = cmd.Env
 	wrapped.Stdout = cmd.Stdout
 	wrapped.Stderr = cmd.Stderr
