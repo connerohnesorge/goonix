@@ -311,7 +311,7 @@ func builtinReadFileType(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	info, err := os.Lstat(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return Str("unknown", pos), nil
+			return nil, evalErr(pos, "path '%s' does not exist", p)
 		}
 		return nil, err
 	}

@@ -26,6 +26,7 @@ func TestBuiltinImplementationsMatchNix(t *testing.T) {
 		`builtins.hashFile "sha256" "` + hosts + `"`,
 		`builtins.hashFile "sha1" "` + hosts + `"`,
 		"builtins.toJSON (builtins.fromTOML ''\na = 1\nb = \"x\"\nn = 1.5\nflag = true\n'')",
+		"builtins.toJSON (builtins.fromTOML ''\na = inf\nb = nan\nc = +inf\nd = -inf\n'')",
 		`builtins.toXML { a = 1; b = "x"; }`,
 		`builtins.toXML (derivation { name = "x"; builder = "/bin/sh"; system = "x86_64-linux"; })`,
 		`let d = derivation { name = "x"; builder = "/bin/sh"; system = "x86_64-linux"; }; in builtins.toXML (d // { self = d; })`,
@@ -51,6 +52,23 @@ func TestBuiltinImplementationsMatchNix(t *testing.T) {
 				t.Fatalf("nix=%q\ngo=%q", want, got)
 			}
 		})
+	}
+}
+
+func TestFromTOMLDuplicateAndReadFileTypeMatchNix(t *testing.T) {
+	lay := oracle.MustLayout(t)
+	dup := "builtins.fromTOML ''\na = 1\na = 2\n''"
+	_, nerr := lay.EvalExprAllowError(t, dup)
+	_, gerr := evalPkgsExprStringAllowError(t, dup)
+	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), "already exists") || !strings.Contains(gerr.Error(), `value ("a") already exists`) {
+		t.Fatalf("duplicate key\nnix=%v\ngo=%v", nerr, gerr)
+	}
+	missing := `builtins.readFileType "/no/such/goonix-readfiletype"`
+	_, nerr = lay.EvalExprAllowError(t, missing)
+	_, gerr = evalPkgsExprStringAllowError(t, missing)
+	want := "path '/no/such/goonix-readfiletype' does not exist"
+	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), want) || !strings.Contains(gerr.Error(), want) {
+		t.Fatalf("readFileType\nnix=%v\ngo=%v", nerr, gerr)
 	}
 }
 

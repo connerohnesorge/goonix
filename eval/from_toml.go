@@ -6,6 +6,7 @@ package eval
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -141,6 +142,9 @@ func (d *tomlDoc) insert(cur *Value, keys []string, val *Value) error {
 	}
 	for i, k := range keys {
 		if i == len(keys)-1 {
+			if _, ok := d.get(cur, k); ok {
+				return fmt.Errorf("[error] toml::insert_value: value (%q) already exists.", k)
+			}
 			d.put(cur, k, val)
 			return nil
 		}
@@ -178,6 +182,10 @@ func (d *tomlDoc) value(n *unstable.Node, timestamps bool) (*Value, error) {
 		f, err := strconv.ParseFloat(strings.ReplaceAll(string(n.Data), "_", ""), 64)
 		if err != nil {
 			return nil, err
+		}
+		// Nix 2.24.9's toml11 turns non-finite floats into null.
+		if math.IsInf(f, 0) || math.IsNaN(f) {
+			return Null(), nil
 		}
 		return &Value{Kind: VKFloat, Float: f}, nil
 	case unstable.Array:
