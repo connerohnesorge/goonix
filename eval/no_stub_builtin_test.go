@@ -21,8 +21,15 @@ func TestNoBuiltinStubBodies(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(raw), "is not implemented") {
-			t.Fatalf("%s still contains a builtin stub (\"is not implemented\")", ent.Name())
+		for _, line := range strings.Split(string(raw), "\n") {
+			// Nix's own fetchTree error for an unknown input type.
+			if strings.Contains(line, "cannot show unsupported input") {
+				continue
+			}
+			low := strings.ToLower(line)
+			if strings.Contains(low, "not implemented") || strings.Contains(low, "unsupported") {
+				t.Fatalf("%s still contains a builtin stub: %s", ent.Name(), strings.TrimSpace(line))
+			}
 		}
 	}
 }

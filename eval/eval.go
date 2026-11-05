@@ -293,7 +293,7 @@ func (ev *Evaluator) evalExpr(expr parser.Expr, env *Env) (*Value, error) {
 	case *parser.CurPos:
 		return Str(fmt.Sprintf("%s:%d:%d", e.P.File, e.P.Line, e.P.Col), e.P), nil
 	default:
-		return nil, evalErr(expr.Pos(), "unsupported expression %T", expr)
+		return nil, evalErr(expr.Pos(), "unrecognised expression %T", expr)
 	}
 }
 
