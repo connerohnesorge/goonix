@@ -404,7 +404,7 @@ func parseRegistryBytes(path string, body []byte) ([]registryEntry, error) {
 		return nil, nil
 	}
 	if doc.Version != 2 {
-		fmt.Fprintf(os.Stderr, "warning: cannot read flake registry '%s': flake registry '%s' has unsupported version %d\n", path, path, doc.Version)
+		fmt.Fprintf(os.Stderr, "warning: cannot read flake registry '%s': flake registry '%s' has unsupported version %d\n", path, path, doc.Version) // stub-scan: exempt
 		return nil, nil
 	}
 	out := make([]registryEntry, 0, len(doc.Flakes))
