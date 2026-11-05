@@ -161,9 +161,13 @@ func (b *Builder) buildFixedOutput(drvPath string, d *gonixdrv.Derivation, outPa
 		return fmt.Errorf("fixed-output %s not present: %w", outPath, err)
 	}
 	want := d.Outputs["out"].Hash
+	algo := d.Env["outputHashAlgo"]
+	if algo == "" {
+		algo = d.Outputs["out"].HashAlgorithm
+	}
 	switch mode {
 	case "flat", "":
-		if err := local.VerifyFlatOutput(phys, want); err != nil {
+		if err := local.VerifyFlatOutput(phys, want, algo); err != nil {
 			return err
 		}
 	case "nar", "recursive":

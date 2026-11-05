@@ -5,6 +5,10 @@
 package local
 
 import (
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -313,17 +317,29 @@ func writeNAREntry(nr *gonixnar.Reader, hdr *gonixnar.Header, destRoot string) e
 	}
 }
 
-// VerifyFlatOutput checks a fixed-output flat hash against a built file.
-func VerifyFlatOutput(filePath, wantBase16 string) error {
-	gotHash, _, err := FlatNarHashAndSize(filePath)
+// VerifyFlatOutput checks a fixed-output flat hash against a built file (raw content, not NAR).
+func VerifyFlatOutput(filePath, wantBase16, algo string) error {
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return err
 	}
-	raw, err := nixhash.ParseAny("sha256:"+gotHash, nil)
-	if err != nil {
-		return err
+	if algo == "" {
+		algo = "sha256"
 	}
-	gotBase16 := raw.Hash.Format(nixhash.Base16, false)
+	var gotBase16 string
+	switch algo {
+	case "sha256":
+		sum := sha256.Sum256(data)
+		gotBase16 = hex.EncodeToString(sum[:])
+	case "sha1":
+		sum := sha1.Sum(data)
+		gotBase16 = hex.EncodeToString(sum[:])
+	case "sha512":
+		sum := sha512.Sum512(data)
+		gotBase16 = hex.EncodeToString(sum[:])
+	default:
+		return fmt.Errorf("unsupported flat outputHashAlgo %q", algo)
+	}
 	if gotBase16 != wantBase16 {
 		return fmt.Errorf("fixed-output hash mismatch: got %s want %s", gotBase16, wantBase16)
 	}
