@@ -544,6 +544,14 @@ func unpackTarball(data []byte, dest string) (int64, error) {
 					return err
 				}
 				f.Close()
+			case tar.TypeSymlink:
+				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+					return err
+				}
+				_ = os.Remove(target)
+				if err := os.Symlink(hdr.Linkname, target); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -589,10 +597,7 @@ func builtinFetchTarball(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	}
 	data, err := fetchURLBytes(rawURL)
 	if err != nil {
-		if strings.Contains(err.Error(), "Couldn't read a file:// file") {
-			return nil, fmt.Errorf("Failed to open archive (Source threw exception: error: %s)", err.Error())
-		}
-		return nil, err
+		return nil, archiveDownloadError(err)
 	}
 	tmp, err := os.MkdirTemp("", "goonix-tar-")
 	if err != nil {
@@ -608,6 +613,8 @@ func builtinFetchTarball(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 		if err := os.WriteFile(filepath.Join(unpackDir, "data"), data, 0o644); err != nil {
 			return nil, err
 		}
+	} else {
+		unpackDir = stripSingleDir(unpackDir)
 	}
 	if sha != "" {
 		if err := verifyTreeHash(unpackDir, sha); err != nil {
@@ -854,10 +861,20 @@ func (ev *Evaluator) fetchTreeFile(rawURL string) (*Value, error) {
 	return ev.treeFromDir(parser.Pos{}, name, "source", treeMeta{}, false)
 }
 
+func archiveDownloadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(err.Error(), "Couldn't read a file:// file") {
+		return fmt.Errorf("Failed to open archive (Source threw exception: error: %s)", err.Error())
+	}
+	return err
+}
+
 func (ev *Evaluator) fetchTreeTarball(rawURL string, strip bool) (*Value, error) {
 	data, err := fetchURLBytes(rawURL)
 	if err != nil {
-		return nil, err
+		return nil, archiveDownloadError(err)
 	}
 	tmp, err := os.MkdirTemp("", "goonix-tar-")
 	if err != nil {
