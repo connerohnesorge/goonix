@@ -110,8 +110,9 @@ func (e *List) Pos() Pos { return e.P }
 
 // AttrName is one segment of an attribute path.
 type AttrName struct {
-	Name   string // set when Expr is nil
-	Expr   Expr   // dynamic segment ${...}
+	Pos  Pos    // source position of this path segment
+	Name string // set when Expr is nil
+	Expr Expr   // dynamic segment ${...}
 }
 
 // Binding is a single attribute binding.

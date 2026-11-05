@@ -1229,6 +1229,22 @@ func builtinPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err != nil || name == "" {
 		name = filepath.Base(p)
 	}
+	recursive := true
+	if rec, ok, err := getAttrBool(ev, set, "recursive"); err != nil {
+		return nil, err
+	} else if ok {
+		recursive = rec
+	}
+	if !recursive {
+		info, serr := os.Lstat(p)
+		if serr != nil {
+			return nil, serr
+		}
+		if !info.Mode().IsRegular() {
+			return nil, evalErr(pos, "file '%s' is not a regular file", p)
+		}
+		return ev.materializeFlatFile(pos, p, name, optionalAttrString(ev, set, "sha256"))
+	}
 	if filter, ok, err := attrValue(ev, set, "filter"); err != nil {
 		return nil, err
 	} else if ok {
@@ -1341,22 +1357,32 @@ func builtinFetchurl(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	if err != nil {
 		return nil, err
 	}
-	if params.Kind != VKAttrs {
+	var rawURL, name, wantHash string
+	switch params.Kind {
+	case VKString:
+		rawURL = params.String
+		name = filepath.Base(rawURL)
+	case VKPath:
+		rawURL = params.Path
+		name = filepath.Base(rawURL)
+	case VKAttrs:
+		rawURL, err = getAttrString(ev, params, "url")
+		if err != nil {
+			return nil, err
+		}
+		name = filepath.Base(rawURL)
+		if n, nerr := getAttrString(ev, params, "name"); nerr == nil && n != "" {
+			name = n
+		}
+		wantHash = optionalAttrString(ev, params, "sha256")
+	default:
 		return nil, evalErr(pos, "expected a set but found a %s", valueKindName(params.Kind))
-	}
-	rawURL, err := getAttrString(ev, params, "url")
-	if err != nil {
-		return nil, err
-	}
-	name := filepath.Base(rawURL)
-	if n, err := getAttrString(ev, params, "name"); err == nil && n != "" {
-		name = n
 	}
 	data, err := fetchURLBytes(rawURL)
 	if err != nil {
 		return nil, err
 	}
-	if want, err := getAttrString(ev, params, "sha256"); err == nil && want != "" {
+	if want := wantHash; want != "" {
 		sum := sha256.Sum256(data)
 		got, gerr := nixhash.NewHash(nixhash.SHA256, sum[:])
 		if gerr != nil {
@@ -1375,6 +1401,60 @@ func builtinFetchurl(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 		}
 	}
 	sum := sha256.Sum256(data)
+	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
+	logical, err := store.FlatSHA256OutputPath(cfg, name, hex.EncodeToString(sum[:]))
+	if err != nil {
+		return nil, err
+	}
+	phys := ev.physicalStorePath(logical)
+	if err := ev.Effects.RealiseStorePath(logical, func() error {
+		return store.WriteTextToStore(phys, string(data))
+	}); err != nil {
+		return nil, err
+	}
+	return StrWithContext(logical, []StringContextElem{{StorePath: logical}}, pos), nil
+}
+
+func optionalAttrString(ev *Evaluator, set *Value, name string) string {
+	s, err := getAttrString(ev, set, name)
+	if err != nil {
+		return ""
+	}
+	return s
+}
+
+func getAttrBool(ev *Evaluator, set *Value, name string) (bool, bool, error) {
+	v, ok, err := attrValue(ev, set, name)
+	if err != nil || !ok {
+		return false, ok, err
+	}
+	b, err := ev.forceBool(ev, v, nil)
+	return b, true, err
+}
+
+func (ev *Evaluator) materializeFlatFile(pos parser.Pos, path, name, sha string) (*Value, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(data)
+	if sha != "" {
+		hashText := sha
+		if !strings.Contains(sha, ":") && !strings.HasPrefix(sha, "sha256-") && len(sha) == 64 {
+			hashText = "sha256:" + sha
+		}
+		specified, serr := store.ParseHash(hashText)
+		if serr != nil {
+			return nil, serr
+		}
+		got, gerr := nixhash.NewHash(nixhash.SHA256, sum[:])
+		if gerr != nil {
+			return nil, gerr
+		}
+		if specified.Format(nixhash.Base16, false) != got.Format(nixhash.Base16, false) {
+			return nil, evalErr(pos, "hash mismatch in file '%s'", path)
+		}
+	}
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
 	logical, err := store.FlatSHA256OutputPath(cfg, name, hex.EncodeToString(sum[:]))
 	if err != nil {

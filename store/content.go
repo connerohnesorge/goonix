@@ -80,7 +80,7 @@ func WriteTextToStore(storePath, contents string) error {
 			return err
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(storePath), 0o555); err != nil {
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
 		return err
 	}
 	return os.WriteFile(storePath, []byte(contents), 0o444)
@@ -92,9 +92,19 @@ func CopyPathToStore(source, storePath string) error {
 }
 
 func copyPathRecursive(src, dst string) error {
-	info, err := os.Stat(src)
+	info, err := os.Lstat(src)
 	if err != nil {
 		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(src)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		return os.Symlink(target, dst)
 	}
 	if !info.IsDir() {
 		data, err := os.ReadFile(src)

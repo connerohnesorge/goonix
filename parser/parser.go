@@ -447,8 +447,8 @@ func (p *Parser) parseBinOp(prec int) (Expr, error) {
 				builtin = "div"
 			}
 			left = &Call{
-				P:   left.Pos(),
-				Fun: &Var{P: left.Pos(), Name: builtin},
+				P:    left.Pos(),
+				Fun:  &Var{P: left.Pos(), Name: builtin},
 				Args: []Expr{left, right},
 			}
 			continue
@@ -847,8 +847,9 @@ func (p *Parser) parseInterpID() (AttrName, error) {
 	switch p.cur().Type {
 	case tokenID, tokenOrKW:
 		t := p.advance()
-		return AttrName{Name: p.text(t)}, nil
+		return AttrName{Name: p.text(t), Pos: t.Pos}, nil
 	case tokenDQuote:
+		qpos := p.cur().Pos
 		p.advance()
 		parts, err := p.parseStringParts(tokenDQuote)
 		if err != nil {
@@ -858,7 +859,7 @@ func (p *Parser) parseInterpID() (AttrName, error) {
 			return AttrName{}, err
 		}
 		if len(parts) == 1 && parts[0].Interp == nil {
-			return AttrName{Name: parts[0].Text}, nil
+			return AttrName{Name: parts[0].Text, Pos: qpos}, nil
 		}
 		return AttrName{Expr: stringExpr(parts[0].Pos, parts)}, nil
 	case tokenInterpOpen:
@@ -895,6 +896,9 @@ func stringExpr(pos Pos, parts []StringPart) Expr {
 }
 
 func (a AttrName) pos() Pos {
+	if a.Pos.Line != 0 || a.Pos.File != "" {
+		return a.Pos
+	}
 	if a.Expr != nil {
 		return a.Expr.Pos()
 	}

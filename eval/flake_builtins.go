@@ -153,7 +153,7 @@ func builtinFlakeRefToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 			return nil, err
 		}
 	default:
-		return nil, evalErr(pos, "unsupported flake ref type %q", typ)
+		return nil, evalErr(pos, "unknown flake reference type '%s'", typ)
 	}
 	return Str(f.String(), pos), nil
 }
@@ -176,13 +176,10 @@ func builtinGetFlake(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	dir := parsed.Path
 	var cleanup func()
 	if parsed.Type == "github" {
-		rawURL := "https://github.com/" + parsed.Owner + "/" + parsed.Repo + ".git"
-		rev := parsed.Rev
-		if rev == "" {
-			rev = "HEAD"
-		}
+		// Resolve via the GitHub commits API and a bounded tarball download.
+		// An unlocked github: ref must not start a git clone of HEAD.
 		var err error
-		dir, cleanup, err = gitExportTree(rawURL, rev)
+		dir, cleanup, err = fetchGitHubTree(parsed.Owner, parsed.Repo, parsed.Rev)
 		if err != nil {
 			return nil, evalErr(pos, "%s", err.Error())
 		}
@@ -190,9 +187,18 @@ func builtinGetFlake(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	} else if parsed.Type != "path" {
 		return nil, evalErr(pos, "flake reference '%s' is not an absolute path", ref)
 	}
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, evalErr(pos, "opening file \"%s\": No such file or directory", dir)
+		}
+		return nil, err
+	}
 	flakeNix := filepath.Join(dir, "flake.nix")
 	if _, err := os.Stat(flakeNix); err != nil {
-		return nil, evalErr(pos, "path '%s' does not exist", flakeNix)
+		if os.IsNotExist(err) {
+			return nil, evalErr(pos, "path '%s' does not exist", flakeNix)
+		}
+		return nil, err
 	}
 	return ev.evalPathFlake(pos, dir, flakeNix)
 }

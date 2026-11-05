@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"hash"
 	"io"
@@ -145,9 +146,17 @@ func builtinConvertHash(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, e
 	if err != nil {
 		return nil, err
 	}
-	hw, err := store.ParseHash(hashStr)
+	var algo *nixhash.Algorithm
+	if name, err := getAttrString(ev, set, "hashAlgo"); err == nil && name != "" {
+		a, aerr := nixhash.ParseAlgorithm(name)
+		if aerr != nil {
+			return nil, evalErr(pos, "unknown hash algorithm '%s'", name)
+		}
+		algo = &a
+	}
+	hw, err := nixhash.ParseAny(hashStr, algo)
 	if err != nil {
-		return nil, err
+		return nil, evalErr(pos, "%s", err.Error())
 	}
 	var enc nixhash.Encoding
 	switch toFmt {
@@ -155,12 +164,15 @@ func builtinConvertHash(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, e
 		enc = nixhash.NixBase32
 	case "hex", "base16":
 		enc = nixhash.Base16
+	case "base64":
+		enc = nixhash.Base64
 	case "sri":
 		enc = nixhash.SRI
 	default:
-		return nil, evalErr(pos, "unknown hash format %q", toFmt)
+		return nil, evalErr(pos, "unknown hash format '%s'", toFmt)
 	}
-	return Str(hw.Format(enc, false), pos), nil
+	// Nix includes the algorithm prefix only for SRI.
+	return Str(hw.Format(enc, enc == nixhash.SRI), pos), nil
 }
 
 func builtinHashFile(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -186,7 +198,7 @@ func builtinHashFile(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	case "sha512":
 		h = sha512.New()
 	default:
-		return nil, evalErr(pos, "unsupported hash algorithm %q", algo)
+		return nil, evalErr(pos, "unknown hash algorithm '%s'", algo)
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -209,7 +221,7 @@ func builtinFromTOML(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	}
 	v, err := parseTOMLDocument(ev, s)
 	if err != nil {
-		return nil, evalErr(pos, "fromTOML: %v", err)
+		return nil, evalErr(pos, "while parsing TOML: %s", err.Error())
 	}
 	return v, nil
 }
@@ -222,7 +234,7 @@ func builtinReadFileType(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	if err != nil {
 		return nil, err
 	}
-	info, err := ev.Effects.Stat(p)
+	info, err := os.Lstat(p)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Str("unknown", pos), nil
@@ -407,7 +419,7 @@ func fetchURLBytes(rawURL string) ([]byte, error) {
 		}
 		return io.ReadAll(resp.Body)
 	default:
-		return nil, fmt.Errorf("unsupported URL scheme %q", u.Scheme)
+		return nil, fmt.Errorf("URL scheme '%s' is not recognised", u.Scheme)
 	}
 }
 
@@ -572,9 +584,19 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		return nil, err
 	}
 	if params.Kind != VKAttrs {
-		return nil, evalErr(pos, "fetchTree expects attribute set")
+		if ev.xp == nil || !ev.xp["flakes"] {
+			return nil, evalErr(pos, "passing a string argument to 'fetchTree' requires the 'flakes' experimental feature")
+		}
+		raw, err := ev.forceString(params)
+		if err != nil {
+			return nil, err
+		}
+		return ev.fetchTreeURL(pos, raw)
 	}
-	typ, _ := getAttrString(ev, params, "type")
+	typ, err := getAttrString(ev, params, "type")
+	if err != nil {
+		return nil, evalErr(pos, "attribute 'type' is missing in call to 'fetchTree'")
+	}
 	switch typ {
 	case "git":
 		rev, err := getAttrString(ev, params, "rev")
@@ -600,11 +622,226 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 			p = filepath.Join(filepath.Dir(ev.curFile), p)
 		}
 		return ev.materializeTreeSource(p, "source")
+	case "file":
+		rawURL, err := getAttrString(ev, params, "url")
+		if err != nil {
+			return nil, err
+		}
+		return ev.fetchTreeFile(rawURL)
+	case "tarball":
+		rawURL, err := getAttrString(ev, params, "url")
+		if err != nil {
+			return nil, err
+		}
+		return ev.fetchTreeTarball(rawURL, true)
 	case "github":
-		return nil, evalErr(pos, "fetchTree type %q not implemented", typ)
+		owner, err := getAttrString(ev, params, "owner")
+		if err != nil {
+			return nil, err
+		}
+		repo, err := getAttrString(ev, params, "repo")
+		if err != nil {
+			return nil, err
+		}
+		rev, _ := getAttrString(ev, params, "rev")
+		return ev.fetchTreeGitHub(owner, repo, rev)
+	case "gitlab":
+		owner, err := getAttrString(ev, params, "owner")
+		if err != nil {
+			return nil, err
+		}
+		repo, err := getAttrString(ev, params, "repo")
+		if err != nil {
+			return nil, err
+		}
+		rev, _ := getAttrString(ev, params, "rev")
+		return ev.fetchTreeGitLab(owner, repo, rev)
+	case "sourcehut":
+		owner, err := getAttrString(ev, params, "owner")
+		if err != nil {
+			return nil, err
+		}
+		repo, err := getAttrString(ev, params, "repo")
+		if err != nil {
+			return nil, err
+		}
+		rev, _ := getAttrString(ev, params, "rev")
+		return ev.fetchTreeSourceHut(owner, repo, rev)
+	case "indirect":
+		id, _ := getAttrString(ev, params, "id")
+		return nil, evalErr(pos, "cannot find flake 'flake:%s' in the flake registries", id)
 	default:
-		return nil, evalErr(pos, "fetchTree type %q not implemented", typ)
+		// Nix 2.24 prints the input attrs. A single type attribute is the common case.
+		return nil, evalErr(pos, "cannot show unsupported input '{\"type\":%q}'", typ)
 	}
+}
+
+func downloadChecked(rawURL string) ([]byte, error) {
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unable to download '%s': HTTP error %d\n\nresponse body:\n\n%s", rawURL, resp.StatusCode, body)
+	}
+	return body, nil
+}
+
+func (ev *Evaluator) fetchTreeURL(pos parser.Pos, raw string) (*Value, error) {
+	switch {
+	case strings.HasPrefix(raw, "github:"):
+		parts := strings.Split(strings.TrimPrefix(raw, "github:"), "/")
+		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+			return nil, evalErr(pos, "URL '%s' is invalid", raw)
+		}
+		rev := ""
+		if len(parts) >= 3 {
+			rev = parts[2]
+		}
+		return ev.fetchTreeGitHub(parts[0], parts[1], rev)
+	case strings.HasPrefix(raw, "gitlab:"):
+		parts := strings.Split(strings.TrimPrefix(raw, "gitlab:"), "/")
+		if len(parts) < 2 {
+			return nil, evalErr(pos, "URL '%s' is invalid", raw)
+		}
+		return ev.fetchTreeGitLab(parts[0], parts[1], "")
+	case strings.HasPrefix(raw, "sourcehut:"):
+		parts := strings.Split(strings.TrimPrefix(raw, "sourcehut:"), "/")
+		if len(parts) < 2 {
+			return nil, evalErr(pos, "URL '%s' is invalid", raw)
+		}
+		return ev.fetchTreeSourceHut(parts[0], parts[1], "")
+	case strings.HasPrefix(raw, "flake:"):
+		return nil, evalErr(pos, "cannot find flake '%s' in the flake registries", raw)
+	default:
+		return ev.fetchTreeTarball(raw, true)
+	}
+}
+
+func (ev *Evaluator) fetchTreeFile(rawURL string) (*Value, error) {
+	data, err := fetchURLBytes(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp("", "goonix-file-*")
+	if err != nil {
+		return nil, err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return nil, err
+	}
+	tmp.Close()
+	defer os.Remove(name)
+	return ev.materializeTreeSource(name, "source")
+}
+
+func (ev *Evaluator) fetchTreeTarball(rawURL string, strip bool) (*Value, error) {
+	data, err := fetchURLBytes(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	tmp, err := os.MkdirTemp("", "goonix-tar-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	dest := filepath.Join(tmp, "unpacked")
+	if err := unpackTarball(data, dest); err != nil {
+		return nil, fmt.Errorf("Failed to open archive (Unrecognized archive format)")
+	}
+	if strip {
+		dest = stripSingleDir(dest)
+	}
+	return ev.materializeTreeSource(dest, "source")
+}
+
+func stripSingleDir(dir string) string {
+	ents, err := os.ReadDir(dir)
+	if err != nil || len(ents) != 1 || !ents[0].IsDir() {
+		return dir
+	}
+	return filepath.Join(dir, ents[0].Name())
+}
+
+func (ev *Evaluator) fetchTreeGitHub(owner, repo, rev string) (*Value, error) {
+	dir, cleanup, err := fetchGitHubTree(owner, repo, rev)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	return ev.materializeTreeSource(dir, "source")
+}
+
+func fetchGitHubTree(owner, repo, rev string) (string, func(), error) {
+	sha := rev
+	if len(sha) != 40 {
+		body, err := downloadChecked("https://api.github.com/repos/" + owner + "/" + repo + "/commits/" + refOrHead(rev))
+		if err != nil {
+			return "", nil, err
+		}
+		var parsed struct {
+			SHA string `json:"sha"`
+		}
+		if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.SHA) != 40 {
+			return "", nil, fmt.Errorf("unable to parse GitHub commit for %s/%s", owner, repo)
+		}
+		sha = parsed.SHA
+	}
+	data, err := fetchURLBytes("https://codeload.github.com/" + owner + "/" + repo + "/tar.gz/" + sha)
+	if err != nil {
+		return "", nil, err
+	}
+	tmp, err := os.MkdirTemp("", "goonix-gh-")
+	if err != nil {
+		return "", nil, err
+	}
+	dest := filepath.Join(tmp, "unpacked")
+	if err := unpackTarball(data, dest); err != nil {
+		os.RemoveAll(tmp)
+		return "", nil, fmt.Errorf("Failed to open archive (Unrecognized archive format)")
+	}
+	return stripSingleDir(dest), func() { os.RemoveAll(tmp) }, nil
+}
+
+func (ev *Evaluator) fetchTreeGitLab(owner, repo, rev string) (*Value, error) {
+	project := url.PathEscape(owner + "/" + repo)
+	body, err := downloadChecked("https://gitlab.com/api/v4/projects/" + project + "/repository/commits?ref_name=" + url.QueryEscape(refOrHead(rev)))
+	if err != nil {
+		return nil, err
+	}
+	var commits []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &commits); err != nil || len(commits) == 0 || commits[0].ID == "" {
+		return nil, fmt.Errorf("No commits returned by GitLab API -- does the git ref really exist?")
+	}
+	archive := "https://gitlab.com/api/v4/projects/" + project + "/repository/archive.tar.gz?sha=" + commits[0].ID
+	return ev.fetchTreeTarball(archive, true)
+}
+
+func (ev *Evaluator) fetchTreeSourceHut(owner, repo, rev string) (*Value, error) {
+	ref := refOrHead(rev)
+	base := "https://git.sr.ht/" + owner + "/" + repo
+	if _, err := downloadChecked(base + "/" + ref); err != nil {
+		return nil, err
+	}
+	return ev.fetchTreeTarball(base+"/archive/"+ref+".tar.gz", true)
+}
+
+func refOrHead(rev string) string {
+	if rev == "" {
+		return "HEAD"
+	}
+	return rev
 }
 
 func (ev *Evaluator) filterSourceToStore(pos parser.Pos, pred *Value, src, name string) (*Value, error) {
@@ -644,6 +881,16 @@ func (ev *Evaluator) copyFiltered(pos parser.Pos, pred *Value, src, dest string,
 	}
 	if !keep && !isRoot {
 		return nil
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(src)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		return os.Symlink(target, dest)
 	}
 	if info.IsDir() {
 		if err := os.MkdirAll(dest, 0o755); err != nil {
