@@ -143,6 +143,11 @@ func (ev *Evaluator) WithExperimental(features ...string) *Evaluator {
 			c.xp["fetch-tree"] = true
 		}
 	}
+	c.Builtins = make(map[string]*Builtin, len(ev.Builtins)+4)
+	for name, b := range ev.Builtins {
+		c.Builtins[name] = b
+	}
+	c.syncExperimentalBuiltins()
 	return &c
 }
 
@@ -774,7 +779,7 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 				if fb.Attrs.Blackhole {
 					return blackholeAttrs(), nil
 				}
-				return nil, evalErr(s.P, "attribute %q missing", name)
+				return nil, evalErr(s.P, "attribute '%s' missing", name)
 			}
 			if i == len(s.Path)-1 {
 				if b.Thunk != nil {

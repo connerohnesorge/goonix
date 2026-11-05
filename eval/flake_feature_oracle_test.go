@@ -1,6 +1,8 @@
 package eval_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -11,69 +13,136 @@ import (
 )
 
 func TestFlakeBuiltinsRequireFeatureLikeNix224(t *testing.T) {
-	const wantFlakes = "experimental Nix feature 'flakes' is disabled; add '--extra-experimental-features flakes' to enable it"
-	const wantFetch = "experimental Nix feature 'fetch-tree' is disabled; add '--extra-experimental-features fetch-tree' to enable it"
-	cases := []struct {
-		expr string
-		frag string
-	}{
-		{`builtins.getFlake "path:/tmp"`, wantFlakes},
-		{`builtins.parseFlakeRef "path:/tmp"`, wantFlakes},
-		{`builtins.flakeRefToString { type = "path"; path = "/tmp"; }`, wantFlakes},
-		{`builtins.fetchTree { type = "path"; path = "/tmp"; }`, wantFetch},
+	names := []string{"getFlake", "fetchTree", "parseFlakeRef", "flakeRefToString"}
+	ev := eval.NewEvaluator()
+	for _, name := range names {
+		if _, ok := ev.Builtins[name]; ok {
+			t.Fatalf("builtins.%s is registered with flakes disabled", name)
+		}
 	}
-	for _, tc := range cases {
-		t.Run(tc.expr, func(t *testing.T) {
-			ev := eval.NewEvaluator()
-			parsed, err := parser.ParseString(tc.expr)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = ev.EvalWithBuiltins(parsed)
-			if err == nil || !strings.Contains(err.Error(), tc.frag) {
-				t.Fatalf("go error %v", err)
-			}
-			if _, err := exec.LookPath("nix-instantiate"); err != nil {
-				return
-			}
-			cmd := exec.Command("nix-instantiate",
-				"--option", "experimental-features", "nix-command",
-				"--option", "substituters", "",
-				"--eval", "--json", "-E", tc.expr)
-			cmd.Env = []string{"PATH=" + execPath(), "HOME=/tmp"}
-			out, nerr := cmd.CombinedOutput()
-			if nerr == nil || !strings.Contains(string(out), "experimental Nix feature") {
-				// This Nix build does not gate the builtin (newer than 2.24).
-				return
-			}
-			if !strings.Contains(string(out), tc.frag) {
-				t.Fatalf("nix error %q\ngo %v", out, err)
-			}
-		})
+	for _, name := range names {
+		if got := evalBool(t, ev, "builtins ? "+name); got {
+			t.Fatalf("builtins ? %s is true", name)
+		}
+		namesJSON := evalString(t, ev, `builtins.concatStringsSep "," (builtins.attrNames builtins)`)
+		if strings.Contains(","+namesJSON+",", ","+name+",") {
+			t.Fatalf("attrNames contains %s: %s", name, namesJSON)
+		}
+		_, err := evalRaw(t, ev, "builtins."+name+" null")
+		if err == nil || !strings.Contains(err.Error(), "attribute '"+name+"' missing") {
+			t.Fatalf("builtins.%s: %v", name, err)
+		}
 	}
 
-	// With flakes enabled, parseFlakeRef matches Nix (oracle sets the feature explicitly).
-	ev := eval.NewEvaluator().WithExperimental("flakes")
-	parsed, err := parser.ParseString(`builtins.flakeRefToString (builtins.parseFlakeRef "github:NixOS/nixpkgs")`)
+	ver := nixInstantiateVersion(t)
+	if strings.Contains(ver, "2.24.9") {
+		for _, name := range names {
+			nixHas := nixEval224(t, "builtins.toJSON (builtins ? "+name+")")
+			if nixHas != "false" {
+				t.Fatalf("nix 2.24.9 builtins ? %s = %s", name, nixHas)
+			}
+			nixNames := nixEval224(t, `builtins.concatStringsSep "," (builtins.attrNames builtins)`)
+			if strings.Contains(","+nixNames+",", ","+name+",") {
+				t.Fatalf("nix 2.24.9 attrNames contains %s", name)
+			}
+			_, nerr := nixEval224Err(t, "builtins."+name+" null")
+			if nerr == nil || !strings.Contains(nerr.Error(), "attribute '"+name+"' missing") {
+				t.Fatalf("nix 2.24.9 builtins.%s: %v", name, nerr)
+			}
+		}
+	}
+
+	on := eval.NewEvaluator().WithExperimental("flakes")
+	for _, name := range names {
+		if _, ok := on.Builtins[name]; !ok {
+			t.Fatalf("builtins.%s missing after enabling flakes", name)
+		}
+	}
+	got := evalString(t, on, `builtins.flakeRefToString (builtins.parseFlakeRef "github:NixOS/nixpkgs")`)
+	if got != "github:NixOS/nixpkgs" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func evalBool(t *testing.T, ev *eval.Evaluator, expr string) bool {
+	t.Helper()
+	v := mustEval(t, ev, expr)
+	if v.Kind != eval.VKBool {
+		t.Fatalf("%s: got %v", expr, v.Kind)
+	}
+	return v.Bool
+}
+
+func evalString(t *testing.T, ev *eval.Evaluator, expr string) string {
+	t.Helper()
+	v := mustEval(t, ev, expr)
+	if v.Kind != eval.VKString {
+		t.Fatalf("%s: got %v", expr, v.Kind)
+	}
+	return v.String
+}
+
+func evalRaw(t *testing.T, ev *eval.Evaluator, expr string) (*eval.Value, error) {
+	t.Helper()
+	parsed, err := parser.ParseString(expr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	val, err := ev.EvalWithBuiltins(parsed)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	fv, err := ev.ForceValue(val)
+	return ev.ForceValue(val)
+}
+
+func mustEval(t *testing.T, ev *eval.Evaluator, expr string) *eval.Value {
+	t.Helper()
+	v, err := evalRaw(t, ev, expr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fv.String != "github:NixOS/nixpkgs" {
-		t.Fatalf("got %q", fv.String)
-	}
+	return v
 }
 
-func execPath() string {
-	if p := strings.TrimSpace(os.Getenv("PATH")); p != "" {
-		return p
+func nixInstantiateVersion(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("nix-instantiate"); err != nil {
+		return ""
 	}
-	return "/usr/bin:/bin"
+	out, err := exec.Command("nix-instantiate", "--version").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+func nixEval224(t *testing.T, expr string) string {
+	t.Helper()
+	s, err := nixEval224Err(t, expr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func nixEval224Err(t *testing.T, expr string) (string, error) {
+	t.Helper()
+	cmd := exec.Command("nix-instantiate",
+		"--option", "experimental-features", "nix-command",
+		"--option", "substituters", "",
+		"--eval", "--json", "-E", expr)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=/tmp"}
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return "", fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", err
+	}
+	s := strings.TrimSpace(string(out))
+	var decoded string
+	if jsonErr := json.Unmarshal([]byte(s), &decoded); jsonErr == nil {
+		return decoded, nil
+	}
+	return s, nil
 }

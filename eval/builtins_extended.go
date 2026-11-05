@@ -92,14 +92,28 @@ func (ev *Evaluator) registerExtendedBuiltins() {
 	add("fetchTarball", builtinFetchTarball, false)
 	add("fetchGit", builtinFetchGit, false)
 	add("fetchMercurial", builtinFetchMercurial, false)
-	add("fetchTree", builtinFetchTree, false)
 	add("toPath", builtinToPath, false)
 	add("traceVerbose", builtinTraceVerbose, false)
 	add("addDrvOutputDependencies", builtinAddDrvOutputDependencies, false)
 	add("break", builtinBreak, false)
 	add("currentTime", builtinCurrentTime, true)
-	add("getFlake", builtinGetFlake, false)
-	add("flakeRefToString", builtinFlakeRefToString, false)
-	add("parseFlakeRef", builtinParseFlakeRef, false)
 	add("unsafeDiscardOutputDependency", builtinUnsafeDiscardOutputDependency, false)
+	ev.syncExperimentalBuiltins()
+}
+
+// syncExperimentalBuiltins adds or removes primops the way Nix 2.24.9 does:
+// they are absent from builtins unless the experimental feature is enabled.
+// flakes also enables fetch-tree.
+func (ev *Evaluator) syncExperimentalBuiltins() {
+	for _, name := range []string{"fetchTree", "getFlake", "parseFlakeRef", "flakeRefToString"} {
+		delete(ev.Builtins, name)
+	}
+	if ev.xp != nil && (ev.xp["fetch-tree"] || ev.xp["flakes"]) {
+		ev.Builtins["fetchTree"] = &Builtin{Name: "fetchTree", Fn: builtinFetchTree}
+	}
+	if ev.xp != nil && ev.xp["flakes"] {
+		ev.Builtins["getFlake"] = &Builtin{Name: "getFlake", Fn: builtinGetFlake}
+		ev.Builtins["parseFlakeRef"] = &Builtin{Name: "parseFlakeRef", Fn: builtinParseFlakeRef}
+		ev.Builtins["flakeRefToString"] = &Builtin{Name: "flakeRefToString", Fn: builtinFlakeRefToString}
+	}
 }
