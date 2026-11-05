@@ -49,7 +49,7 @@ func NewClient(cfg Config) *Client {
 		cfg.CacheURL = defaultCache
 	}
 	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Minute}
+		cfg.HTTPClient = &http.Client{Timeout: 2 * time.Minute}
 	}
 	if len(cfg.TrustedKeys) == 0 {
 		pk, err := signature.ParsePublicKey(cacheNixOSPublicKey)
@@ -68,6 +68,15 @@ func (c *Client) TrySubstitute(st *local.Store, storePath string) (bool, error) 
 	if c == nil {
 		return false, nil
 	}
+	seen := make(map[string]struct{})
+	return c.trySubstitute(st, storePath, seen)
+}
+
+func (c *Client) trySubstitute(st *local.Store, storePath string, seen map[string]struct{}) (bool, error) {
+	if _, ok := seen[storePath]; ok {
+		return true, nil
+	}
+	seen[storePath] = struct{}{}
 	ok, err := st.IsValidPath(storePath)
 	if err != nil {
 		return false, err
@@ -90,7 +99,7 @@ func (c *Client) TrySubstitute(st *local.Store, storePath string) (bool, error) 
 		if !strings.HasPrefix(refPath, storepath.StoreDir+"/") {
 			refPath = storepath.StoreDir + "/" + ref
 		}
-		refOK, err := c.TrySubstitute(st, refPath)
+		refOK, err := c.trySubstitute(st, refPath, seen)
 		if err != nil {
 			return false, err
 		}
@@ -110,6 +119,11 @@ func (c *Client) TrySubstitute(st *local.Store, storePath string) (bool, error) 
 		return false, err
 	}
 	return true, nil
+}
+
+// IsNetworkUnavailable reports whether err is a transient network failure.
+func IsNetworkUnavailable(err error) bool {
+	return isNetworkUnavailable(err)
 }
 
 func isNetworkUnavailable(err error) bool {

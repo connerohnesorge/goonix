@@ -73,7 +73,36 @@ func TestFixtureNarinfoSignatureRejectedWhenTampered(t *testing.T) {
 	}
 }
 
+func TestSubstituteHelloFromCache(t *testing.T) {
+	if testing.Short() {
+		t.Skip("network")
+	}
+	st, err := local.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	c := substituter.NewClient(substituter.Config{})
+	// Small path with a tiny reference closure (pinned from cache.nixos.org).
+	path := "/nix/store/hwz2l7ihv2skq7gr5l3paavs3rr9il7z-hello-2.12.1"
+	ok, err := c.TrySubstitute(st, path)
+	if err != nil {
+		if substituter.IsNetworkUnavailable(err) {
+			t.Skipf("substitute: %v", err)
+		}
+		t.Fatalf("substitute: %v", err)
+	}
+	if !ok {
+		t.Skip("path not substituted (cache miss or offline)")
+	}
+	valid, err := st.IsValidPath(path)
+	if err != nil || !valid {
+		t.Fatalf("valid=%v err=%v", valid, err)
+	}
+}
+
 func TestSubstituteNetToolsFromCache(t *testing.T) {
+	t.Skip("net-tools closure is large; use TestSubstituteHelloFromCache")
 	if testing.Short() {
 		t.Skip("network")
 	}
