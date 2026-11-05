@@ -215,10 +215,13 @@ func TestBuildEchoHiMatchesNixBuild(t *testing.T) {
 	nixStore := filepath.Join(root, "store")
 	nixOut, err := exec.Command("nix-build", "--store", nixStore, "-E", "derivation "+attrs).Output()
 	if err != nil {
-		t.Skipf("nix-build in temp store: %v", err)
+		t.Fatalf("nix-build in temp store: %v", err)
 	}
 	nixOutPath := strings.TrimSpace(string(nixOut))
-	nixPhys := filepath.Join(nixStore, filepath.Base(nixOutPath))
+	if outPath != nixOutPath {
+		t.Fatalf("out path go=%q nix=%q", outPath, nixOutPath)
+	}
+	nixPhys := filepath.Join(nixStore, "nix", "store", filepath.Base(nixOutPath))
 	wantHash, _, err := local.NarHashAndSize(nixPhys)
 	if err != nil {
 		t.Fatal(err)

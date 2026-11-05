@@ -5,6 +5,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -25,11 +26,29 @@ func DrvPathFromDerivation(cfg Config, d *gonixdrv.Derivation) (string, error) {
 		return "", fmt.Errorf("derivation missing name")
 	}
 	h := sha256.New()
-	if err := d.WriteDerivation(h); err != nil {
+	if err := WriteDerivationForHash(h, d, false, nil); err != nil {
 		return "", err
 	}
-	atermDigest := h.Sum(nil)
-	h.Reset()
+	return drvPathFromATermDigest(cfg, h.Sum(nil), name, d)
+}
+
+// DrvPathFromATermBytes returns the store path for raw .drv ATerm bytes.
+func DrvPathFromATermBytes(cfg Config, aterm []byte) (string, error) {
+	d, err := gonixdrv.ReadDerivation(bytes.NewReader(aterm))
+	if err != nil {
+		return "", err
+	}
+	name := derivationName(d)
+	if name == "" {
+		return "", fmt.Errorf("derivation missing name")
+	}
+	h := sha256.New()
+	h.Write(aterm)
+	return drvPathFromATermDigest(cfg, h.Sum(nil), name, d)
+}
+
+func drvPathFromATermDigest(cfg Config, atermDigest []byte, name string, d *gonixdrv.Derivation) (string, error) {
+	h := sha256.New()
 	h.Write([]byte("text:"))
 	refs := make([]string, 0, len(d.InputDerivations)+len(d.InputSources))
 	for inputDrvPath := range d.InputDerivations {
@@ -49,10 +68,10 @@ func DrvPathFromDerivation(cfg Config, d *gonixdrv.Derivation) (string, error) {
 	h.Write([]byte(DefaultStoreDir + ":"))
 	h.Write([]byte(name))
 	h.Write([]byte(".drv"))
-	atermDigest = h.Sum(nil)
+	final := h.Sum(nil)
 	sp := storepath.StorePath{
 		Name:   name + ".drv",
-		Digest: nixhash.CompressHash(atermDigest, 20),
+		Digest: nixhash.CompressHash(final, 20),
 	}
 	return cfg.RewriteDefaultStoreDir(sp.Absolute()), nil
 }

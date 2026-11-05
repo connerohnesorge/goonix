@@ -187,7 +187,7 @@ func WriteDerivation(cfg store.Config, drv *DerivationValue) error {
 		}
 	}
 	content := &stringsBuilder{}
-	if err := d.WriteDerivation(content); err != nil {
+	if err := store.WriteDerivationForHash(content, d, false, nil); err != nil {
 		return err
 	}
 	return store.WriteTextToStore(drv.DrvPath, content.String())
@@ -215,7 +215,7 @@ func SerializeDerivation(cfg store.Config, drv *DerivationValue) ([]byte, error)
 		}
 	}
 	content := &stringsBuilder{}
-	if err := d.WriteDerivation(content); err != nil {
+	if err := store.WriteDerivationForHash(content, d, false, nil); err != nil {
 		return nil, err
 	}
 	return []byte(content.String()), nil
@@ -236,7 +236,7 @@ func SerializeGoNixDerivation(d *gonixdrv.Derivation) ([]byte, error) {
 		return nil, fmt.Errorf("nil derivation")
 	}
 	content := &stringsBuilder{}
-	if err := d.WriteDerivation(content); err != nil {
+	if err := store.WriteDerivationForHash(content, d, false, nil); err != nil {
 		return nil, err
 	}
 	return content.Bytes(), nil
@@ -263,6 +263,18 @@ func (ev *Evaluator) InstantiateDerivation(attrs *Value) (string, error) {
 		return "", err
 	}
 	return drv.DrvPath, nil
+}
+
+// PrepareDerivationPaths fills drvPath and output paths on drv the same way as derivationStrict.
+func PrepareDerivationPaths(ev *Evaluator, cfg store.Config, drv *DerivationValue) error {
+	drv.DrvPath = ""
+	p, outs, err := computeDerivationPaths(ev, cfg, drv)
+	if err != nil {
+		return err
+	}
+	drv.DrvPath = p
+	drv.OutPaths = outs
+	return nil
 }
 
 // ForceStrictDrvPath returns drvPath from a derivationStrict attribute set.

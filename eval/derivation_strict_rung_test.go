@@ -109,16 +109,9 @@ func assertDerivationStrictRungInStore(t *testing.T, storeRoot, attrs string) {
 
 func assertATermMatchesDrvPath(t *testing.T, wantPath string, aterm []byte) error {
 	t.Helper()
-	if bytes.Contains(aterm, []byte(`"__json"`)) {
-		return nil
-	}
-	d, err := store.ReadDerivation(bytes.NewReader(aterm))
+	got, err := store.DrvPathFromATermBytes(store.Config{}, aterm)
 	if err != nil {
-		return fmt.Errorf("parse go ATerm: %w", err)
-	}
-	got, err := store.DrvPath(d)
-	if err != nil {
-		return fmt.Errorf("DrvPath from ATerm: %w", err)
+		return fmt.Errorf("DrvPath from ATerm bytes: %w", err)
 	}
 	if got != wantPath {
 		return fmt.Errorf("ATerm hashes to %q, want %q", got, wantPath)
@@ -194,8 +187,13 @@ func goDerivationStrictOracle(t *testing.T, storeRoot, attrs string) (drvPath st
 	if err != nil {
 		t.Fatal(err)
 	}
-	drv.DrvPath = drvPath
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
+	if err := eval.PrepareDerivationPaths(ev, cfg, drv); err != nil {
+		t.Fatal(err)
+	}
+	if drvPath != drv.DrvPath {
+		t.Fatalf("drvPath strict=%q computed=%q", drvPath, drv.DrvPath)
+	}
 	aterm, err = eval.SerializeDerivation(cfg, drv)
 	if err != nil {
 		t.Fatal(err)

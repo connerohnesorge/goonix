@@ -236,7 +236,7 @@ func unpackNAR(r io.Reader, dest string) error {
 		return closeErr
 	}
 
-	if err := os.MkdirAll(dest, 0o555); err != nil {
+	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
 	if err := writeNAREntry(nr, first, dest); err != nil {
@@ -245,7 +245,7 @@ func unpackNAR(r io.Reader, dest string) error {
 	for {
 		hdr, err := nr.Next()
 		if err == io.EOF {
-			return nil
+			return finalizeNARModes(dest)
 		}
 		if err != nil {
 			return err
@@ -256,6 +256,26 @@ func unpackNAR(r io.Reader, dest string) error {
 	}
 }
 
+func finalizeNARModes(root string) error {
+	return filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return os.Chmod(p, 0o555)
+		}
+		mode := info.Mode().Perm()
+		if mode&0o111 != 0 {
+			return os.Chmod(p, 0o555)
+		}
+		return os.Chmod(p, 0o444)
+	})
+}
+
 func writeNAREntry(nr *gonixnar.Reader, hdr *gonixnar.Header, destRoot string) error {
 	rel := hdr.Path
 	if rel == "/" {
@@ -264,7 +284,7 @@ func writeNAREntry(nr *gonixnar.Reader, hdr *gonixnar.Header, destRoot string) e
 	target := filepath.Join(destRoot, filepath.FromSlash(rel))
 	switch hdr.Type {
 	case gonixnar.TypeDirectory:
-		return os.MkdirAll(target, 0o555)
+		return os.MkdirAll(target, 0o755)
 	case gonixnar.TypeSymlink:
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err

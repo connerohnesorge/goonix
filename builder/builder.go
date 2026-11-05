@@ -6,10 +6,14 @@ package builder
 
 import (
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
@@ -149,13 +153,12 @@ func (b *Builder) buildFixedOutput(drvPath string, d *gonixdrv.Derivation, outPa
 	outPath := outPaths["out"]
 	mode := d.Env["outputHashMode"]
 	phys := local.PhysicalPath(b.Store.Root, outPath)
-	if err := os.MkdirAll(filepath.Dir(phys), 0o755); err != nil {
-		return err
-	}
-	// FOD fetchurl-style derivations must be populated out-of-band (network) by caller;
-	// here we only verify if the path already exists on disk.
-	if _, err := os.Stat(phys); err != nil {
-		return fmt.Errorf("fixed-output %s not present (network fetch not implemented in builder): %w", outPath, err)
+	if d.Builder == "builtin:fetchurl" {
+		if err := b.fetchFixedOutputURL(d, phys, mode); err != nil {
+			return err
+		}
+	} else if _, err := os.Stat(phys); err != nil {
+		return fmt.Errorf("fixed-output %s not present: %w", outPath, err)
 	}
 	want := d.Outputs["out"].Hash
 	switch mode {
@@ -178,6 +181,73 @@ func (b *Builder) buildFixedOutput(drvPath string, d *gonixdrv.Derivation, outPa
 		return err
 	}
 	return b.registerBuilt(outPath, phys, refs)
+}
+
+func (b *Builder) fetchFixedOutputURL(d *gonixdrv.Derivation, phys, hashMode string) error {
+	rawURL := d.Env["url"]
+	if rawURL == "" {
+		return fmt.Errorf("fixed-output fetchurl missing url")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return err
+	}
+	var r io.ReadCloser
+	switch u.Scheme {
+	case "file":
+		f, err := os.Open(u.Path)
+		if err != nil {
+			return err
+		}
+		r = f
+	default:
+		resp, err := http.Get(rawURL)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return fmt.Errorf("fetchurl HTTP %s", resp.Status)
+		}
+		r = resp.Body
+	}
+	defer r.Close()
+	if err := os.MkdirAll(filepath.Dir(phys), 0o755); err != nil {
+		return err
+	}
+	if hashMode == "flat" || hashMode == "" {
+		f, err := os.OpenFile(phys, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o444)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(f, r)
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(phys), "fod-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	dest := filepath.Join(tmp, "tree")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
+	f, err := os.Create(filepath.Join(dest, "downloaded"))
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, r); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return store.CopyPathToStore(dest, phys)
 }
 
 func (b *Builder) registerBuilt(logicalPath, phys string, refs []string) error {
@@ -255,21 +325,33 @@ func (b *Builder) buildEnvWithPhys(d *gonixdrv.Derivation, outPaths, physOuts ma
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	env := make([]string, 0, len(keys)+8)
+	env := make([]string, 0, len(keys)+12)
 	for _, k := range keys {
 		env = append(env, k+"="+b.rewriteValue(d.Env[k], d, outPaths, physOuts))
 	}
 	for name, phys := range physOuts {
-		env = append(env, strings.ToUpper(name)+"="+phys)
 		env = append(env, name+"="+phys)
+	}
+	cores := d.Env["NIX_BUILD_CORES"]
+	if cores == "" {
+		cores = "1"
 	}
 	env = append(env,
 		"NIX_BUILD_TOP="+buildTop,
 		"TMPDIR="+tmpDir,
+		"TEMP="+tmpDir,
+		"TMP="+tmpDir,
+		"TEMPDIR="+tmpDir,
+		"NIX_BUILD_CORES="+cores,
 		"NIX_STORE="+storeDir,
 		"HOME=/homeless-shelter",
 		"PATH=/path-not-set",
 	)
+	if fd := os.Getenv("NIX_LOG_FD"); fd != "" {
+		env = append(env, "NIX_LOG_FD="+fd)
+	} else {
+		env = append(env, "NIX_LOG_FD="+strconv.Itoa(2))
+	}
 	return env
 }
 

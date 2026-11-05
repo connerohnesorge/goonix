@@ -7,8 +7,10 @@ package substituter
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/nix-community/go-nix/pkg/narinfo"
 	"github.com/nix-community/go-nix/pkg/narinfo/signature"
+	"github.com/nix-community/go-nix/pkg/nixbase32"
 	"github.com/nix-community/go-nix/pkg/nixhash"
 	"github.com/nix-community/go-nix/pkg/storepath"
 
@@ -31,8 +34,8 @@ type Config struct {
 	HTTPClient *http.Client
 	// TrustedKeys defaults to cache.nixos.org-1 when empty.
 	TrustedKeys []signature.PublicKey
-	// RequireSig skips substitution when no valid signature is present.
-	RequireSig bool
+	// RequireSig rejects substitution when no valid signature is present (default true).
+	RequireSig *bool
 }
 
 // Client downloads narinfo + NAR payloads into a local store.
@@ -74,13 +77,32 @@ func (c *Client) TrySubstitute(st *local.Store, storePath string) (bool, error) 
 	}
 	ni, err := c.FetchNarInfo(storePath)
 	if err != nil {
-		return false, nil
+		if isNetworkUnavailable(err) {
+			return false, nil
+		}
+		return false, err
 	}
 	if err := c.verifyNarInfo(ni); err != nil {
 		return false, err
 	}
+	for _, ref := range ni.References {
+		refPath := ref
+		if !strings.HasPrefix(refPath, storepath.StoreDir+"/") {
+			refPath = storepath.StoreDir + "/" + ref
+		}
+		refOK, err := c.TrySubstitute(st, refPath)
+		if err != nil {
+			return false, err
+		}
+		if !refOK {
+			return false, fmt.Errorf("reference %s not substituted", refPath)
+		}
+	}
 	data, err := c.downloadNar(ni)
 	if err != nil {
+		if isNetworkUnavailable(err) {
+			return false, nil
+		}
 		return false, err
 	}
 	narHash := ni.NarHash.Format(nixhash.NixBase32, false)
@@ -88,6 +110,32 @@ func (c *Client) TrySubstitute(st *local.Store, storePath string) (bool, error) 
 		return false, err
 	}
 	return true, nil
+}
+
+func isNetworkUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "network is unreachable") ||
+		strings.Contains(msg, "i/o timeout")
+}
+
+func (c *Client) requireSig() bool {
+	if c.cfg.RequireSig == nil {
+		return true
+	}
+	return *c.cfg.RequireSig
 }
 
 // FetchNarInfo downloads and parses .narinfo for storePath.
@@ -122,12 +170,22 @@ func (c *Client) FetchNarInfo(storePath string) (*narinfo.NarInfo, error) {
 	return ni, nil
 }
 
+// NarInfoURL returns the binary-cache .narinfo URL for storePath (hash-only basename).
+func (c *Client) NarInfoURL(storePath string) (string, error) {
+	return c.narInfoURL(storePath)
+}
+
 func (c *Client) narInfoURL(storePath string) (string, error) {
+	sp, err := storepath.FromAbsolutePath(storePath)
+	if err != nil {
+		return "", err
+	}
+	hashName := nixbase32.EncodeToString(sp.Digest) + ".narinfo"
 	base, err := url.Parse(c.cfg.CacheURL)
 	if err != nil {
 		return "", err
 	}
-	base.Path = path.Join(base.Path, path.Base(storePath)+".narinfo")
+	base.Path = path.Join(base.Path, hashName)
 	return base.String(), nil
 }
 
@@ -139,7 +197,7 @@ func (c *Client) verifyNarInfo(ni *narinfo.NarInfo) error {
 		return nil
 	}
 	if len(ni.Signatures) == 0 {
-		if c.cfg.RequireSig {
+		if c.requireSig() {
 			return fmt.Errorf("missing signature for %s", ni.StorePath)
 		}
 		return nil
