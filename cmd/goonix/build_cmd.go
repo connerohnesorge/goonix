@@ -1,0 +1,122 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
+
+	"github.com/connerohnesorge/goonix/builder"
+	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/parser"
+	"github.com/connerohnesorge/goonix/store"
+	"github.com/connerohnesorge/goonix/store/local"
+	"github.com/connerohnesorge/goonix/substituter"
+)
+
+func cmdBuild(args []string) {
+	fs := flag.NewFlagSet("build", flag.ExitOnError)
+	storeFlag := fs.String("store", "", "physical store root (contains store/ subdirectory)")
+	searchPath := fs.String("I", "", "add search path entry")
+	_ = fs.Parse(args)
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fmt.Fprintln(os.Stderr, "build expects one .nix file")
+		os.Exit(2)
+	}
+	physRoot := *storeFlag
+	if physRoot == "" {
+		physRoot = filepath.Join(os.TempDir(), "goonix-build-store")
+	}
+	st, err := local.OpenStore(physRoot)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{Root: st.Config().LogicalStoreDir()})
+	ev.SetCurFile(rest[0])
+	if *searchPath != "" {
+		for _, part := range strings.Split(*searchPath, ":") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				ev.NixPath.PrependEntries(part)
+			}
+		}
+	}
+	expr, err := parser.ParseFile(rest[0])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	val, err := ev.EvalWithBuiltins(expr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fv, err := ev.ForceValue(val)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	drvPath, err := eval.ForceStrictDrvPath(ev, fv)
+	if err != nil {
+		drvPath, err = eval.ForceDerivationAttrs(ev, fv)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	gd, ok := ev.RegisteredDerivation(drvPath)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "derivation was not registered during eval")
+		os.Exit(1)
+	}
+	var buf strings.Builder
+	if err := gd.WriteDerivation(&buf); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := st.WriteDerivation([]byte(buf.String()), drvPath); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	sub := substituter.NewClient(substituter.Config{})
+	b := &builder.Builder{
+		Store: st,
+		Config: builder.Config{
+			Substituter: sub,
+		},
+		Load: func(p string) (*gonixdrv.Derivation, error) {
+			if d, ok := ev.RegisteredDerivation(p); ok {
+				return d, nil
+			}
+			f, err := os.Open(local.PhysicalPath(st.Root, p))
+			if err != nil {
+				return nil, err
+			}
+			defer f.Close()
+			return gonixdrv.ReadDerivation(f)
+		},
+	}
+	if err := b.BuildRealisation(drvPath); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	repl := map[string]string{}
+	outPaths, err := gd.CalculateOutputPaths(repl)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	for name, p := range outPaths {
+		p = st.Config().RewriteDefaultStoreDir(p)
+		fmt.Printf("%s=%s\n", name, p)
+	}
+	_ = store.DefaultStoreDir
+}

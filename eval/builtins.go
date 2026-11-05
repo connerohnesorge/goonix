@@ -1204,7 +1204,7 @@ func builtinToFile(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 		return nil, err
 	}
 	err = ev.Effects.RealiseStorePath(storePath, func() error {
-		return store.WriteTextToStore(storePath, content)
+		return store.WriteTextToStore(ev.physicalStorePath(storePath), content)
 	})
 	if err != nil {
 		return nil, err
@@ -1227,7 +1227,7 @@ func builtinPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 		return nil, err
 	}
 	err = ev.Effects.RealiseStorePath(storePath, func() error {
-		return store.CopyPathToStore(p, storePath)
+		return store.CopyPathToStore(p, ev.physicalStorePath(storePath))
 	})
 	if err != nil {
 		return nil, err

@@ -40,6 +40,8 @@ func main() {
 		cmdInstantiate(os.Args[2:])
 	case "derivation-show":
 		cmdDerivationShow(os.Args[2:])
+	case "build":
+		cmdBuild(os.Args[2:])
 	case "drv-diff":
 		cmdDrvDiff(os.Args[2:])
 	case "help", "-h", "--help":
@@ -58,6 +60,7 @@ Usage:
   goonix parse <file.nix>
   goonix eval [--json] [--pure] [-I path] <file.nix>
   goonix instantiate [--store DIR] <file.nix>
+  goonix build [--store DIR] [-I path] <file.nix>
   goonix derivation-show [--go-eval FILE [-I path]...] [--nix PATH]
   goonix drv-diff --nix-instantiate FILE | --nix-drv PATH --go-eval FILE [-I path]...
 

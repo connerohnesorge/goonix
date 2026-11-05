@@ -12,6 +12,7 @@ import (
 	"github.com/nix-community/go-nix/pkg/narinfo/signature"
 
 	"github.com/connerohnesorge/goonix/substituter"
+	"github.com/connerohnesorge/goonix/store/local"
 )
 
 const sampleNarinfo = `
@@ -57,13 +58,41 @@ func TestFixtureNarinfoSignatureVerifies(t *testing.T) {
 	}
 }
 
-func TestTrustedPublicKeyEmbedded(t *testing.T) {
-	_ = substituter.NewClient(substituter.Config{})
+func TestFixtureNarinfoSignatureRejectedWhenTampered(t *testing.T) {
+	ni, err := narinfo.Parse(strings.NewReader(sampleNarinfo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ni.Signatures[0].Data[0] ^= 0xff
 	pk, err := signature.ParsePublicKey("cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pk.Name != "cache.nixos.org-1" {
-		t.Fatalf("name=%q", pk.Name)
+	if signature.VerifyFirst(ni.Fingerprint(), ni.Signatures, []signature.PublicKey{pk}) {
+		t.Fatal("tampered signature must not verify")
+	}
+}
+
+func TestSubstituteNetToolsFromCache(t *testing.T) {
+	if testing.Short() {
+		t.Skip("network")
+	}
+	st, err := local.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	c := substituter.NewClient(substituter.Config{})
+	path := "/nix/store/00bgd045z0d4icpbc2yyz4gx48ak44la-net-tools-1.60_p20170221182432"
+	ok, err := c.TrySubstitute(st, path)
+	if err != nil {
+		t.Skipf("substitute: %v", err)
+	}
+	if !ok {
+		t.Skip("path not substituted (offline or cache miss)")
+	}
+	valid, err := st.IsValidPath(path)
+	if err != nil || !valid {
+		t.Fatalf("valid=%v err=%v", valid, err)
 	}
 }

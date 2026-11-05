@@ -75,6 +75,11 @@ func (c Config) StorePathForFilesystemPath(sourcePath, name string) (string, err
 
 // WriteTextToStore writes contents to storePath (must already be computed).
 func WriteTextToStore(storePath, contents string) error {
+	if info, err := os.Stat(storePath); err == nil && info.IsDir() {
+		if err := os.RemoveAll(storePath); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(storePath), 0o555); err != nil {
 		return err
 	}

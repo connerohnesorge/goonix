@@ -8,11 +8,15 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 
 	"github.com/connerohnesorge/goonix/builder"
+	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store"
 	"github.com/connerohnesorge/goonix/store/local"
 )
@@ -142,6 +146,109 @@ func TestBuildTrivialShAndToFileDep(t *testing.T) {
 			t.Fatalf("nar hash go=%s nix=%s", gotHash, want)
 		}
 	}
+}
+
+func TestBuildEchoHiMatchesNixBuild(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	root := t.TempDir()
+	st, err := local.OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	attrs := `{
+	  name = "t";
+	  system = "x86_64-linux";
+	  builder = "/bin/sh";
+	  args = [ "-c" "echo hi > $out" ];
+	}`
+	if _, err := exec.LookPath("nix-build"); err != nil {
+		t.Skip("no nix-build")
+	}
+	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
+	expr, err := parser.ParseString(`builtins.derivationStrict ` + attrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	val, err := ev.EvalWithBuiltins(expr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fv, err := ev.ForceValue(val)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drvPath, err := eval.ForceStrictDrvPath(ev, fv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drv, err := ev.AttrsToDerivation(mustParseAttrs(t, ev, attrs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	drv.DrvPath = drvPath
+	var buf bytes.Buffer
+	gd, err := writeGoNixFromEval(t, ev, drv, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteDerivation(buf.Bytes(), drvPath); err != nil {
+		t.Fatal(err)
+	}
+	b := &builder.Builder{Store: st}
+	if err := b.BuildRealisation(drvPath); err != nil {
+		t.Fatal(err)
+	}
+	repl := map[string]string{}
+	outs, err := gd.CalculateOutputPaths(repl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outPath := outs["out"]
+	phys := local.PhysicalPath(st.Root, outPath)
+	gotHash, _, err := local.NarHashAndSize(phys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nixStore := filepath.Join(root, "store")
+	nixOut, err := exec.Command("nix-build", "--store", nixStore, "-E", "derivation "+attrs).Output()
+	if err != nil {
+		t.Skipf("nix-build in temp store: %v", err)
+	}
+	nixOutPath := strings.TrimSpace(string(nixOut))
+	nixPhys := filepath.Join(nixStore, filepath.Base(nixOutPath))
+	wantHash, _, err := local.NarHashAndSize(nixPhys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotHash != wantHash {
+		t.Fatalf("nar hash go=%s nix=%s", gotHash, wantHash)
+	}
+}
+
+func mustParseAttrs(t *testing.T, ev *eval.Evaluator, src string) *eval.Value {
+	t.Helper()
+	expr, err := parser.ParseString(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := ev.EvalWithBuiltins(expr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func writeGoNixFromEval(t *testing.T, ev *eval.Evaluator, drv *eval.DerivationValue, buf *bytes.Buffer) (*gonixdrv.Derivation, error) {
+	t.Helper()
+	aterm, err := eval.SerializeDerivation(store.Config{StoreDir: ev.Effects.StoreDir()}, drv)
+	if err != nil {
+		return nil, err
+	}
+	buf.Write(aterm)
+	return gonixdrv.ReadDerivation(bytes.NewReader(aterm))
 }
 
 func writeDrv(st *local.Store, d *gonixdrv.Derivation, repl map[string]string) (string, error) {

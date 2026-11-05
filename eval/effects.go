@@ -17,6 +17,8 @@ package eval
 import (
 	"io/fs"
 	"os"
+
+	"github.com/connerohnesorge/goonix/store/local"
 )
 
 // Effects abstracts filesystem and store mutation for pure vs IO evaluation modes.
@@ -93,11 +95,11 @@ func storePathMaterialised(storePath string) bool {
 	if err != nil {
 		return false
 	}
-	if !info.IsDir() {
-		return true
+	if info.IsDir() {
+		entries, err := os.ReadDir(storePath)
+		return err == nil && len(entries) > 0
 	}
-	entries, err := os.ReadDir(storePath)
-	return err == nil && len(entries) > 0
+	return true
 }
 
 func (e IOEffects) StoreDir() string {
@@ -105,4 +107,49 @@ func (e IOEffects) StoreDir() string {
 		return "/nix/store"
 	}
 	return e.Root
+}
+
+// ChrootIOEffects keeps logical paths under /nix/store but materialises objects under
+// local.OpenStore's physical layout (PhysRoot/store/<basename>).
+type ChrootIOEffects struct {
+	PhysRoot string
+}
+
+func (ChrootIOEffects) ReadFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
+}
+
+func (ChrootIOEffects) ReadDir(path string) ([]fs.DirEntry, error) {
+	return os.ReadDir(path)
+}
+
+func (ChrootIOEffects) Stat(path string) (fs.FileInfo, error) {
+	return os.Stat(path)
+}
+
+func (ChrootIOEffects) StoreDir() string {
+	return "/nix/store"
+}
+
+func (e ChrootIOEffects) physicalStorePath(logical string) string {
+	if e.PhysRoot == "" {
+		return logical
+	}
+	return local.PhysicalPath(e.PhysRoot, logical)
+}
+
+func (e ChrootIOEffects) RealiseStorePath(storePath string, produce func() error) error {
+	phys := e.physicalStorePath(storePath)
+	if storePathMaterialised(phys) {
+		return nil
+	}
+	return produce()
+}
+
+// physicalStorePath maps a logical store path to the filesystem path used for IO.
+func (ev *Evaluator) physicalStorePath(logical string) string {
+	if ch, ok := ev.Effects.(ChrootIOEffects); ok {
+		return ch.physicalStorePath(logical)
+	}
+	return logical
 }

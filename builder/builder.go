@@ -209,8 +209,12 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 	for name, logical := range outPaths {
 		phys := local.PhysicalPath(b.Store.Root, logical)
 		physOuts[name] = phys
-		if err := os.MkdirAll(phys, 0o755); err != nil {
-			return err
+	}
+	if b.outputsNeedPrecreatedDirs(d, outPaths) {
+		for _, phys := range physOuts {
+			if err := os.MkdirAll(phys, 0o755); err != nil {
+				return err
+			}
 		}
 	}
 	builder := d.Builder
@@ -286,6 +290,31 @@ func (b *Builder) rewriteValue(val string, d *gonixdrv.Derivation, outPaths, phy
 		out = strings.ReplaceAll(out, inp, local.PhysicalPath(b.Store.Root, inp))
 	}
 	return cfg.RewriteDefaultStoreDir(out)
+}
+
+func (b *Builder) outputsNeedPrecreatedDirs(d *gonixdrv.Derivation, outPaths map[string]string) bool {
+	check := func(s string) bool {
+		for name := range outPaths {
+			if strings.Contains(s, "$"+name+"/") || strings.Contains(s, "${"+name+"}/") {
+				return true
+			}
+			if logical, ok := outPaths[name]; ok && strings.Contains(s, logical+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	for _, a := range d.Arguments {
+		if check(a) {
+			return true
+		}
+	}
+	for _, v := range d.Env {
+		if check(v) {
+			return true
+		}
+	}
+	return false
 }
 
 // DefaultSubstituter returns a cache.nixos.org client.
