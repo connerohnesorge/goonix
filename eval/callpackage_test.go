@@ -66,7 +66,15 @@ in {
 	}
 }
 
+func TestCallPackageWithXorgDefaultSelfCallPackage(t *testing.T) {
+	testCallPackageWithTwoStageImport(t)
+}
+
 func TestCallPackageWithTwoStageImport(t *testing.T) {
+	testCallPackageWithTwoStageImport(t)
+}
+
+func testCallPackageWithTwoStageImport(t *testing.T) {
 	root := modRoot(t)
 	nixpkgs := filepath.Join(root, "testdata", "nixpkgs")
 	libNix := filepath.Join(nixpkgs, "lib", "default.nix")

@@ -7,7 +7,7 @@ bash scripts/check-cgo.sh
 go test ./... -count=1
 ```
 
-**CI:** ubuntu/macos `go test ./...` (CGO off). **ladder** job: Nix 2.24.9 + `./internal/oracle/...`, `./ladder/...`, `./eval/...`.
+**CI:** ubuntu/macos `go test ./...` (CGO off; substituter live cache uses `-short` skip in unit job). **ladder** job: Nix 2.24.9 + pinned nixpkgs tarball + `./internal/oracle/...`, `./ladder/...`, `./eval/...`.
 
 ## Phase map
 
@@ -20,8 +20,8 @@ go test ./... -count=1
 | **3** | Spike / decision | README, go-nix | — |
 | **4a** | Store paths, hashes, ATerm | `store/*`, `store/drvshow/*`, modulo oracles | — |
 | **4b** | Local SQLite store | `store/local/*` (800 LOC, 4 tests) | GC roots stub; no daemon |
-| **5** | Builder | `builder/*` (693 LOC, 3 tests), `cmd/goonix build` | Linux user-namespace sandbox (flag; default off) |
-| **6** | Substituter | `substituter/*` (338 LOC, 5 tests) | Live cache test skips offline (`TestSubstituteNetToolsFromCache`) |
+| **5** | Builder | `builder/*`, `cmd/goonix build` | FOD fetchurl uses `file://`/HTTP; env matches Nix (`NIX_BUILD_*`, no duplicate `OUT=`); echo-hi oracle compares logical out + NAR vs `nix-build --store` layout |
+| **6** | Substituter | `substituter/*` | Hash-only `.narinfo` URLs; `RequireSig` default true; recursive reference substitution; client tests for bad/missing sig; live cache test still skips on `-short`/offline |
 | **7** | CLI | `cmd/goonix` (`build`, `eval`, …) | `TestGoonixBuildEchoHiInTempStore` |
 | **#11** | go-nix integration | `store`, `eval` serialization | — |
 | **#13** | Bootstrap ladder | `TestBootstrapStage2StdenvLinuxATermMatchesNix`, closure key-set probe | — |
