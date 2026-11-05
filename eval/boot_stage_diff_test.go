@@ -215,7 +215,7 @@ func rowEqual(a, b bootStageRow) bool {
 }
 
 func TestDfoldNineStageOrderMatchesNixOracle(t *testing.T) {
-	root := modRoot(t)
+	root := testutil.ModuleRoot(t)
 	path := filepath.Join(root, "testdata", "oracle", "dfold_nine_stage_order.nix")
 	nixV := evalOracleNix(t, path)
 	goV := evalGoonixFile(t, path)
@@ -233,7 +233,7 @@ func TestDfoldNineStageOrderMatchesNixOracle(t *testing.T) {
 }
 
 func TestDfoldStageOrderMatchesNixOracle(t *testing.T) {
-	root := modRoot(t)
+	root := testutil.ModuleRoot(t)
 	path := filepath.Join(root, "testdata", "oracle", "dfold_stage_order.nix")
 	nixV := evalOracleNix(t, path)
 	goV := evalGoonixFile(t, path)
@@ -256,10 +256,6 @@ func TestDfoldStageOrderMatchesNixOracle(t *testing.T) {
 	}
 }
 
-func TestLinuxBootStageDfoldStubMatchesNixOracle(t *testing.T) {
-	t.Skip("linux boot chain walk forces stage asserts; use dfold_nine_stage_order + import tryEval probe until tryEval walk oracle lands")
-}
-
 func evalOracleNixOptional(path string) (map[string]any, error) {
 	lay, err := oracle.FindLayout()
 	if err != nil {
@@ -269,7 +265,7 @@ func evalOracleNixOptional(path string) (map[string]any, error) {
 }
 
 func TestLinuxBootStageChainMatchesNixOracle(t *testing.T) {
-	root := modRoot(t)
+	root := testutil.ModuleRoot(t)
 	path := filepath.Join(root, "testdata", "oracle", "linux_boot_stage_chain.nix")
 	nixV := evalOracleNix(t, path)
 	goV := evalGoonixFile(t, path)
@@ -292,7 +288,7 @@ func TestLinuxBootStageChainMatchesNixOracle(t *testing.T) {
 }
 
 func TestLinuxBootStageChainImportPath(t *testing.T) {
-	root := modRoot(t)
+	root := testutil.ModuleRoot(t)
 	path := filepath.Join(root, "testdata", "oracle", "linux_boot_stage_chain.nix")
 	nixV := evalOracleNix(t, path)
 	goV := evalGoonixFile(t, path)

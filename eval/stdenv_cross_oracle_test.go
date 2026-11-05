@@ -2,22 +2,21 @@ package eval_test
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/internal/oracle"
+	"github.com/connerohnesorge/goonix/internal/testutil"
 	"github.com/connerohnesorge/goonix/parser"
 )
 
-// Line 23 of pkgs/stdenv/cross/default.nix: lib.init bootStages ++ [ … ]
+// Oracle: subexpr types from pkgs/stdenv/cross/default.nix line 23 (`lib.init bootStages`).
 func TestStdenvCrossLine23Subexprs(t *testing.T) {
-	root := modRoot(t)
-	nixpkgs := filepath.Join(root, "testdata", "nixpkgs")
+	nixpkgs := testutil.NixpkgsPath(t)
 	libPath := filepath.Join(nixpkgs, "lib")
 	stdenvPath := filepath.Join(nixpkgs, "pkgs/stdenv")
-	crossPath := filepath.Join(nixpkgs, "pkgs/stdenv/cross/default.nix")
 
 	src := `
 let
@@ -37,6 +36,13 @@ in {
   initLen = builtins.length (lib.init bootStages);
 }
 `
+	nixFile := filepath.Join(t.TempDir(), "cross-subexpr.nix")
+	if err := os.WriteFile(nixFile, []byte("{ }:\n"+strings.TrimSpace(src)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lay := oracle.MustLayout(t)
+	nixV := lay.EvalImportJSON(t, nixFile)
+
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
 	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
 	expr, err := parser.ParseString(src)
@@ -78,32 +84,39 @@ in {
 		}
 		return fvs.String
 	}
-	got := map[string]string{
-		"bootStagesType":     readType("bootStagesType"),
-		"initType":           readType("initType"),
-		"initBootStagesType": readType("initBootStagesType"),
-	}
-	want := map[string]string{
-		"bootStagesType":     "list",
-		"initType":           "lambda",
-		"initBootStagesType": "list",
-	}
-	if nix, err := exec.LookPath("nix-instantiate"); err == nil {
-		nixSrc := strings.ReplaceAll(src, "`", "")
-		nixExpr := filepath.Join(t.TempDir(), "cross-subexpr.nix")
-		if err := os.WriteFile(nixExpr, []byte(nixSrc), 0o644); err != nil {
-			t.Fatal(err)
+	readInt := func(name string) int {
+		sym := ev.Intern.Intern(name)
+		b := fv.Attrs.Binds[sym]
+		if b == nil {
+			t.Fatalf("missing %q", name)
 		}
-		out, err := exec.Command(nix, "--eval", "-E", "import "+nixExpr).Output()
-		if err == nil {
-			t.Logf("nix oracle: %s", strings.TrimSpace(string(out)))
+		var v *eval.Value
+		if b.Thunk != nil {
+			v, err = ev.ForceValue(eval.Deferred(b.Thunk))
+		} else {
+			v = b.Value
 		}
-		_ = nix
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		fvs, err := ev.ForceValue(v)
+		if err != nil {
+			t.Fatalf("%s force: %v", name, err)
+		}
+		if fvs.Kind != eval.VKInt {
+			t.Fatalf("%s: got kind %v", name, fvs.Kind)
+		}
+		return int(fvs.Int)
 	}
-	for k, w := range want {
-		if got[k] != w {
-			t.Fatalf("%s: goonix=%q want=%q (cross=%s)", k, got[k], w, crossPath)
+	for _, k := range []string{"bootStagesType", "initType", "initBootStagesType"} {
+		want, _ := nixV[k].(string)
+		got := readType(k)
+		if got != want {
+			t.Fatalf("%s: goonix=%q nix=%q", k, got, want)
 		}
 	}
-	_ = crossPath
+	wantLen, _ := nixV["initLen"].(float64)
+	if gotLen := readInt("initLen"); float64(gotLen) != wantLen {
+		t.Fatalf("initLen: goonix=%d nix=%v", gotLen, wantLen)
+	}
 }
