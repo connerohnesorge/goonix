@@ -61,10 +61,10 @@ type Evaluator struct {
 	forceTrace  bool
 	forceFrames []string
 
-	drvStrictByPath map[string]*DerivationValue
-	drvStrictByAttrs map[*AttrSet]*DerivationValue // memo derivationStrict by drvAttrs attr set identity
-	strictDrvs      map[string]*gonixdrv.Derivation // every derivationStrict result, keyed by drvPath
-	moduloCache     *store.ModuloCache
+	drvStrictByPath  map[string]*DerivationValue
+	drvStrictByAttrs map[*AttrSet]*DerivationValue   // memo derivationStrict by drvAttrs attr set identity
+	strictDrvs       map[string]*gonixdrv.Derivation // every derivationStrict result, keyed by drvPath
+	moduloCache      *store.ModuloCache
 
 	materializeStorePaths bool // true while coercing derivation env strings (path → store)
 	inStringInterpolation bool // "${path}" / string+path string contexts
@@ -72,6 +72,10 @@ type Evaluator struct {
 	verifyStrictMemo bool // recompute derivationStrict on memo hit and assert identical (tests)
 
 	applyingCallable *Value // current partial application target (callPackageWith auto-merge)
+
+	// xp holds enabled experimental features (Nix --extra-experimental-features).
+	// flakes also enables fetch-tree, matching Nix 2.24.9.
+	xp map[string]bool
 }
 
 // CopyPathTraceEvent records a store copy during evaluation (testing/diagnostics).
@@ -120,6 +124,33 @@ func (ev *Evaluator) WithEffects(eff Effects) *Evaluator {
 		c.importCache = cache
 	}
 	return &c
+}
+
+// WithExperimental enables Nix experimental features. "flakes" also enables "fetch-tree".
+func (ev *Evaluator) WithExperimental(features ...string) *Evaluator {
+	c := *ev
+	c.xp = make(map[string]bool, len(ev.xp)+len(features))
+	for k, v := range ev.xp {
+		c.xp[k] = v
+	}
+	for _, f := range features {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		c.xp[f] = true
+		if f == "flakes" {
+			c.xp["fetch-tree"] = true
+		}
+	}
+	return &c
+}
+
+func (ev *Evaluator) requireExperimental(pos parser.Pos, feature string) error {
+	if ev.xp != nil && ev.xp[feature] {
+		return nil
+	}
+	return evalErr(pos, "experimental Nix feature '%s' is disabled; add '--extra-experimental-features %s' to enable it", feature, feature)
 }
 
 // Eval evaluates expr in a fresh environment and forces the result.
@@ -416,7 +447,6 @@ func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, populateEnv, bindEnv *E
 	}
 	return nil
 }
-
 
 func (ev *Evaluator) bindingSym(b parser.Binding) data.Symbol {
 	if len(b.Path) != 1 || b.Path[0].Expr != nil {

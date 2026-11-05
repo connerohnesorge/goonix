@@ -561,6 +561,9 @@ func builtinFetchGit(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 }
 
 func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := ev.requireExperimental(pos, "fetch-tree"); err != nil {
+		return nil, err
+	}
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}

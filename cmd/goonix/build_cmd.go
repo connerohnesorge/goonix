@@ -21,6 +21,7 @@ func cmdBuild(args []string) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	storeFlag := fs.String("store", "", "physical store root (contains store/ subdirectory)")
 	searchPath := fs.String("I", "", "add search path entry")
+	extraXP := fs.String("extra-experimental-features", "", "space-separated experimental features (flakes enables fetch-tree)")
 	allowRelocated := fs.Bool("allow-relocated-store", false, "allow physical store path rewriting when /nix/store bind mount is unavailable (testing only)")
 	_ = fs.Parse(args)
 	rest := fs.Args()
@@ -39,7 +40,7 @@ func cmdBuild(args []string) {
 	}
 	defer st.Close()
 
-	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{Root: st.Config().LogicalStoreDir()})
+	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{Root: st.Config().LogicalStoreDir()}).WithExperimental(strings.Fields(*extraXP)...)
 	ev.SetCurFile(rest[0])
 	if *searchPath != "" {
 		for _, part := range strings.Split(*searchPath, ":") {

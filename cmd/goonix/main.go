@@ -88,6 +88,7 @@ func cmdEval(args []string) {
 	jsonOut := fs.Bool("json", false, "emit JSON")
 	pure := fs.Bool("pure", true, "pure evaluation mode")
 	searchPath := fs.String("I", "", "add search path entry")
+	extraXP := fs.String("extra-experimental-features", "", "space-separated experimental features (flakes enables fetch-tree)")
 	_ = fs.Parse(args)
 	rest := fs.Args()
 	if len(rest) != 1 {
@@ -99,6 +100,7 @@ func cmdEval(args []string) {
 	if !*pure {
 		ev = ev.WithEffects(eval.IOEffects{})
 	}
+	ev = ev.WithExperimental(strings.Fields(*extraXP)...)
 	if *searchPath != "" {
 		for _, part := range strings.Split(*searchPath, ":") {
 			part = strings.TrimSpace(part)

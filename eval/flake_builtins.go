@@ -95,6 +95,9 @@ func flakeRefAttrs(ev *Evaluator, f flakeRef, pos parser.Pos) *Value {
 }
 
 func builtinParseFlakeRef(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := ev.requireExperimental(pos, "flakes"); err != nil {
+		return nil, err
+	}
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
@@ -110,6 +113,9 @@ func builtinParseFlakeRef(ev *Evaluator, pos parser.Pos, args []*Value) (*Value,
 }
 
 func builtinFlakeRefToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := ev.requireExperimental(pos, "flakes"); err != nil {
+		return nil, err
+	}
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
@@ -153,6 +159,9 @@ func builtinFlakeRefToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 }
 
 func builtinGetFlake(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := ev.requireExperimental(pos, "flakes"); err != nil {
+		return nil, err
+	}
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}

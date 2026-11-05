@@ -77,6 +77,9 @@ func (l Layout) InstantiateArgs() []string {
 	return []string{
 		"--option", "substituters", "",
 		"--option", "restrict-eval", "false",
+		// Explicit features so oracles do not depend on the machine nix.conf.
+		// flakes implies fetch-tree on Nix 2.24.9.
+		"--option", "experimental-features", "nix-command flakes",
 		"-I", "nixpkgs=" + l.Nixpkgs,
 		"-I", "nix=" + l.Nix,
 	}

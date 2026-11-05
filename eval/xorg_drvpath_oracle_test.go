@@ -21,7 +21,7 @@ func evalPkgsExprString(t *testing.T, expr string) string {
 
 func evalPkgsExprStringAllowError(t *testing.T, expr string) (string, error) {
 	t.Helper()
-	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
+	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{}).WithExperimental("flakes")
 	nixpkgs := testutil.NixpkgsPath(t)
 	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
 	ev.NixPath.PrependEntries("nix=" + testutil.ModuleRoot(t) + "/testdata/nix")
