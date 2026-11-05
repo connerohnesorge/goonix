@@ -23,6 +23,18 @@ import (
 	"github.com/connerohnesorge/goonix/substituter"
 )
 
+// errMountFallback signals that logical /nix/store bind mount is unavailable and the
+// builder should fall back to physical path rewriting (see runBuilder).
+var errMountFallback = fmt.Errorf("mount namespace unavailable")
+
+func mountUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return err == errMountFallback || strings.Contains(s, "unshare") || strings.Contains(s, "Operation not permitted") || strings.Contains(s, "mount")
+}
+
 // Loader loads derivations by store path.
 type Loader func(drvPath string) (*gonixdrv.Derivation, error)
 
@@ -95,7 +107,7 @@ func (b *Builder) buildOne(drvPath string, replacements map[string]string) error
 	if err != nil {
 		return err
 	}
-	outPaths, err := d.CalculateOutputPaths(replacements)
+	outPaths, err := store.LogicalOutputPaths(d)
 	if err != nil {
 		return err
 	}
@@ -157,8 +169,16 @@ func (b *Builder) buildFixedOutput(drvPath string, d *gonixdrv.Derivation, outPa
 		if err := b.fetchFixedOutputURL(d, phys, mode); err != nil {
 			return err
 		}
-	} else if _, err := os.Stat(phys); err != nil {
-		return fmt.Errorf("fixed-output %s not present: %w", outPath, err)
+	} else {
+		ok, err := b.Store.IsValidPath(outPath)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if err := b.runBuilder(drvPath, d, outPaths); err != nil {
+				return err
+			}
+		}
 	}
 	want := d.Outputs["out"].Hash
 	algo := d.Env["outputHashAlgo"]
@@ -269,11 +289,7 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 	if b.Config.Sandbox {
 		return fmt.Errorf("sandbox mode not implemented")
 	}
-	buildTop := filepath.Join(b.Store.Root, "build-top")
-	if err := os.MkdirAll(buildTop, 0o777); err != nil {
-		return err
-	}
-	tmpDir, err := os.MkdirTemp(buildTop, "goonix-build-")
+	tmpDir, err := os.MkdirTemp("", "goonix-build-")
 	if err != nil {
 		return err
 	}
@@ -281,9 +297,19 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 
 	physOuts := make(map[string]string, len(outPaths))
 	for name, logical := range outPaths {
-		phys := local.PhysicalPath(b.Store.Root, logical)
-		physOuts[name] = phys
+		physOuts[name] = local.PhysicalPath(b.Store.Root, logical)
 	}
+	builder := d.Builder
+	args := append([]string{}, d.Arguments...)
+	for i, a := range args {
+		args[i] = b.rewriteValueLogical(a, d, outPaths)
+	}
+
+	cmd := exec.Command(builder, args...)
+	cmd.Dir = tmpDir
+	cmd.Env = b.buildEnvLogical(d, outPaths, tmpDir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if b.outputsNeedPrecreatedDirs(d, outPaths) {
 		for _, phys := range physOuts {
 			if err := os.MkdirAll(phys, 0o755); err != nil {
@@ -291,19 +317,18 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 			}
 		}
 	}
-	builder := d.Builder
-	args := append([]string{}, d.Arguments...)
-	for i, a := range args {
-		args[i] = b.rewriteValue(a, d, outPaths, physOuts)
-	}
-
-	cmd := exec.Command(builder, args...)
-	cmd.Dir = tmpDir
-	cmd.Env = b.buildEnvWithPhys(d, outPaths, physOuts, tmpDir, buildTop)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return err
+	if err := b.execBuildCommand(cmd); err != nil {
+		if err != errMountFallback {
+			return err
+		}
+		for i, a := range args {
+			args[i] = b.rewriteValuePhys(a, d, outPaths, physOuts)
+		}
+		cmd.Args = append([]string{builder}, args...)
+		cmd.Env = b.buildEnvPhys(d, outPaths, physOuts, tmpDir)
+		if err := cmd.Run(); err != nil {
+			return err
+		}
 	}
 	for outName, logicalOut := range outPaths {
 		physOut := physOuts[outName]
@@ -321,7 +346,7 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 	return nil
 }
 
-func (b *Builder) buildEnvWithPhys(d *gonixdrv.Derivation, outPaths, physOuts map[string]string, tmpDir, buildTop string) []string {
+func (b *Builder) buildEnvLogical(d *gonixdrv.Derivation, outPaths map[string]string, tmpDir string) []string {
 	cfg := b.Store.Config()
 	storeDir := cfg.LogicalStoreDir()
 	keys := make([]string, 0, len(d.Env)+8)
@@ -331,17 +356,17 @@ func (b *Builder) buildEnvWithPhys(d *gonixdrv.Derivation, outPaths, physOuts ma
 	sort.Strings(keys)
 	env := make([]string, 0, len(keys)+12)
 	for _, k := range keys {
-		env = append(env, k+"="+b.rewriteValue(d.Env[k], d, outPaths, physOuts))
+		env = append(env, k+"="+b.rewriteValueLogical(d.Env[k], d, outPaths))
 	}
-	for name, phys := range physOuts {
-		env = append(env, name+"="+phys)
+	for name, logical := range outPaths {
+		env = append(env, name+"="+logical)
 	}
 	cores := d.Env["NIX_BUILD_CORES"]
 	if cores == "" {
 		cores = "1"
 	}
 	env = append(env,
-		"NIX_BUILD_TOP="+buildTop,
+		"NIX_BUILD_TOP="+tmpDir,
 		"TMPDIR="+tmpDir,
 		"TEMP="+tmpDir,
 		"TMP="+tmpDir,
@@ -359,7 +384,23 @@ func (b *Builder) buildEnvWithPhys(d *gonixdrv.Derivation, outPaths, physOuts ma
 	return env
 }
 
-func (b *Builder) rewriteValue(val string, d *gonixdrv.Derivation, outPaths, physOuts map[string]string) string {
+func (b *Builder) buildEnvPhys(d *gonixdrv.Derivation, outPaths, physOuts map[string]string, tmpDir string) []string {
+	env := b.buildEnvLogical(d, outPaths, tmpDir)
+	for i, e := range env {
+		key, val, ok := strings.Cut(e, "=")
+		if !ok {
+			continue
+		}
+		if phys, ok := physOuts[key]; ok {
+			env[i] = key + "=" + phys
+			continue
+		}
+		env[i] = key + "=" + b.rewriteValuePhys(val, d, outPaths, physOuts)
+	}
+	return env
+}
+
+func (b *Builder) rewriteValuePhys(val string, d *gonixdrv.Derivation, outPaths, physOuts map[string]string) string {
 	cfg := b.Store.Config()
 	out := val
 	for name, logical := range outPaths {
@@ -374,6 +415,22 @@ func (b *Builder) rewriteValue(val string, d *gonixdrv.Derivation, outPaths, phy
 	}
 	for inp := range d.InputDerivations {
 		out = strings.ReplaceAll(out, inp, local.PhysicalPath(b.Store.Root, inp))
+	}
+	return cfg.RewriteDefaultStoreDir(out)
+}
+
+func (b *Builder) rewriteValueLogical(val string, d *gonixdrv.Derivation, outPaths map[string]string) string {
+	cfg := b.Store.Config()
+	out := val
+	for name, logical := range outPaths {
+		out = strings.ReplaceAll(out, store.OutputPlaceholder(name), logical)
+		out = strings.ReplaceAll(out, cfg.RewriteDefaultStoreDir(store.OutputPlaceholder(name)), logical)
+	}
+	for _, src := range d.InputSources {
+		out = strings.ReplaceAll(out, src, src)
+	}
+	for inp := range d.InputDerivations {
+		out = strings.ReplaceAll(out, inp, inp)
 	}
 	return cfg.RewriteDefaultStoreDir(out)
 }

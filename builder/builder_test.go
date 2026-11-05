@@ -59,6 +59,7 @@ func TestBuildTrivialShAndToFileDep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cache := store.NewModuloCache()
 
 	textDrv := &gonixdrv.Derivation{
 		Outputs: map[string]*gonixdrv.Output{
@@ -75,7 +76,7 @@ func TestBuildTrivialShAndToFileDep(t *testing.T) {
 			"system":  "x86_64-linux",
 		},
 	}
-	textDrvPath, err := writeDrv(st, textDrv, map[string]string{})
+	textDrvPath, err := writeDrv(st, textDrv, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,18 +96,7 @@ func TestBuildTrivialShAndToFileDep(t *testing.T) {
 			"system":  "x86_64-linux",
 		},
 	}
-	repl := map[string]string{}
-	textRepl, err := gonixdrv.ReadDerivation(bytes.NewReader(mustReadDrv(st, textDrvPath)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	tr, err := textRepl.CalculateDrvReplacement(repl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	repl[textDrvPath] = tr
-
-	rootDrv, err := writeDrv(st, trivial, repl)
+	rootDrv, err := writeDrv(st, trivial, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +109,7 @@ func TestBuildTrivialShAndToFileDep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outs, err := d.CalculateOutputPaths(repl)
+	outs, err := store.LogicalOutputPaths(d)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,10 +179,13 @@ func TestBuildEchoHiMatchesNixBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	drv.DrvPath = drvPath
+	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
+	if err := eval.PrepareDerivationPaths(ev, cfg, drv); err != nil {
+		t.Fatal(err)
+	}
+	drvPath = drv.DrvPath
 	var buf bytes.Buffer
-	gd, err := writeGoNixFromEval(t, ev, drv, &buf)
-	if err != nil {
+	if _, err := writeGoNixFromEval(t, ev, drv, &buf); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.WriteDerivation(buf.Bytes(), drvPath); err != nil {
@@ -202,12 +195,7 @@ func TestBuildEchoHiMatchesNixBuild(t *testing.T) {
 	if err := b.BuildRealisation(drvPath); err != nil {
 		t.Fatal(err)
 	}
-	repl := map[string]string{}
-	outs, err := gd.CalculateOutputPaths(repl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	outPath := outs["out"]
+	outPath := drv.OutPaths["out"]
 	phys := local.PhysicalPath(st.Root, outPath)
 	gotHash, _, err := local.NarHashAndSize(phys)
 	if err != nil {
@@ -249,8 +237,11 @@ func writeGoNixFromEval(t *testing.T, ev *eval.Evaluator, drv *eval.DerivationVa
 	return gonixdrv.ReadDerivation(bytes.NewReader(aterm))
 }
 
-func writeDrv(st *local.Store, d *gonixdrv.Derivation, repl map[string]string) (string, error) {
-	outPaths, err := d.CalculateOutputPaths(repl)
+func writeDrv(st *local.Store, d *gonixdrv.Derivation, cache *store.ModuloCache) (string, error) {
+	if cache == nil {
+		cache = store.NewModuloCache()
+	}
+	outPaths, err := store.OutputPathsModulo(st.Config(), d, cache)
 	if err != nil {
 		return "", err
 	}
@@ -258,9 +249,7 @@ func writeDrv(st *local.Store, d *gonixdrv.Derivation, repl map[string]string) (
 		if o, ok := d.Outputs[name]; ok {
 			o.Path = p
 		}
-	}
-	if o, ok := d.Env["out"]; ok && o == store.OutputPlaceholder("out") {
-		d.Env["out"] = outPaths["out"]
+		d.Env[name] = p
 	}
 	var buf bytes.Buffer
 	if err := d.WriteDerivation(&buf); err != nil {
@@ -273,6 +262,7 @@ func writeDrv(st *local.Store, d *gonixdrv.Derivation, repl map[string]string) (
 	if err := st.WriteDerivation(buf.Bytes(), p); err != nil {
 		return "", err
 	}
+	cache.Register(p, d)
 	return p, nil
 }
 

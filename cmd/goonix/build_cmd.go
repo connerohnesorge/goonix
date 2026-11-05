@@ -108,8 +108,7 @@ func cmdBuild(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	repl := map[string]string{}
-	outPaths, err := gd.CalculateOutputPaths(repl)
+	outPaths, err := store.LogicalOutputPaths(gd)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
