@@ -1,6 +1,6 @@
 # goonix v0 status (issues #2–#14)
 
-Oracle: **Nix 2.24.9** (`internal/nixversion`, CI via `cachix/install-nix-action` + `install_url` for 2.24.9). nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. Latest green CI: https://github.com/connerohnesorge/goonix/actions/runs/41950529667 (commit `c01af4cf6`).
+Oracle: **Nix 2.24.9** (`internal/nixversion`, CI via `cachix/install-nix-action` + `install_url` for 2.24.9). nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. Latest green CI: https://github.com/connerohnesorge/goonix/actions/runs/41951204987 (commit `98d2f1172`).
 
 ```bash
 bash scripts/check-cgo.sh
