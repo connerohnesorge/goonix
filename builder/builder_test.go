@@ -9,13 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 
 	"github.com/connerohnesorge/goonix/builder"
 	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store"
 	"github.com/connerohnesorge/goonix/store/local"
@@ -167,6 +167,7 @@ func TestBuildEchoHiMatchesNixBuild(t *testing.T) {
 	  builder = "/bin/sh";
 	  args = [ "-c" "echo hi > $out" ];
 	}`
+	nixOutPath := oracle.NixBuildDerivation(t, root, attrs)
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
 	expr, err := parser.ParseString(`builtins.derivationStrict ` + attrs)
 	if err != nil {
@@ -212,7 +213,6 @@ func TestBuildEchoHiMatchesNixBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nixOutPath := nixBuildDerivation(t, root, attrs)
 	if outPath != nixOutPath {
 		t.Fatalf("out path go=%q nix=%q", outPath, nixOutPath)
 	}
@@ -282,27 +282,4 @@ func mustReadDrv(st *local.Store, p string) []byte {
 		panic(err)
 	}
 	return b
-}
-
-func nixBuildDerivation(t *testing.T, storeRoot, attrs string) string {
-	t.Helper()
-	cmd := exec.Command("nix-build",
-		"--store", "local?root="+storeRoot,
-		"--option", "sandbox", "false",
-		"--option", "build-users-group", "",
-		"-E", "derivation "+attrs,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("nix-build in temp store: %v\n%s", err, out)
-	}
-	text := strings.TrimSpace(string(out))
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "/nix/store/") && !strings.HasSuffix(line, ".drv") {
-			return line
-		}
-	}
-	t.Fatalf("nix-build output missing out path:\n%s", out)
-	return ""
 }

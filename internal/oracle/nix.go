@@ -427,3 +427,62 @@ func (l Layout) EvalStdinRaw(t *testing.T, src string) string {
 func (l Layout) EvalStdinRawBytes(t *testing.T, src string) string {
 	return l.EvalStdinRaw(t, src)
 }
+
+// LocalStoreURI is the --store argument for an isolated store under storeRoot (physical layout storeRoot/nix/store/…).
+func LocalStoreURI(storeRoot string) string {
+	return "local?root=" + storeRoot
+}
+
+// UnprivilegedBuildArgs are nix-build flags suitable for unprivileged CI runners.
+func UnprivilegedBuildArgs() []string {
+	return []string{
+		"--option", "sandbox", "false",
+		"--option", "build-users-group", "",
+	}
+}
+
+// BuildCmdEnv returns an environment for nix-build against a temp local store.
+// Host NIX_STORE (e.g. /nix/store from install-nix-action) must not leak in or builds write to the daemon store.
+func BuildCmdEnv(storeRoot string) []string {
+	lay, err := FindLayout()
+	var base []string
+	if err != nil {
+		base = []string{
+			"PATH=" + os.Getenv("PATH"),
+			"HOME=" + os.Getenv("HOME"),
+		}
+	} else {
+		base = lay.HermeticEnv()
+	}
+	out := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		if strings.HasPrefix(kv, "NIX_STORE=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	out = append(out, "NIX_STATE_DIR="+filepath.Join(storeRoot, "nix", "var", "nix"))
+	return out
+}
+
+// NixBuildDerivation builds derivation attrs in storeRoot and returns the logical output path.
+func NixBuildDerivation(t *testing.T, storeRoot, attrs string) string {
+	t.Helper()
+	cmd := exec.Command("nix-build", append([]string{
+		"--store", LocalStoreURI(storeRoot),
+	}, append(UnprivilegedBuildArgs(), "-E", "derivation "+attrs)...)...)
+	cmd.Env = BuildCmdEnv(storeRoot)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("nix-build in temp store: %v\n%s", err, out)
+	}
+	text := strings.TrimSpace(string(out))
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "/nix/store/") && !strings.HasSuffix(line, ".drv") {
+			return line
+		}
+	}
+	t.Fatalf("nix-build output missing out path:\n%s", out)
+	return ""
+}
