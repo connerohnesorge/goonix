@@ -793,13 +793,21 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 }
 
 func downloadChecked(rawURL string) ([]byte, error) {
-	// git.sr.ht answers curl (HTTP/1.1) with 404 and does not answer an
-	// HTTP/2 Go client. Nix's fetch reports that 404.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.ForceAttemptHTTP2 = false
-	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
+	}
+	// git.sr.ht answers Nix's curl and does not finish a Go HTTP/2
+	// handshake. GitHub's API needs HTTP/2: forcing HTTP/1.1 there
+	// returns EOF instead of the 404 Nix reports.
+	if u, perr := url.Parse(rawURL); perr == nil && strings.HasSuffix(u.Hostname(), "sr.ht") {
+		transport.ForceAttemptHTTP2 = false
+		transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+		req.Header.Set("User-Agent", "curl/8.5.0 Nix/2.24.9")
+	}
 	client := &http.Client{Timeout: 20 * time.Second, Transport: transport}
-	resp, err := client.Get(rawURL)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
 	}
