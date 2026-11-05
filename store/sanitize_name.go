@@ -45,6 +45,6 @@ func SanitizeStorePathName(name string) string {
 	return out
 }
 
-func isStorePathNameRune(r rune) bool {
+func isSanitizeStorePathNameRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '+' || r == '.' || r == '_' || r == '?' || r == '=' || r == '-'
 }

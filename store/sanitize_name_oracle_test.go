@@ -26,7 +26,7 @@ func TestSanitizeStorePathNameIdentityWhenValid(t *testing.T) {
 func TestFetchurlPatchOutPathMatchesNixOracle(t *testing.T) {
 	oracle.SkipIfUnavailable(t)
 	lay := oracle.MustLayout(t)
-	// Nix rejects unsanitized default names containing '&'; goonix sanitizes like store-api.
+	// Nix fetchurl.nix rejects default names containing '&'; nixpkgs sanitizes via lib.strings first.
 	wantExpr := `let
   fetchurl = import ` + lay.Nix + `/fetchurl.nix;
   p = fetchurl {
@@ -41,6 +41,7 @@ in p.outPath`
   p = fetchurl {
     url = "https://aur.archlinux.org/cgit/aur.git/plain/meson.patch?h=mingw-w64-xorgproto&id=7b817efc3144a50e6766817c4ca7242f8ce49307";
     sha256 = "sha256-Izzz9In53W7CC++k1bLr78iSrmxpFm1cH8qcSpptoUQ=";
+    name = "meson.patch?h=mingw-w64-xorgproto-id=7b817efc3144a50e6766817c4ca7242f8ce49307";
   };
 in p.outPath`
 	got := evalFetchurlOutPathGo(t, goExpr)

@@ -7,16 +7,19 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"unicode"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 )
 
 // ValidateDerivationName checks Nix store path name rules for derivation names.
 func ValidateDerivationName(name string) error {
-	for i := 0; i < len(name); i++ {
-		switch name[i] {
-		case '"', '\\':
-			return fmt.Errorf("invalid derivation name: name %q contains illegal character %q", name, string(name[i]))
+	for i, r := range name {
+		if r == '"' || r == '\\' {
+			return fmt.Errorf("invalid derivation name: name %q contains illegal character %q", name, string(r))
+		}
+		if !isStorePathNameRune(r) {
+			return fmt.Errorf("invalid derivation name: name %q contains illegal character %q. Please pass a different 'name'.", name, string(name[i]))
 		}
 	}
 	return nil
@@ -63,4 +66,8 @@ func NameFromDerivationValue(env map[string]string, structured bool, jsonEnv str
 
 func ensureStructuredName(d *gonixdrv.Derivation) {
 	_ = derivationName(d)
+}
+
+func isStorePathNameRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '+' || r == '.' || r == '_' || r == '?' || r == '=' || r == '-'
 }

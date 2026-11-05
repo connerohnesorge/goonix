@@ -35,7 +35,7 @@ go test ./... -count=1
 | **ATerm escaping → drvPath** | `eval/aterm_escape_drvpath_oracle_test.go`, `aterm_escape_reject_oracle_test.go` | Nix `(derivation attrs).drvPath` vs goonix `derivationStrict`; temp-store `.drv` byte compare |
 | **Rung08 + structured attrs** | `eval/derivation_strict_rung_test.go`, structured attrs oracle | Full ATerm in temp store |
 | **Linux boot chain** | `eval/boot_stage_diff_test.go` + `testdata/oracle/linux_boot_stage_chain.nix` | Stage count + dfold order vs Nix (not full production boot walk — needs bootstrap store paths) |
-| **xorg + splicing** | `eval/xorg_drvpath_oracle_test.go`, `eval/uri_query_oracle_test.go` | `pkgs.xorg.libX11.drvPath`, xcbproto, smoke oracles (python3, openssl, libXext); fetchurl names with `?`/`&` sanitized via `store.SanitizeStorePathName` |
+| **xorg + splicing** | `eval/xorg_drvpath_oracle_test.go`, `eval/uri_query_oracle_test.go`, `eval/builtin_regex_oracle_test.go` | `pkgs.xorg.libX11.drvPath` (via `lib.strings.sanitizeDerivationName` + POSIX `match`/`split`); smoke oracles; `a&b` rejected at `derivationStrict` like Nix |
 | **FOD** | `builder/fod_oracle_test.go` | sha1/sha256/sha512 flat, sha256 recursive, HTTP + `file://`; out paths vs Nix strict |
 
 ## Post-hack test audit (item 5)
@@ -61,7 +61,7 @@ After removing eval shortcuts (`lookupEnv` / `systemPredicates` / cross `fn` hac
 | `TestSubstituteHelloFromCache` network / cache miss | Same (ladder runs this test) |
 | `TestDrvDiffHelloGoldenClosure` | Large hello closure |
 | `TestImportHeadProbe` | Known red probe until import head fixed |
-| `TestPkgsDrvPathSmokeMatchesNixOracle/git` | `pkgs.git` eager-evaluates `all-packages` (infinite recursion); Nix oracle still verified |
+| `TestPkgsDrvPathSmokeMatchesNixOracle/git` | `pkgs.git` still hits `buildcatrust` `rec`+`with` cycle at `all-packages.nix:418` (Nix oracle checked; goonix `envHasWith` self-skip incomplete for real `toPythonApplication`) |
 | `eval/or_invoke_test.go` | `null or 7` not Nix strict semantics (intentional) |
 | `eval/pkg_config_debug_test.go`, wrapper debug tests | Require `GOONIX_DEBUG_*` env |
 | `store/local/store_test.go` | `nix-store` not on PATH |

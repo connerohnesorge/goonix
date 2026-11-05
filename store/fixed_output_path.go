@@ -40,9 +40,9 @@ func FixedOutputPaths(cfg Config, d *gonixdrv.Derivation) (map[string]string, er
 
 // MakeFixedOutputPath implements Nix 2.24.9 store-api makeFixedOutputPath.
 func MakeFixedOutputPath(cfg Config, d *gonixdrv.Derivation, outName string, o *gonixdrv.Output) (string, error) {
-	pathName := SanitizeStorePathName(d.Name())
+	pathName := d.Name()
 	if outName != "out" {
-		pathName = SanitizeStorePathName(d.Name() + "-" + outName)
+		pathName = d.Name() + "-" + outName
 	}
 	algo := fixedMethodAlgo(d, o)
 	base16Hash := o.Hash

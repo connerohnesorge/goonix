@@ -20,7 +20,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	stdsort "sort"
 	"strings"
@@ -787,19 +786,15 @@ func builtinMatch(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) 
 	if err != nil {
 		return nil, err
 	}
-	r, err := regexp.Compile(re)
+	groups, ok, err := nixRegexMatch(re, s)
 	if err != nil {
 		return nil, evalErr(pos, "invalid regex: %v", err)
 	}
-	m := r.FindStringSubmatch(s)
-	if m == nil {
+	if !ok {
 		return Null(), nil
 	}
-	if len(m) > 0 {
-		m = m[1:]
-	}
-	elems := make([]*Value, len(m))
-	for i, g := range m {
+	elems := make([]*Value, len(groups))
+	for i, g := range groups {
 		elems[i] = Str(g, pos)
 	}
 	return List(elems...), nil
@@ -817,12 +812,11 @@ func builtinSplit(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) 
 	if err != nil {
 		return nil, err
 	}
-	parts := strings.Split(s, sep)
-	elems := make([]*Value, len(parts))
-	for i, p := range parts {
-		elems[i] = Str(p, pos)
+	parts, err := nixRegexSplit(sep, s)
+	if err != nil {
+		return nil, evalErr(pos, "invalid regex: %v", err)
 	}
-	return List(elems...), nil
+	return nixSplitToValues(ev, parts, pos)
 }
 
 func builtinReplaceStrings(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1093,15 +1087,9 @@ func (ev *Evaluator) computeAttrsToDerivation(attrs *Value) (*DerivationValue, e
 	if err := store.ValidateDerivationName(name); err != nil {
 		return nil, err
 	}
-	name = store.SanitizeStorePathName(name)
 	drv := &DerivationValue{Name: name}
 	if err := ev.fillDerivationFromAttrs(attrs, drv, pos); err != nil {
 		return nil, err
-	}
-	if drv.Env != nil {
-		if _, ok := drv.Env["name"]; ok {
-			drv.Env["name"] = name
-		}
 	}
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
 	drvPath, outPaths, err := computeDerivationPaths(ev, cfg, drv)

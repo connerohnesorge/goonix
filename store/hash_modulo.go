@@ -217,9 +217,9 @@ func OutputPathsModulo(cfg Config, d *gonixdrv.Derivation, cache *ModuloCache) (
 	out := make(map[string]string, len(d.Outputs))
 	storeDir := cfg.storeDir()
 	for outName := range d.Outputs {
-		pathName := SanitizeStorePathName(name)
+		pathName := name
 		if outName != "out" {
-			pathName = SanitizeStorePathName(name + "-" + outName)
+			pathName = name + "-" + outName
 		}
 		digest, ok := res.Hashes[outName]
 		if !ok {

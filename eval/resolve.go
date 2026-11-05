@@ -64,7 +64,11 @@ func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, e
 		return nil, false, nil
 	}
 	if b, ok := env.Vars[sym]; ok {
-		return b, true, nil
+		if b.Thunk != nil && b.Thunk.locked && envHasWith(env) {
+			// `with` on the scope chain provides alternate bindings (rec + with self-skip).
+		} else {
+			return b, true, nil
+		}
 	}
 	if b, ok, err := ev.lookupEnv(env.Parent, sym); err != nil {
 		return nil, false, err
@@ -84,6 +88,15 @@ func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, e
 		}
 	}
 	return nil, false, nil
+}
+
+func envHasWith(env *Env) bool {
+	for cur := env; cur != nil; cur = cur.Parent {
+		if cur.With != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func getAttr(v *Value, sym data.Symbol) (*Value, bool) {
