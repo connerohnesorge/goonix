@@ -1,13 +1,13 @@
 # goonix v0 status (issues #2–#14)
 
-Oracle: **Nix 2.24.9** (`internal/nixversion`, CI **ladder** job via `cachix/install-nix-action` + `install_url` for 2.24.9). Optional **Nix 2.35.1** job (`nix-2-35`, `continue-on-error: true`) runs ATerm / strict-rung / FOD smoke. nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. Latest green CI: https://github.com/connerohnesorge/goonix/actions/runs/42042754279 (commit `2159de518`).
+Oracle: **Nix 2.24.9** (`internal/nixversion`, CI **ladder** job via `cachix/install-nix-action` + `install_url` for 2.24.9). Optional **Nix 2.35.1** job (`nix-2-35`, `continue-on-error: true`) runs ATerm / strict-rung / FOD smoke. nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. Green CI for the code commit this note describes: https://github.com/connerohnesorge/goonix/actions/runs/42051596668 (commit `5e8925001`). Ubuntu, macOS, and the Nix 2.24.9 ladder job all passed. This file is the documentation commit on top of that SHA.
 
 ```bash
 bash scripts/check-cgo.sh
 go test ./... -count=1
 ```
 
-**CI:** ubuntu/macos `go test ./... -short` (CGO off). **ladder** job: sysctl userns for Nix sandbox on Ubuntu 24.04, Nix 2.24.9, full `./internal/oracle`, `./ladder`, `./eval`, `./builder`, substituter hello test.
+**CI:** ubuntu/macos `go test ./... -short` (CGO off). **ladder** job: sysctl userns for Nix sandbox on Ubuntu 24.04, Nix 2.24.9, full `./internal/oracle`, `./ladder`, `./eval`, `./store`, `./cmd`, `./builder`, substituter hello test. The store/cmd `go test` step fails the job when tests fail (no `|| true` on that command). Oracle `nix-instantiate` calls set `--option experimental-features 'nix-command flakes'` themselves, so they do not depend on the machine `nix.conf`.
 
 **Paths in tests:** prefer `testutil.ModuleRoot(t)` and `testutil.NixpkgsPath(t)`; legacy `modRoot(t)` in `eval/*_test.go` delegates to `testutil.ModuleRoot`.
 
@@ -18,11 +18,11 @@ go test ./... -count=1
 | **0** | Repo, CI, CGO gate, goldens | `scripts/check-cgo.sh`, `.github/workflows/ci.yml`, `ladder/*`, `internal/oracle` | — |
 | **1** | Parser / lang | `parser/*`, `lang/*` (`parse-okay-*`) | CRLF / subversion parse cases skipped in lang harness |
 | **2** | Eval core | `eval/*`, fixpoint, merge, `with` | Lexical builtins before `with`; POSIX regex leftmost-longest |
-| **2b** | Builtins, Nix files | `eval/builtins*.go`, `builtins_impl_oracle_test.go` | 2.24 builtins that used to throw "not implemented" now have real bodies and oracles (`fetchTarball`, `fetchGit`, `fetchTree`, `fetchurl`, `fromTOML`, `toXML`, `path`, `filterSource`, …). `getFlake` matches Nix on bad refs and path flakes. `fromTOML` does not parse nested tables. Embedded `<nix/fetchurl.nix>` |
+| **2b** | Builtins, Nix files | `eval/builtins*.go`, `builtins_impl_oracle_test.go`, `builtins_review_oracle_test.go` | `getFlake`, `parseFlakeRef`, and `flakeRefToString` require the `flakes` feature; `fetchTree` requires `fetch-tree` (enabling `flakes` turns that on too). `fromTOML` is TOML 1.0 (tables, inline tables, arrays of tables, hex/oct/bin; datetimes only with `parse-toml-timestamps`, otherwise Nix's "Dates and times are not supported"). `toXML` covers lists, null, functions, paths, and floats. `convertHash` takes `hashAlgo` and base16/base32/base64. `readFileType` returns `symlink`. `path` `recursive=false` is a flat hash and rejects directories the way Nix 2.24.9 does. `filterSource` / `path` keep symlinks in the NAR. `fetchurl` accepts a URL string. `fetchTree` covers file, tarball, github, gitlab, sourcehut, and indirect (or Nix's error). `getFlake` on a missing path reports `path '…' does not exist` and does not `git clone` a `github:` ref. `unsafeGetAttrPos` returns the attribute's source position. Embedded `<nix/fetchurl.nix>` |
 | **3** | Spike / decision | README, go-nix | — |
 | **4a** | Store paths, hashes, ATerm | `store/*`, `store/drvshow/*`, modulo oracles | — |
 | **4b** | Local SQLite store | `store/local/*` | GC roots stub; no daemon |
-| **5** | Builder | `builder/*`, `cmd/goonix build` | No `$out` pre-creation. Logical `/nix/store` via mount namespace; physical rewrite only with `AllowRelocated` / `--allow-relocated-store`. Chain oracle (`TestBuildChainQuotedArgsMatchesNixBuild`) in the ladder job |
+| **5** | Builder | `builder/*`, `cmd/goonix build` | No `$out` pre-creation: writing `$out/file` without creating `$out` fails like `nix-build`. Linux builds use `unshare -rm` (user + mount namespace). The wrapper resolves `sh`, `mkdir`, and `mount` by absolute path; the builder still gets `PATH=/path-not-set`. A sentinel is written only after the `/nix/store` bind mount. A missing sentinel is a setup failure. A nonzero builder exit is not retried. Physical path rewriting happens only when `AllowRelocated` is set and that setup failed. `TestBuildWithoutAllowRelocatedUsesLogicalStore` runs in CI, where user namespaces are enabled. |
 | **6** | Substituter | `substituter/*` | Live cache test skips on `-short`/offline |
 | **7** | CLI | `cmd/goonix` | — |
 | **#13** | Bootstrap ladder | stage stdenv ATerm oracles | — |
@@ -38,7 +38,7 @@ go test ./... -count=1
 | **xorg + splicing** | `eval/xorg_drvpath_oracle_test.go`, `eval/uri_query_oracle_test.go`, `eval/builtin_regex_oracle_test.go`, `eval/with_scoping_oracle_test.go` | POSIX `match`/`split`; `lib.strings.sanitizeDerivationName`; smoke oracles include **`pkgs.git.out.drvPath`** |
 | **FOD** | `builder/fod_oracle_test.go` | sha1/sha256/sha512 flat, sha256 recursive, HTTP + `file://`; out paths vs Nix strict |
 | **Build chain** | `builder/build_chain_oracle_test.go` | `nix-build` chain; args include quote, backslash, newline, tab; out paths and NAR hashes |
-| **Builtin bodies** | `eval/builtins_impl_oracle_test.go`, `eval/no_stub_builtin_test.go` | Nix 2.24.9 oracles; fails if `eval/*.go` still contains `is not implemented` |
+| **Builtin bodies** | `eval/builtins_impl_oracle_test.go`, `eval/builtins_review_oracle_test.go`, `eval/no_stub_builtin_test.go` | Nix 2.24.9 oracles. The stub scan fails if builtin sources contain `not implemented` or `unsupported` (Nix's own unknown-input sentence is the exception) |
 
 ## Post-hack test audit (item 5)
 
