@@ -152,6 +152,9 @@ func TestBuildEchoHiMatchesNixBuild(t *testing.T) {
 	if _, err := exec.LookPath("/bin/sh"); err != nil {
 		t.Skip("no /bin/sh")
 	}
+	if _, err := exec.LookPath("nix-build"); err != nil {
+		t.Skip("no nix-build")
+	}
 	root := t.TempDir()
 	st, err := local.OpenStore(root)
 	if err != nil {
@@ -164,9 +167,6 @@ func TestBuildEchoHiMatchesNixBuild(t *testing.T) {
 	  builder = "/bin/sh";
 	  args = [ "-c" "echo hi > $out" ];
 	}`
-	if _, err := exec.LookPath("nix-build"); err != nil {
-		t.Skip("no nix-build")
-	}
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
 	expr, err := parser.ParseString(`builtins.derivationStrict ` + attrs)
 	if err != nil {
@@ -212,16 +212,11 @@ func TestBuildEchoHiMatchesNixBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nixStore := filepath.Join(root, "store")
-	nixOut, err := exec.Command("nix-build", "--store", nixStore, "-E", "derivation "+attrs).Output()
-	if err != nil {
-		t.Fatalf("nix-build in temp store: %v", err)
-	}
-	nixOutPath := strings.TrimSpace(string(nixOut))
+	nixOutPath := nixBuildDerivation(t, root, attrs)
 	if outPath != nixOutPath {
 		t.Fatalf("out path go=%q nix=%q", outPath, nixOutPath)
 	}
-	nixPhys := filepath.Join(nixStore, "nix", "store", filepath.Base(nixOutPath))
+	nixPhys := filepath.Join(root, "nix", "store", filepath.Base(nixOutPath))
 	wantHash, _, err := local.NarHashAndSize(nixPhys)
 	if err != nil {
 		t.Fatal(err)
@@ -287,4 +282,27 @@ func mustReadDrv(st *local.Store, p string) []byte {
 		panic(err)
 	}
 	return b
+}
+
+func nixBuildDerivation(t *testing.T, storeRoot, attrs string) string {
+	t.Helper()
+	cmd := exec.Command("nix-build",
+		"--store", "local?root="+storeRoot,
+		"--option", "sandbox", "false",
+		"--option", "build-users-group", "",
+		"-E", "derivation "+attrs,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("nix-build in temp store: %v\n%s", err, out)
+	}
+	text := strings.TrimSpace(string(out))
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "/nix/store/") && !strings.HasSuffix(line, ".drv") {
+			return line
+		}
+	}
+	t.Fatalf("nix-build output missing out path:\n%s", out)
+	return ""
 }

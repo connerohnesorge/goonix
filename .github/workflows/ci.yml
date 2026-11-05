@@ -63,7 +63,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           go test ./internal/oracle/... ./ladder/... ./eval/... -count=1 -timeout 20m
-          go test ./builder/... -run FixedOutput -count=1 -timeout 10m
+          go test ./builder/... -count=1 -timeout 10m
           go test ./substituter/... -run TestSubstituteHelloFromCache -count=1 -timeout 5m
 
   nix-2-35:

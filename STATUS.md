@@ -22,7 +22,7 @@ go test ./... -count=1
 | **3** | Spike / decision | README, go-nix | — |
 | **4a** | Store paths, hashes, ATerm | `store/*`, `store/drvshow/*`, modulo oracles | — |
 | **4b** | Local SQLite store | `store/local/*` | GC roots stub; no daemon |
-| **5** | Builder | `builder/*`, `cmd/goonix build` | FOD matrix oracle; flat verify uses **content** hash (not NAR); **sandbox off by default** (`builder.Config.Sandbox`, documented in `builder/doc.go`) |
+| **5** | Builder | `builder/*`, `cmd/goonix build` | FOD matrix oracle; flat verify uses **content** hash; **sandbox off by default** (`builder.Config.Sandbox`); echo-hi oracle uses `nix-build --store local?root=…` with sandbox disabled |
 | **6** | Substituter | `substituter/*` | Live cache test skips on `-short`/offline |
 | **7** | CLI | `cmd/goonix` | — |
 | **#13** | Bootstrap ladder | stage stdenv ATerm oracles | — |
@@ -56,7 +56,6 @@ After removing eval shortcuts (`lookupEnv` / `systemPredicates` / cross `fn` hac
 | `eval/aterm_escape_drvpath_oracle_test.go` env-key escape subcase | Nix rejects illegal env **names** (goonix matches); case skipped when Nix errors |
 | `TestBuild*` / `cmd/goonix` when no `/bin/sh` | Host has no POSIX shell |
 | `TestBuildEchoHiMatchesNixBuild` when no `nix-build` | Nix CLI not installed (ladder job has Nix) |
-| `TestBuildEchoHiMatchesNixBuild` in ladder CI | Not run in ladder (`-run FixedOutput` only); `nix-build --store` temp layout can exit 100 on runners — run locally with Nix |
 | `TestPkgConfigFetchurl*` / many bootstrap oracles when no `/nix/store` | Need host store materialisation |
 | `TestSubstituteNetToolsFromCache`, `testing.Short`, network errors | Offline or `-short` unit job |
 | `TestSubstituteHelloFromCache` network / cache miss | Same (ladder runs this test) |
