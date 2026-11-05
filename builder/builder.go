@@ -23,17 +23,10 @@ import (
 	"github.com/connerohnesorge/goonix/substituter"
 )
 
-// errMountFallback signals that logical /nix/store bind mount is unavailable and the
-// builder should fall back to physical path rewriting (see runBuilder).
+// errMountFallback signals that the /nix/store bind mount could not be set up.
+// runBuilder may rewrite paths only when AllowRelocated is set. A builder that
+// already ran and exited nonzero is not this error.
 var errMountFallback = fmt.Errorf("mount namespace unavailable")
-
-func mountUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
-	s := err.Error()
-	return err == errMountFallback || strings.Contains(s, "unshare") || strings.Contains(s, "Operation not permitted") || strings.Contains(s, "mount")
-}
 
 // Loader loads derivations by store path.
 type Loader func(drvPath string) (*gonixdrv.Derivation, error)
