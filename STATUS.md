@@ -1,6 +1,6 @@
 # goonix v0 status (issues #2–#13)
 
-Oracle: **Nix 2.24.9** (`internal/nixversion`, CI **ladder** job via `cachix/install-nix-action` + `install_url` for 2.24.9). Optional **Nix 2.35.1** job (`nix-2-35`, `continue-on-error: true`) runs ATerm / strict-rung / FOD smoke. nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. The code this note describes is `074441da0`. Its green run is https://github.com/connerohnesorge/goonix/actions/runs/42078109252 (ubuntu, macOS, the Nix 2.24.9 ladder, and the optional Nix 2.35 job). This file is the documentation commit on top of that SHA.
+Oracle: **Nix 2.24.9** (`internal/nixversion`, CI **ladder** job via `cachix/install-nix-action` + `install_url` for 2.24.9). Optional **Nix 2.35.1** job (`nix-2-35`, `continue-on-error: true`) runs ATerm / strict-rung / FOD smoke. nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. The code this note describes is `f36d6d69f`. Its green run is https://github.com/connerohnesorge/goonix/actions/runs/42080189198 (ubuntu, macOS, the Nix 2.24.9 ladder, and the optional Nix 2.35 job). This file is the documentation commit on top of that SHA.
 
 ```bash
 bash scripts/check-cgo.sh
@@ -11,7 +11,7 @@ go test ./... -count=1
 
 GitHub **#14** is "Post-v0: __structuredAttrs support". It is not the drvPath ladder, and it is not done.
 
-Green run for `074441da0` (ubuntu, macOS, Nix 2.24.9 ladder, and the optional Nix 2.35 job all passed): https://github.com/connerohnesorge/goonix/actions/runs/42078109252
+Green run for `f36d6d69f` (ubuntu, macOS, Nix 2.24.9 ladder, and the optional Nix 2.35 job all passed): https://github.com/connerohnesorge/goonix/actions/runs/42080189198
 
 There is no Nix daemon in this tree. A daemon is out of scope for this map. `goonix gc` talks to the local SQLite store directly.
 
@@ -95,7 +95,7 @@ After removing eval shortcuts (`lookupEnv` / `systemPredicates` / cross `fn` hac
 - GitHub #14, `__structuredAttrs`, is not implemented.
 - `parseFlakeRef` does not accept `sourcehut:` URLs.
 - Flake registries are not consulted. A missing indirect flake still reports `cannot find flake 'flake:…' in the flake registries` without reading a registry.
-- Successful `github`, `gitlab`, and `sourcehut` fetches are not byte-compared to Nix's git cache. A missing sourcehut ref is fetched with the `curl` binary (HTTP/2, IPv4, no proxy, four-minute wait) because Go's HTTP client does not receive that host's response. Without `curl` on `PATH`, that error is not Nix's `HTTP error 404`.
+- Successful `github`, `gitlab`, and `sourcehut` fetches are not byte-compared to Nix's git cache. A missing sourcehut ref is fetched with the `curl` binary (HTTP/2, IPv4, no proxy, retries) because Go's HTTP client does not receive that host's response. Without `curl` on `PATH`, that error is not Nix's `HTTP error 404`.
 - The sandbox always provides `/bin/sh` and a fresh `/proc`. It does not read Nix's `sandbox-paths`, and it is not a multi-user `nixbld` pool. A `text` hash that is not SHA-256 returns an error; Nix 2.24.9 aborts on that assertion.
 - `fetchTree` of a `file` input hashes the NAR of the file. Field comparison against Nix is gated on `nix-instantiate --version` containing `2.24.9`.
 
