@@ -793,10 +793,9 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 
 func downloadChecked(rawURL string) ([]byte, error) {
 	if u, err := url.Parse(rawURL); err == nil && strings.HasSuffix(u.Hostname(), "sr.ht") {
-		// git.sr.ht answers Nix's libcurl with HTTP error 404. Go's HTTP
-		// client does not: HTTP/2 waits until the deadline, and HTTP/1.1
-		// never receives the status line. Nix downloads this host with
-		// curl, so this path does too.
+		// git.sr.ht answers Nix's libcurl with HTTP error 404. Go's client
+		// and a default curl do not: the connection sits until the
+		// deadline. Match Nix's fetch: HTTP/2, IPv4, and no proxy.
 		return downloadWithCurl(rawURL)
 	}
 	client := &http.Client{Timeout: 20 * time.Second}
@@ -815,6 +814,21 @@ func downloadChecked(rawURL string) ([]byte, error) {
 	return body, nil
 }
 
+func curlEnvWithoutProxy() []string {
+	var out []string
+	for _, kv := range os.Environ() {
+		key, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if strings.Contains(strings.ToLower(key), "proxy") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 func downloadWithCurl(rawURL string) ([]byte, error) {
 	if _, err := exec.LookPath("curl"); err != nil {
 		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
@@ -825,7 +839,8 @@ func downloadWithCurl(rawURL string) ([]byte, error) {
 	}
 	defer os.RemoveAll(dir)
 	bodyPath := filepath.Join(dir, "body")
-	cmd := exec.Command("curl", "-sS", "-L", "--max-redirs", "10", "--max-time", "20", "-o", bodyPath, "-w", "%{http_code}", rawURL)
+	cmd := exec.Command("curl", "-4", "--http2", "-sS", "-L", "--max-redirs", "10", "--connect-timeout", "10", "--max-time", "20", "-o", bodyPath, "-w", "%{http_code}", rawURL)
+	cmd.Env = curlEnvWithoutProxy()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
