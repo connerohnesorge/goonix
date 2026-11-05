@@ -517,10 +517,10 @@ func NixBuildStrictOutPath(t *testing.T, storeRoot, attrs string) string {
 	t.Helper()
 	lay := MustLayout(t)
 	drvPath := lay.InstantiateStrictInStore(t, storeRoot, attrs)
-	cmd := exec.Command("nix-store", append([]string{
+	cmd := exec.Command("nix-store",
 		"--store", LocalStoreURI(storeRoot),
 		"--realise", drvPath,
-	})...)
+	)
 	cmd.Env = BuildCmdEnv(storeRoot)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
