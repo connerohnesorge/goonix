@@ -35,7 +35,7 @@ go test ./... -count=1
 | **ATerm escaping → drvPath** | `eval/aterm_escape_drvpath_oracle_test.go`, `aterm_escape_reject_oracle_test.go` | Nix `(derivation attrs).drvPath` vs goonix `derivationStrict`; temp-store `.drv` byte compare |
 | **Rung08 + structured attrs** | `eval/derivation_strict_rung_test.go`, structured attrs oracle | Full ATerm in temp store |
 | **Linux boot chain** | `eval/boot_stage_diff_test.go` + `testdata/oracle/linux_boot_stage_chain.nix` | Stage count + dfold order vs Nix (not full production boot walk — needs bootstrap store paths) |
-| **xorg + splicing** | `eval/xorg_drvpath_oracle_test.go` | `pkgs.xorg.xcbproto.drvPath` (libX11 hits `?` in patch URLs in go eval); real `makeScopeWithSplicing'` wiring |
+| **xorg + splicing** | `eval/xorg_drvpath_oracle_test.go`, `eval/uri_query_oracle_test.go` | `pkgs.xorg.libX11.drvPath`, xcbproto, smoke oracles (python3, openssl, libXext); fetchurl names with `?`/`&` sanitized via `store.SanitizeStorePathName` |
 | **FOD** | `builder/fod_oracle_test.go` | sha1/sha256/sha512 flat, sha256 recursive, HTTP + `file://`; out paths vs Nix strict |
 
 ## Post-hack test audit (item 5)

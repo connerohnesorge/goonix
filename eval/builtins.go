@@ -1090,9 +1090,13 @@ func (ev *Evaluator) computeAttrsToDerivation(attrs *Value) (*DerivationValue, e
 	if err != nil {
 		return nil, err
 	}
+	name = store.SanitizeStorePathName(name)
 	drv := &DerivationValue{Name: name}
 	if err := ev.fillDerivationFromAttrs(attrs, drv, pos); err != nil {
 		return nil, err
+	}
+	if drv.Env != nil {
+		drv.Env["name"] = name
 	}
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
 	drvPath, outPaths, err := computeDerivationPaths(ev, cfg, drv)

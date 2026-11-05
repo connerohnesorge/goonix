@@ -12,30 +12,38 @@ import (
 
 func evalPkgsExprString(t *testing.T, expr string) string {
 	t.Helper()
+	s, err := evalPkgsExprStringAllowError(t, expr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func evalPkgsExprStringAllowError(t *testing.T, expr string) (string, error) {
+	t.Helper()
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
 	nixpkgs := testutil.NixpkgsPath(t)
 	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
 	ev.NixPath.PrependEntries("nix=" + testutil.ModuleRoot(t) + "/testdata/nix")
 	parsed, err := parser.ParseString(expr)
 	if err != nil {
-		t.Fatal(err)
+		return "", err
 	}
 	val, err := ev.EvalWithBuiltins(parsed)
 	if err != nil {
-		t.Fatal(err)
+		return "", err
 	}
 	fv, err := ev.ForceValue(val)
 	if err != nil {
-		t.Fatal(err)
+		return "", err
 	}
 	switch fv.Kind {
 	case eval.VKString:
-		return fv.String
+		return fv.String, nil
 	case eval.VKPath:
-		return fv.Path
+		return fv.Path, nil
 	default:
-		t.Fatalf("want string/path, got %v", fv.Kind)
-		return ""
+		return "", fmt.Errorf("want string/path, got %v", fv.Kind)
 	}
 }
 
