@@ -6,8 +6,10 @@ package eval
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/connerohnesorge/goonix/parser"
@@ -17,13 +19,15 @@ import (
 )
 
 type flakeRef struct {
-	Type  string
-	Owner string
-	Repo  string
-	Rev   string
-	Ref   string
-	Dir   string
-	Path  string
+	Type    string
+	Owner   string
+	Repo    string
+	Rev     string
+	Ref     string
+	Dir     string
+	Host    string
+	NarHash string
+	Path    string
 }
 
 func isGitRev(s string) bool {
@@ -38,16 +42,6 @@ func isGitRev(s string) bool {
 		}
 	}
 	return true
-}
-
-func queryParam(query, key string) string {
-	for _, kv := range strings.Split(query, "&") {
-		k, v, ok := strings.Cut(kv, "=")
-		if ok && k == key {
-			return v
-		}
-	}
-	return ""
 }
 
 func parseFlakeRefString(ref string) (flakeRef, error) {
@@ -67,45 +61,156 @@ func parseFlakeRefString(ref string) (flakeRef, error) {
 			return flakeRef{}, fmt.Errorf("flake reference '%s' is not an absolute path", ref)
 		}
 		return flakeRef{Type: "path", Path: rest}, nil
-	case "github":
-		pathPart, query, _ := strings.Cut(rest, "?")
-		parts := strings.Split(pathPart, "/")
-		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-			return flakeRef{}, fmt.Errorf("invalid GitHub flake reference '%s'", ref)
-		}
-		out := flakeRef{Type: "github", Owner: parts[0], Repo: parts[1]}
-		if len(parts) >= 3 && parts[2] != "" {
-			// A 40-digit sha1 is a rev. Anything else, including a branch
-			// such as nixos-24.05, is a ref.
-			if isGitRev(parts[2]) {
-				out.Rev = parts[2]
-			} else {
-				out.Ref = parts[2]
-			}
-		}
-		if dir := queryParam(query, "dir"); dir != "" {
-			out.Dir = dir
-		}
-		return out, nil
+	case "github", "gitlab":
+		// github and gitlab share Nix's GitArchiveInputScheme.
+		return parseGitArchiveRef(scheme, rest, ref)
 	default:
 		return flakeRef{}, fmt.Errorf("flake reference '%s' is not an absolute path", ref)
 	}
 }
 
+// parseGitArchiveRef parses owner/repo[/rev-or-ref] the way Nix 2.24.9's
+// GitArchiveInputScheme does. A single extra segment that is 40 hex digits
+// is a rev. More than one extra segment is joined with "/" and kept as a
+// ref, so refs/heads/main stays one ref. Query keys rev, ref, host, narHash,
+// and dir are kept; other query keys are dropped.
+func parseGitArchiveRef(scheme, rest, original string) (flakeRef, error) {
+	pathPart, query, _ := strings.Cut(rest, "?")
+	parts := strings.Split(pathPart, "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return flakeRef{}, fmt.Errorf("invalid %s flake reference '%s'", scheme, original)
+	}
+	out := flakeRef{Type: scheme, Owner: parts[0], Repo: parts[1]}
+	switch {
+	case len(parts) == 3 && parts[2] != "":
+		if isGitRev(parts[2]) {
+			out.Rev = parts[2]
+		} else if isGitRef(parts[2]) {
+			out.Ref = parts[2]
+		} else {
+			return flakeRef{}, fmt.Errorf("invalid %s flake reference '%s'", scheme, original)
+		}
+	case len(parts) > 3:
+		joined := strings.Join(parts[2:], "/")
+		if !isGitRef(joined) {
+			return flakeRef{}, fmt.Errorf("invalid %s flake reference '%s'", scheme, original)
+		}
+		out.Ref = joined
+	}
+	q := decodeFlakeQuery(query)
+	if rev := q["rev"]; rev != "" {
+		if !isGitRev(rev) {
+			return flakeRef{}, fmt.Errorf("invalid %s flake reference '%s'", scheme, original)
+		}
+		out.Rev = rev
+	}
+	if ref := q["ref"]; ref != "" {
+		if out.Ref != "" {
+			return flakeRef{}, fmt.Errorf("flake URL '%s' has multiple branch/tag names", original)
+		}
+		if !isGitRef(ref) {
+			return flakeRef{}, fmt.Errorf("invalid %s flake reference '%s'", scheme, original)
+		}
+		out.Ref = ref
+	}
+	out.Host = q["host"]
+	out.NarHash = q["narHash"]
+	out.Dir = q["dir"]
+	return out, nil
+}
+
+func isGitRef(s string) bool {
+	if s == "" {
+		return false
+	}
+	if !isGitRefFirst(s[0]) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if !isGitRefRest(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isGitRefFirst(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '@'
+}
+
+func isGitRefRest(c byte) bool {
+	return isGitRefFirst(c) || c == '_' || c == '.' || c == '/' || c == '+' || c == '-'
+}
+
+func decodeFlakeQuery(q string) map[string]string {
+	out := map[string]string{}
+	if q == "" {
+		return out
+	}
+	for _, kv := range strings.Split(q, "&") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		dk, err := url.PathUnescape(k)
+		if err != nil {
+			dk = k
+		}
+		dv, err := url.PathUnescape(v)
+		if err != nil {
+			dv = v
+		}
+		out[dk] = dv
+	}
+	return out
+}
+
+// percentEncodeQuery matches Nix's percentEncode for query components.
+// Unreserved characters and :@/? are left alone. '+' is not a space.
+func percentEncodeQuery(s string) string {
+	const keep = ":@/?"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || strings.ContainsRune("-._~", rune(c)) || strings.ContainsRune(keep, rune(c)) {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return b.String()
+}
+
 func (f flakeRef) String() string {
 	switch f.Type {
-	case "github":
-		s := "github:" + f.Owner + "/" + f.Repo
+	case "github", "gitlab":
+		s := f.Type + ":" + f.Owner + "/" + f.Repo
 		switch {
 		case f.Rev != "":
 			s += "/" + f.Rev
 		case f.Ref != "":
 			s += "/" + f.Ref
 		}
+		q := map[string]string{}
 		if f.Dir != "" {
-			s += "?dir=" + f.Dir
+			q["dir"] = f.Dir
 		}
-		return s
+		if f.NarHash != "" {
+			q["narHash"] = f.NarHash
+		}
+		if len(q) == 0 {
+			return s
+		}
+		keys := make([]string, 0, len(q))
+		for k := range q {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, percentEncodeQuery(k)+"="+percentEncodeQuery(q[k]))
+		}
+		return s + "?" + strings.Join(parts, "&")
 	case "path":
 		return "path:" + f.Path
 	default:
@@ -120,7 +225,7 @@ func flakeRefAttrs(ev *Evaluator, f flakeRef, pos parser.Pos) *Value {
 	}
 	put("type", f.Type)
 	switch f.Type {
-	case "github":
+	case "github", "gitlab":
 		put("owner", f.Owner)
 		put("repo", f.Repo)
 		if f.Rev != "" {
@@ -131,6 +236,12 @@ func flakeRefAttrs(ev *Evaluator, f flakeRef, pos parser.Pos) *Value {
 		}
 		if f.Dir != "" {
 			put("dir", f.Dir)
+		}
+		if f.Host != "" {
+			put("host", f.Host)
+		}
+		if f.NarHash != "" {
+			put("narHash", f.NarHash)
 		}
 	case "path":
 		put("path", f.Path)
@@ -176,7 +287,7 @@ func builtinFlakeRefToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 	}
 	f := flakeRef{Type: typ}
 	switch typ {
-	case "github":
+	case "github", "gitlab":
 		f.Owner, err = getAttrString(ev, set, "owner")
 		if err != nil {
 			return nil, err
@@ -196,6 +307,12 @@ func builtinFlakeRefToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 		}
 		if dir, err := getAttrString(ev, set, "dir"); err == nil {
 			f.Dir = dir
+		}
+		if host, err := getAttrString(ev, set, "host"); err == nil {
+			f.Host = host
+		}
+		if narHash, err := getAttrString(ev, set, "narHash"); err == nil {
+			f.NarHash = narHash
 		}
 	case "path":
 		f.Path, err = getAttrString(ev, set, "path")
