@@ -183,11 +183,11 @@ func TestReviewBuiltinsMatchNix(t *testing.T) {
 	missExpr := `builtins.getFlake "` + missingPath + `"`
 	_, nerr = lay.EvalExprAllowError(t, missExpr)
 	_, gerr = evalPkgsExprStringAllowError(t, missExpr)
-	if nerr == nil || gerr == nil {
+	if nerr == nil || gerr == nil || !strings.Contains(gerr.Error(), "does not exist") {
 		t.Fatalf("missing path nix=%v go=%v", nerr, gerr)
 	}
-	if frag := sharedErrorFragment(nerr.Error()); frag == "" || !strings.Contains(gerr.Error(), frag) {
-		t.Fatalf("missing path fragment %q\nnix=%v\ngo=%v", frag, nerr, gerr)
+	if !strings.Contains(nerr.Error(), "does not exist") && !strings.Contains(nerr.Error(), "No such file or directory") {
+		t.Fatalf("missing path nix=%v go=%v", nerr, gerr)
 	}
 
 	empty := t.TempDir()

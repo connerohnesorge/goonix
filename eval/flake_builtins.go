@@ -189,7 +189,8 @@ func builtinGetFlake(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	}
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
-			return nil, evalErr(pos, "opening file \"%s\": No such file or directory", dir)
+			// Nix 2.24.9: path '/missing' does not exist
+			return nil, evalErr(pos, "path '%s' does not exist", dir)
 		}
 		return nil, err
 	}
