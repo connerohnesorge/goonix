@@ -179,7 +179,7 @@ func builtinGetFlake(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 		// Resolve via the GitHub commits API and a bounded tarball download.
 		// An unlocked github: ref must not start a git clone of HEAD.
 		var err error
-		dir, cleanup, err = fetchGitHubTree(parsed.Owner, parsed.Repo, parsed.Rev)
+		dir, cleanup, _, _, err = fetchGitHubTree(parsed.Owner, parsed.Repo, parsed.Rev)
 		if err != nil {
 			return nil, evalErr(pos, "%s", err.Error())
 		}

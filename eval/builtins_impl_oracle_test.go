@@ -150,8 +150,6 @@ func TestFetchAndPathBuiltinsMatchNix(t *testing.T) {
 		`builtins.fetchurl { url = "file://` + filepath.Join(src, "keep") + `"; name = "keep"; sha256 = "` + flat + `"; }`,
 		`builtins.fetchTarball { url = "file://` + tgz + `"; sha256 = "` + sri + `"; name = "tarball-test"; }`,
 		`builtins.fetchGit { url = "file://` + repo + `"; rev = "` + rev + `"; name = "goonix-src"; }`,
-		`builtins.fetchTree { type = "git"; url = "file://` + repo + `"; rev = "` + rev + `"; }`,
-		`builtins.fetchTree { type = "path"; path = ` + nixPath(src) + `; }`,
 		`(builtins.getFlake "path:` + flake + `").outPath`,
 		`builtins.toString ((builtins.getFlake "path:` + flake + `").outputs.testValue)`,
 		`builtins.toJSON (builtins.scopedImport { x = 9; } ` + nixPath(writeFile(t, "x + 1\n")) + `)`,
@@ -165,6 +163,8 @@ func TestFetchAndPathBuiltinsMatchNix(t *testing.T) {
 			}
 		})
 	}
+	assertFetchTreeLikeNix(t, lay, `builtins.fetchTree { type = "git"; url = "file://`+repo+`"; rev = "`+rev+`"; shallow = false; }`)
+	assertFetchTreeLikeNix(t, lay, `builtins.fetchTree { type = "path"; path = `+nixPath(src)+`; }`)
 }
 
 func nixPath(p string) string {

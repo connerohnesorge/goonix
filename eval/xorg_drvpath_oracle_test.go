@@ -10,6 +10,27 @@ import (
 	"github.com/connerohnesorge/goonix/parser"
 )
 
+func evalPkgsValue(t *testing.T, expr string) *eval.Value {
+	t.Helper()
+	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{}).WithExperimental("flakes")
+	nixpkgs := testutil.NixpkgsPath(t)
+	ev.NixPath.PrependEntries("nixpkgs=" + nixpkgs)
+	ev.NixPath.PrependEntries("nix=" + testutil.ModuleRoot(t) + "/testdata/nix")
+	parsed, err := parser.ParseString(expr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	val, err := ev.EvalWithBuiltins(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fv, err := ev.ForceValue(val)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fv
+}
+
 func evalPkgsExprString(t *testing.T, expr string) string {
 	t.Helper()
 	s, err := evalPkgsExprStringAllowError(t, expr)

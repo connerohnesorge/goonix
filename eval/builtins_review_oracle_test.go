@@ -2,6 +2,7 @@ package eval_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,7 +96,7 @@ func TestReviewBuiltinsMatchNix(t *testing.T) {
 	}
 
 	flat := filepath.Join(t.TempDir(), "flat-file")
-	if err := os.WriteFile(flat, []byte("hi\n"), 0o644); err != nil {
+	if err := os.WriteFile(flat, []byte("hello-file\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	flatExpr := `builtins.path { path = "` + flat + `"; recursive = false; }`
@@ -133,9 +134,7 @@ func TestReviewBuiltinsMatchNix(t *testing.T) {
 	}
 
 	fileExpr := `builtins.fetchTree { type = "file"; url = "file://` + flat + `"; }`
-	if w, g := lay.EvalRaw(t, fileExpr), evalPkgsExprString(t, fileExpr); w != g {
-		t.Fatalf("fetchTree file\nnix=%q\ngo=%q", w, g)
-	}
+	assertFetchTreeLikeNix(t, lay, fileExpr)
 	tarDir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(tarDir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
@@ -148,13 +147,9 @@ func TestReviewBuiltinsMatchNix(t *testing.T) {
 		t.Fatalf("tar: %v\n%s", err, out)
 	}
 	tarExpr := `builtins.fetchTree { type = "tarball"; url = "file://` + tgz + `"; }`
-	if w, g := lay.EvalRaw(t, tarExpr), evalPkgsExprString(t, tarExpr); w != g {
-		t.Fatalf("fetchTree tarball\nnix=%q\ngo=%q", w, g)
-	}
+	assertFetchTreeLikeNix(t, lay, tarExpr)
 	strTar := `builtins.fetchTree "file://` + tgz + `"`
-	if w, g := lay.EvalRaw(t, strTar), evalPkgsExprString(t, strTar); w != g {
-		t.Fatalf("fetchTree string tarball\nnix=%q\ngo=%q", w, g)
-	}
+	assertFetchTreeLikeNix(t, lay, strTar)
 
 	remote := []string{
 		`builtins.fetchTree { type = "github"; owner = "NixOS"; repo = "definitely-not-a-real-repo-goonix"; }`,
@@ -268,6 +263,59 @@ func evalWithFeaturesErr(t *testing.T, expr string, features ...string) (string,
 type errString eval.ValueKind
 
 func (e errString) Error() string { return "want string" }
+
+// assertFetchTreeLikeNix compares attrNames and each field. nix-instantiate --json
+// of the whole value prints only outPath, so a string result used to look equal.
+func assertFetchTreeLikeNix(t *testing.T, lay oracle.Layout, expr string) {
+	t.Helper()
+	got := evalPkgsValue(t, expr)
+	if got.Kind != eval.VKAttrs {
+		t.Fatalf("fetchTree must return an attrset, got %v for %s", got.Kind, expr)
+	}
+	ver, _ := exec.Command("nix-instantiate", "--version").CombinedOutput()
+	if !strings.Contains(string(ver), "2.24.9") {
+		return
+	}
+	nixType := lay.EvalRaw(t, "builtins.typeOf ("+expr+")")
+	if nixType != "set" {
+		t.Fatalf("nix 2.24.9 typeOf fetchTree = %q; field comparison did not run", nixType)
+	}
+	namesExpr := `builtins.concatStringsSep "," (builtins.sort (a: b: a < b) (builtins.attrNames (` + expr + `)))`
+	wantNames := lay.EvalRaw(t, namesExpr)
+	gotNames := evalPkgsExprString(t, namesExpr)
+	if wantNames != gotNames {
+		t.Fatalf("attrNames\nnix=%q\ngo=%q\nexpr=%s", wantNames, gotNames, expr)
+	}
+	for _, name := range strings.Split(wantNames, ",") {
+		if name == "" {
+			continue
+		}
+		field := "(" + expr + ")." + name
+		want := lay.EvalRaw(t, field)
+		gotField := formatTreeField(t, evalPkgsValue(t, field))
+		if want != gotField {
+			t.Fatalf("%s\nnix=%q\ngo=%q\nexpr=%s", name, want, gotField, expr)
+		}
+	}
+}
+
+func formatTreeField(t *testing.T, v *eval.Value) string {
+	t.Helper()
+	switch v.Kind {
+	case eval.VKString:
+		return v.String
+	case eval.VKInt:
+		return fmt.Sprintf("%d", v.Int)
+	case eval.VKBool:
+		if v.Bool {
+			return "true"
+		}
+		return "false"
+	default:
+		t.Fatalf("field kind %v", v.Kind)
+		return ""
+	}
+}
 
 func nixEvalFeatures(t *testing.T, expr, features string) string {
 	t.Helper()

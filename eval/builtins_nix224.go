@@ -54,6 +54,80 @@ func (ev *Evaluator) materializeTreeSource(sourceDir, name string) (*Value, erro
 	return StrWithContext(logical, []StringContextElem{{StorePath: logical}}, parser.Pos{}), nil
 }
 
+// treeMeta is the backend-specific half of Nix 2.24.9 emitTreeAttrs.
+// hasLast is set for path, git, and tarball inputs that have a mtime.
+// revCount is set only when a git input is not shallow.
+type treeMeta struct {
+	hasLast      bool
+	lastModified int64
+	rev          string
+	revCount     *int64
+	submodules   *bool
+}
+
+func (ev *Evaluator) emitTreeAttrs(pos parser.Pos, outPath, narHash string, meta treeMeta) *Value {
+	av := Attrs(false)
+	av.Attrs.Binds[ev.Intern.Intern("outPath")] = &AttrBinding{Value: StrWithContext(outPath, []StringContextElem{{StorePath: outPath}}, pos)}
+	av.Attrs.Binds[ev.Intern.Intern("narHash")] = &AttrBinding{Value: Str(narHash, pos)}
+	if meta.hasLast {
+		av.Attrs.Binds[ev.Intern.Intern("lastModified")] = &AttrBinding{Value: Int(meta.lastModified)}
+		av.Attrs.Binds[ev.Intern.Intern("lastModifiedDate")] = &AttrBinding{Value: Str(time.Unix(meta.lastModified, 0).UTC().Format("20060102150405"), pos)}
+	}
+	if meta.rev != "" {
+		short := meta.rev
+		if len(short) > 7 {
+			short = short[:7]
+		}
+		av.Attrs.Binds[ev.Intern.Intern("rev")] = &AttrBinding{Value: Str(meta.rev, pos)}
+		av.Attrs.Binds[ev.Intern.Intern("shortRev")] = &AttrBinding{Value: Str(short, pos)}
+	}
+	if meta.revCount != nil {
+		av.Attrs.Binds[ev.Intern.Intern("revCount")] = &AttrBinding{Value: Int(*meta.revCount)}
+	}
+	if meta.submodules != nil {
+		av.Attrs.Binds[ev.Intern.Intern("submodules")] = &AttrBinding{Value: Bool(*meta.submodules)}
+	}
+	return av
+}
+
+func (ev *Evaluator) treeFromDir(pos parser.Pos, dir, name string, meta treeMeta, computeLast bool) (*Value, error) {
+	src, err := ev.materializeTreeSource(dir, name)
+	if err != nil {
+		return nil, err
+	}
+	nar, err := narSRI(dir)
+	if err != nil {
+		return nil, err
+	}
+	if computeLast {
+		m, err := treeMaxMtime(dir)
+		if err != nil {
+			return nil, err
+		}
+		meta.hasLast = true
+		meta.lastModified = m
+	}
+	return ev.emitTreeAttrs(pos, src.String, nar, meta), nil
+}
+
+func treeMaxMtime(root string) (int64, error) {
+	var max int64
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		st, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if mt := st.ModTime().Unix(); mt > max {
+			max = mt
+		}
+		return nil
+	})
+	return max, err
+}
+
 func builtinGroupBy(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
@@ -423,10 +497,11 @@ func fetchURLBytes(rawURL string) ([]byte, error) {
 	}
 }
 
-func unpackTarball(data []byte, dest string) error {
+func unpackTarball(data []byte, dest string) (int64, error) {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
+		return 0, err
 	}
+	var maxMtime int64
 	try := func(r io.Reader) error {
 		tr := tar.NewReader(r)
 		for {
@@ -436,6 +511,9 @@ func unpackTarball(data []byte, dest string) error {
 			}
 			if err != nil {
 				return err
+			}
+			if mt := hdr.ModTime.Unix(); mt > maxMtime {
+				maxMtime = mt
 			}
 			target := filepath.Join(dest, hdr.Name)
 			switch hdr.Typeflag {
@@ -463,10 +541,14 @@ func unpackTarball(data []byte, dest string) error {
 	if err == nil {
 		defer gr.Close()
 		if err := try(gr); err == nil {
-			return nil
+			return maxMtime, nil
 		}
+		maxMtime = 0
 	}
-	return try(bytes.NewReader(data))
+	if err := try(bytes.NewReader(data)); err != nil {
+		return 0, err
+	}
+	return maxMtime, nil
 }
 
 func builtinFetchTarball(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -505,7 +587,7 @@ func builtinFetchTarball(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	}
 	defer os.RemoveAll(tmp)
 	unpackDir := filepath.Join(tmp, "tree")
-	if err := unpackTarball(data, unpackDir); err != nil {
+	if _, err := unpackTarball(data, unpackDir); err != nil {
 		// Single-file archive: write bytes as lone file.
 		if err := os.MkdirAll(unpackDir, 0o755); err != nil {
 			return nil, err
@@ -607,12 +689,25 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		if err != nil {
 			return nil, err
 		}
-		dir, cleanup, err := gitExportTree(rawURL, rev)
+		shallow := true
+		if b, ok, err := getAttrBool(ev, params, "shallow"); err != nil {
+			return nil, err
+		} else if ok {
+			shallow = b
+		}
+		submodules := false
+		if b, ok, err := getAttrBool(ev, params, "submodules"); err != nil {
+			return nil, err
+		} else if ok {
+			submodules = b
+		}
+		dir, cleanup, meta, err := gitExportTreeMeta(rawURL, rev, !shallow)
 		if err != nil {
 			return nil, err
 		}
 		defer cleanup()
-		return ev.materializeTreeSource(dir, "source")
+		meta.submodules = &submodules
+		return ev.treeFromDir(pos, dir, "source", meta, false)
 	case "path":
 		p, err := getAttrString(ev, params, "path")
 		if err != nil {
@@ -621,7 +716,7 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		if (strings.HasPrefix(p, "./") || strings.HasPrefix(p, "../")) && ev.curFile != "" {
 			p = filepath.Join(filepath.Dir(ev.curFile), p)
 		}
-		return ev.materializeTreeSource(p, "source")
+		return ev.treeFromDir(pos, p, "source", treeMeta{}, true)
 	case "file":
 		rawURL, err := getAttrString(ev, params, "url")
 		if err != nil {
@@ -741,7 +836,9 @@ func (ev *Evaluator) fetchTreeFile(rawURL string) (*Value, error) {
 	}
 	tmp.Close()
 	defer os.Remove(name)
-	return ev.materializeTreeSource(name, "source")
+	// fetchTree re-ingests the downloaded file as a NAR ("source"), so the
+	// outPath is the recursive path, not the flat download path.
+	return ev.treeFromDir(parser.Pos{}, name, "source", treeMeta{}, false)
 }
 
 func (ev *Evaluator) fetchTreeTarball(rawURL string, strip bool) (*Value, error) {
@@ -755,13 +852,19 @@ func (ev *Evaluator) fetchTreeTarball(rawURL string, strip bool) (*Value, error)
 	}
 	defer os.RemoveAll(tmp)
 	dest := filepath.Join(tmp, "unpacked")
-	if err := unpackTarball(data, dest); err != nil {
+	lm, err := unpackTarball(data, dest)
+	if err != nil {
 		return nil, fmt.Errorf("Failed to open archive (Unrecognized archive format)")
 	}
 	if strip {
 		dest = stripSingleDir(dest)
 	}
-	return ev.materializeTreeSource(dest, "source")
+	meta := treeMeta{}
+	if lm > 0 {
+		meta.hasLast = true
+		meta.lastModified = lm
+	}
+	return ev.treeFromDir(parser.Pos{}, dest, "source", meta, false)
 }
 
 func stripSingleDir(dir string) string {
@@ -773,43 +876,49 @@ func stripSingleDir(dir string) string {
 }
 
 func (ev *Evaluator) fetchTreeGitHub(owner, repo, rev string) (*Value, error) {
-	dir, cleanup, err := fetchGitHubTree(owner, repo, rev)
+	dir, cleanup, sha, lm, err := fetchGitHubTree(owner, repo, rev)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
-	return ev.materializeTreeSource(dir, "source")
+	meta := treeMeta{rev: sha}
+	if lm > 0 {
+		meta.hasLast = true
+		meta.lastModified = lm
+	}
+	return ev.treeFromDir(parser.Pos{}, dir, "source", meta, false)
 }
 
-func fetchGitHubTree(owner, repo, rev string) (string, func(), error) {
+func fetchGitHubTree(owner, repo, rev string) (string, func(), string, int64, error) {
 	sha := rev
 	if len(sha) != 40 {
 		body, err := downloadChecked("https://api.github.com/repos/" + owner + "/" + repo + "/commits/" + refOrHead(rev))
 		if err != nil {
-			return "", nil, err
+			return "", nil, "", 0, err
 		}
 		var parsed struct {
 			SHA string `json:"sha"`
 		}
 		if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.SHA) != 40 {
-			return "", nil, fmt.Errorf("unable to parse GitHub commit for %s/%s", owner, repo)
+			return "", nil, "", 0, fmt.Errorf("unable to parse GitHub commit for %s/%s", owner, repo)
 		}
 		sha = parsed.SHA
 	}
 	data, err := fetchURLBytes("https://codeload.github.com/" + owner + "/" + repo + "/tar.gz/" + sha)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", 0, err
 	}
 	tmp, err := os.MkdirTemp("", "goonix-gh-")
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", 0, err
 	}
 	dest := filepath.Join(tmp, "unpacked")
-	if err := unpackTarball(data, dest); err != nil {
+	lm, err := unpackTarball(data, dest)
+	if err != nil {
 		os.RemoveAll(tmp)
-		return "", nil, fmt.Errorf("Failed to open archive (Unrecognized archive format)")
+		return "", nil, "", 0, fmt.Errorf("Failed to open archive (Unrecognized archive format)")
 	}
-	return stripSingleDir(dest), func() { os.RemoveAll(tmp) }, nil
+	return stripSingleDir(dest), func() { os.RemoveAll(tmp) }, sha, lm, nil
 }
 
 func (ev *Evaluator) fetchTreeGitLab(owner, repo, rev string) (*Value, error) {
