@@ -91,7 +91,7 @@ func (ev *Evaluator) registerExtendedBuiltins() {
 	for _, name := range []string{
 		"groupBy", "partition", "convertHash", "hashFile", "fromTOML", "toXML",
 		"readFileType", "scopedImport", "fetchTarball", "fetchGit", "fetchMercurial",
-		"fetchTree", "filterAttrs", "toPath", "traceVerbose", "addDrvOutputDependencies",
+		"fetchTree", "toPath", "traceVerbose", "addDrvOutputDependencies",
 		"break", "currentTime", "getFlake", "flakeRefToString", "parseFlakeRef",
 		"unsafeDiscardOutputDependency",
 	} {
