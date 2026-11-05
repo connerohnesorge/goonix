@@ -72,6 +72,18 @@ func TestOutputHashModeMatchesNix224(t *testing.T) {
 	if gerr == nil || !strings.Contains(gerr.Error(), "Git file ingestion must use SHA-1 hash") {
 		t.Fatalf("go git sha256: %v", gerr)
 	}
+
+	// Nix 2.24.9 aborts in makeFixedOutputPathFromCA when a text hash is not
+	// SHA-256. goonix returns an error instead of aborting the process.
+	sha1Text := `{ name = "x"; system = "x86_64-linux"; builder = "/bin/sh"; outputHashMode = "text"; outputHashAlgo = "sha1"; outputHash = "` + gitHash + `"; }`
+	_, nerr = nixEvalXP(t, "dynamic-derivations", "(builtins.derivationStrict "+sha1Text+").out")
+	if nerr == nil || !strings.Contains(nerr.Error(), "Assertion") || !strings.Contains(nerr.Error(), "SHA256") {
+		t.Fatalf("nix text sha1: %v", nerr)
+	}
+	_, gerr = evalRaw(t, eval.NewEvaluator().WithExperimental("dynamic-derivations"), "builtins.derivationStrict "+sha1Text)
+	if gerr == nil || !strings.Contains(gerr.Error(), "text output hash must be sha256") {
+		t.Fatalf("go text sha1: %v", gerr)
+	}
 }
 
 func outPathOf(t *testing.T, ev *eval.Evaluator, attrs string) string {
