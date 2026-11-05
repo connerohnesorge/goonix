@@ -86,6 +86,34 @@ func TestReviewBuiltinsMatchNix(t *testing.T) {
 		}
 	}
 
+	top := t.TempDir()
+	if err := os.WriteFile(filepath.Join(top, "file"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lnk := filepath.Join(top, "lnk")
+	if err := os.Symlink("file", lnk); err != nil {
+		t.Fatal(err)
+	}
+	lnkExpr := `builtins.path { path = "` + lnk + `"; }`
+	w, g := lay.EvalRaw(t, lnkExpr), evalPkgsExprString(t, lnkExpr)
+	if w != g {
+		t.Fatalf("top-level symlink path\nnix=%q\ngo=%q", w, g)
+	}
+	if !strings.HasSuffix(w, "-lnk") {
+		t.Fatalf("symlink store path %q does not use the link name", w)
+	}
+	dangling := filepath.Join(top, "gone")
+	if err := os.Symlink("missing-target", dangling); err != nil {
+		t.Fatal(err)
+	}
+	dangleExpr := `builtins.path { path = "` + dangling + `"; }`
+	_, nerr := lay.EvalExprAllowError(t, dangleExpr)
+	_, gerr := evalPkgsExprStringAllowError(t, dangleExpr)
+	wantMiss := "path '" + filepath.Join(top, "missing-target") + "' does not exist"
+	if nerr == nil || gerr == nil || !strings.Contains(gerr.Error(), wantMiss) || !strings.Contains(nerr.Error(), "does not exist") {
+		t.Fatalf("dangling symlink\nnix=%v\ngo=%v", nerr, gerr)
+	}
+
 	link := filepath.Join(t.TempDir(), "link")
 	if err := os.Symlink("/etc/hosts", link); err != nil {
 		t.Fatal(err)
@@ -104,8 +132,8 @@ func TestReviewBuiltinsMatchNix(t *testing.T) {
 		t.Fatalf("path recursive=false\nnix=%q\ngo=%q", w, g)
 	}
 	dirExpr := `builtins.path { path = "` + filepath.Dir(flat) + `"; recursive = false; }`
-	_, nerr := lay.EvalExprAllowError(t, dirExpr)
-	_, gerr := evalPkgsExprStringAllowError(t, dirExpr)
+	_, nerr = lay.EvalExprAllowError(t, dirExpr)
+	_, gerr = evalPkgsExprStringAllowError(t, dirExpr)
 	if nerr == nil || gerr == nil || !strings.Contains(gerr.Error(), "Is a directory") {
 		t.Fatalf("path dir nix=%v go=%v", nerr, gerr)
 	}

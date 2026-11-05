@@ -1229,6 +1229,13 @@ func builtinPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err != nil || name == "" {
 		name = filepath.Base(p)
 	}
+	// Nix follows a top-level symlink and stores the target under the
+	// symlink's name. A dangling link is "path '…' does not exist".
+	resolved, err := followTopSymlink(p)
+	if err != nil {
+		return nil, evalErr(pos, "%s", err.Error())
+	}
+	p = resolved
 	recursive := true
 	if rec, ok, err := getAttrBool(ev, set, "recursive"); err != nil {
 		return nil, err
@@ -1257,6 +1264,32 @@ func builtinPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 		}
 	}
 	return ev.materializeTreeSource(p, name)
+}
+
+func followTopSymlink(p string) (string, error) {
+	cur := p
+	for i := 0; i < 64; i++ {
+		info, err := os.Lstat(cur)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", fmt.Errorf("path '%s' does not exist", cur)
+			}
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return cur, nil
+		}
+		target, err := os.Readlink(cur)
+		if err != nil {
+			return "", err
+		}
+		if filepath.IsAbs(target) {
+			cur = target
+		} else {
+			cur = filepath.Join(filepath.Dir(cur), target)
+		}
+	}
+	return "", fmt.Errorf("too many levels of symbolic links")
 }
 
 func builtinFilterSource(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
