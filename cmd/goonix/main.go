@@ -44,6 +44,8 @@ func main() {
 		cmdBuild(os.Args[2:])
 	case "drv-diff":
 		cmdDrvDiff(os.Args[2:])
+	case "gc":
+		cmdGC(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -63,6 +65,7 @@ Usage:
   goonix build [--store DIR] [-I path] <file.nix>
   goonix derivation-show [--go-eval FILE [-I path]...] [--nix PATH]
   goonix drv-diff --nix-instantiate FILE | --nix-drv PATH --go-eval FILE [-I path]...
+  goonix gc --store DIR
 
 `)
 }
