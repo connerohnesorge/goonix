@@ -793,18 +793,31 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 }
 
 func downloadChecked(rawURL string) ([]byte, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
 	}
-	// git.sr.ht answers Nix's curl and does not finish a Go HTTP/2
-	// handshake. GitHub's API needs HTTP/2: forcing HTTP/1.1 there
-	// returns EOF instead of the 404 Nix reports.
-	if u, perr := url.Parse(rawURL); perr == nil && strings.HasSuffix(u.Hostname(), "sr.ht") {
-		transport.ForceAttemptHTTP2 = false
-		transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	if strings.HasSuffix(u.Hostname(), "sr.ht") {
+		// Clone() already put "h2" in NextProtos. Clearing TLSNextProto
+		// after that negotiates HTTP/2 and then reads the frames as
+		// HTTP/1.1 ("malformed HTTP response"). Go's HTTP/2 client also
+		// never receives the 404 Nix's curl gets. Advertise http/1.1
+		// only, with Nix's user agent.
+		transport = &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			ForceAttemptHTTP2:     false,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 15 * time.Second,
+			TLSClientConfig:       &tls.Config{NextProtos: []string{"http/1.1"}},
+			TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
+		}
 		req.Header.Set("User-Agent", "curl/8.5.0 Nix/2.24.9")
+		req.Header.Set("Accept", "*/*")
 	}
 	client := &http.Client{Timeout: 20 * time.Second, Transport: transport}
 	resp, err := client.Do(req)
