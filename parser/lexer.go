@@ -751,9 +751,9 @@ func scanAbsPath(src []byte, i int) (int, bool) {
 	if i >= len(src) || src[i] != '/' {
 		return 0, false
 	}
-	// Root path "/" at EOF (e.g. `== /`).
+	// Lone "/" is not a path (Nix: `== /` and `[ / ]` are parse errors; "/." is a path).
 	if i+1 >= len(src) {
-		return i + 1, true
+		return 0, false
 	}
 	c := src[i+1]
 	if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
