@@ -49,6 +49,8 @@ jobs:
           install_url: https://releases.nixos.org/nix/nix-2.24.9/install
       - name: Verify Nix version
         run: nix-instantiate --version | grep -F '2.24.9'
+      - name: Allow Nix sandbox user namespaces (Ubuntu 24.04 AppArmor)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Fetch nixpkgs pin
         run: |
           mkdir -p testdata
@@ -80,6 +82,8 @@ jobs:
           install_url: https://releases.nixos.org/nix/nix-2.35.1/install
       - name: Verify Nix version
         run: nix-instantiate --version | grep -F '2.35.1'
+      - name: Allow Nix sandbox user namespaces (Ubuntu 24.04 AppArmor)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Fetch nixpkgs pin
         run: |
           mkdir -p testdata
