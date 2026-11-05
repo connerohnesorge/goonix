@@ -35,6 +35,9 @@ func TestBuiltinImplementationsMatchNix(t *testing.T) {
 		`builtins.toJSON (builtins.traceVerbose "hi" 1)`,
 		`builtins.typeOf builtins.currentTime`,
 		`builtins.flakeRefToString (builtins.parseFlakeRef "github:NixOS/nixpkgs")`,
+		`builtins.toJSON (builtins.parseFlakeRef "github:NixOS/nixpkgs/nixos-24.05")`,
+		`builtins.toJSON (builtins.parseFlakeRef "github:NixOS/nixpkgs/23.05?dir=lib")`,
+		`builtins.flakeRefToString (builtins.parseFlakeRef "github:NixOS/nixpkgs/nixos-24.05")`,
 		`builtins.toJSON (builtins.parseFlakeRef "path:/tmp/x")`,
 		`builtins.flakeRefToString { type = "path"; path = "/tmp/x"; }`,
 	}

@@ -21,7 +21,33 @@ type flakeRef struct {
 	Owner string
 	Repo  string
 	Rev   string
+	Ref   string
+	Dir   string
 	Path  string
+}
+
+func isGitRev(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func queryParam(query, key string) string {
+	for _, kv := range strings.Split(query, "&") {
+		k, v, ok := strings.Cut(kv, "=")
+		if ok && k == key {
+			return v
+		}
+	}
+	return ""
 }
 
 func parseFlakeRefString(ref string) (flakeRef, error) {
@@ -42,17 +68,23 @@ func parseFlakeRefString(ref string) (flakeRef, error) {
 		}
 		return flakeRef{Type: "path", Path: rest}, nil
 	case "github":
-		parts := strings.Split(rest, "/")
+		pathPart, query, _ := strings.Cut(rest, "?")
+		parts := strings.Split(pathPart, "/")
 		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 			return flakeRef{}, fmt.Errorf("invalid GitHub flake reference '%s'", ref)
 		}
 		out := flakeRef{Type: "github", Owner: parts[0], Repo: parts[1]}
 		if len(parts) >= 3 && parts[2] != "" {
-			rev := parts[2]
-			if len(rev) != 40 {
-				return flakeRef{}, fmt.Errorf("hash '%s' has wrong length for hash algorithm 'sha1'", rev)
+			// A 40-digit sha1 is a rev. Anything else, including a branch
+			// such as nixos-24.05, is a ref.
+			if isGitRev(parts[2]) {
+				out.Rev = parts[2]
+			} else {
+				out.Ref = parts[2]
 			}
-			out.Rev = rev
+		}
+		if dir := queryParam(query, "dir"); dir != "" {
+			out.Dir = dir
 		}
 		return out, nil
 	default:
@@ -64,8 +96,14 @@ func (f flakeRef) String() string {
 	switch f.Type {
 	case "github":
 		s := "github:" + f.Owner + "/" + f.Repo
-		if f.Rev != "" {
+		switch {
+		case f.Rev != "":
 			s += "/" + f.Rev
+		case f.Ref != "":
+			s += "/" + f.Ref
+		}
+		if f.Dir != "" {
+			s += "?dir=" + f.Dir
 		}
 		return s
 	case "path":
@@ -87,6 +125,12 @@ func flakeRefAttrs(ev *Evaluator, f flakeRef, pos parser.Pos) *Value {
 		put("repo", f.Repo)
 		if f.Rev != "" {
 			put("rev", f.Rev)
+		}
+		if f.Ref != "" {
+			put("ref", f.Ref)
+		}
+		if f.Dir != "" {
+			put("dir", f.Dir)
 		}
 	case "path":
 		put("path", f.Path)
@@ -141,11 +185,17 @@ func builtinFlakeRefToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 		if err != nil {
 			return nil, err
 		}
-		if rev, err := getAttrString(ev, set, "rev"); err == nil {
-			if len(rev) != 40 {
+		if rev, err := getAttrString(ev, set, "rev"); err == nil && rev != "" {
+			if !isGitRev(rev) {
 				return nil, evalErr(pos, "hash '%s' has wrong length for hash algorithm 'sha1'", rev)
 			}
 			f.Rev = rev
+		}
+		if ref, err := getAttrString(ev, set, "ref"); err == nil {
+			f.Ref = ref
+		}
+		if dir, err := getAttrString(ev, set, "dir"); err == nil {
+			f.Dir = dir
 		}
 	case "path":
 		f.Path, err = getAttrString(ev, set, "path")
@@ -179,7 +229,11 @@ func builtinGetFlake(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 		// Resolve via the GitHub commits API and a bounded tarball download.
 		// An unlocked github: ref must not start a git clone of HEAD.
 		var err error
-		dir, cleanup, _, _, err = fetchGitHubTree(parsed.Owner, parsed.Repo, parsed.Rev)
+		revOrRef := parsed.Rev
+		if revOrRef == "" {
+			revOrRef = parsed.Ref
+		}
+		dir, cleanup, _, _, err = fetchGitHubTree(parsed.Owner, parsed.Repo, revOrRef)
 		if err != nil {
 			return nil, evalErr(pos, "%s", err.Error())
 		}
