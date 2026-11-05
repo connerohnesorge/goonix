@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 )
 
 func TestOutputHashModeMatchesNix224(t *testing.T) {
@@ -45,10 +46,7 @@ func TestOutputHashModeMatchesNix224(t *testing.T) {
 		t.Fatalf("git without feature: %v", err)
 	}
 
-	ver := nixInstantiateVersion(t)
-	if !strings.Contains(ver, "2.24.9") {
-		return
-	}
+	oracle.RequireNix224(t)
 	nixFlat := nixOut224(t, "", flat)
 	nixText := nixOut224(t, "dynamic-derivations", text)
 	nixNar := nixOut224(t, "", nar)

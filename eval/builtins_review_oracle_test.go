@@ -300,10 +300,7 @@ func assertFetchTreeLikeNix(t *testing.T, lay oracle.Layout, expr string) {
 	if got.Kind != eval.VKAttrs {
 		t.Fatalf("fetchTree must return an attrset, got %v for %s", got.Kind, expr)
 	}
-	ver, _ := exec.Command("nix-instantiate", "--version").CombinedOutput()
-	if !strings.Contains(string(ver), "2.24.9") {
-		return
-	}
+	oracle.RequireNix224(t)
 	nixType := lay.EvalRaw(t, "builtins.typeOf ("+expr+")")
 	if nixType != "set" {
 		t.Fatalf("nix 2.24.9 typeOf fetchTree = %q; field comparison did not run", nixType)

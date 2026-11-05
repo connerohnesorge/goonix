@@ -27,6 +27,9 @@ func TestBuiltinImplementationsMatchNix(t *testing.T) {
 		`builtins.hashFile "sha1" "` + hosts + `"`,
 		"builtins.toJSON (builtins.fromTOML ''\na = 1\nb = \"x\"\nn = 1.5\nflag = true\n'')",
 		"builtins.toJSON (builtins.fromTOML ''\na = inf\nb = nan\nc = +inf\nd = -inf\n'')",
+		`builtins.typeOf (builtins.fromTOML "a = inf").a`,
+		`builtins.typeOf (builtins.fromTOML "a = nan").a`,
+		`builtins.typeOf (builtins.fromTOML "a = -inf").a`,
 		`builtins.toXML { a = 1; b = "x"; }`,
 		`builtins.toXML (derivation { name = "x"; builder = "/bin/sh"; system = "x86_64-linux"; })`,
 		`let d = derivation { name = "x"; builder = "/bin/sh"; system = "x86_64-linux"; }; in builtins.toXML (d // { self = d; })`,
@@ -41,9 +44,26 @@ func TestBuiltinImplementationsMatchNix(t *testing.T) {
 		`builtins.toJSON (builtins.parseFlakeRef "github:NixOS/nixpkgs/nixos-24.05")`,
 		`builtins.toJSON (builtins.parseFlakeRef "github:NixOS/nixpkgs/23.05?dir=lib")`,
 		`builtins.flakeRefToString (builtins.parseFlakeRef "github:NixOS/nixpkgs/nixos-24.05")`,
+		`builtins.toJSON (builtins.parseFlakeRef "github:NixOS/nixpkgs/refs/heads/main")`,
+		`builtins.flakeRefToString (builtins.parseFlakeRef "github:NixOS/nixpkgs/refs/heads/main")`,
+		`builtins.toJSON (builtins.parseFlakeRef "github:NixOS/nixpkgs?ref=foo")`,
+		`builtins.toJSON (builtins.parseFlakeRef "github:NixOS/nixpkgs?ref=foo&dir=lib")`,
+		`builtins.flakeRefToString (builtins.parseFlakeRef "github:NixOS/nixpkgs?ref=foo&dir=lib")`,
+		`builtins.toJSON (builtins.parseFlakeRef "github:NixOS/nixpkgs?host=example.com&narHash=sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")`,
+		`builtins.flakeRefToString (builtins.parseFlakeRef "github:NixOS/nixpkgs?host=example.com&narHash=sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")`,
+		`builtins.toJSON (builtins.parseFlakeRef "gitlab:a/b/v1")`,
+		`builtins.flakeRefToString (builtins.parseFlakeRef "gitlab:a/b/v1")`,
+		`builtins.toJSON { outPath = "hello"; other = 1; }`,
+		`builtins.toJSON { __toString = self: self.msg; msg = "via"; }`,
+		`builtins.toJSON (derivation { name = "x"; builder = "/bin/sh"; system = "x86_64-linux"; })`,
 		`builtins.toJSON (builtins.parseFlakeRef "path:/tmp/x")`,
 		`builtins.flakeRefToString { type = "path"; path = "/tmp/x"; }`,
 	}
+	note := filepath.Join(t.TempDir(), "note")
+	if err := os.WriteFile(note, []byte("json-path-body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases = append(cases, "builtins.toJSON "+note)
 	for _, expr := range cases {
 		t.Run(expr, func(t *testing.T) {
 			want := lay.EvalRaw(t, expr)
@@ -83,14 +103,34 @@ func TestNix224ErrorTextMatch(t *testing.T) {
 			nixHas: "file:///no/such/goonix-fetch.tar.gz",
 		},
 		{
+			expr:   `builtins.fetchTree { type = "tarball"; url = "file:///no/such/goonix-fetch.tar.gz"; }`,
+			goHas:  "Failed to open archive (Source threw exception: error: unable to download 'file:///no/such/goonix-fetch.tar.gz': Couldn't read a file:// file (37))",
+			nixHas: "Failed to open archive",
+		},
+		{
 			expr:   `builtins.path { path = "` + flat + `"; sha256 = "0000000000000000000000000000000000000000000000000000000000000000"; }`,
 			goHas:  "store path mismatch in (possibly filtered) path added from '" + flat + "'",
 			nixHas: "store path mismatch",
 		},
 		{
+			expr:   `builtins.path { path = "` + flat + `"; recursive = false; sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; }`,
+			goHas:  "store path mismatch in (possibly filtered) path added from '" + flat + "'",
+			nixHas: "store path mismatch",
+		},
+		{
+			expr:   `builtins.readDir "/no/such/goonix-readdir-missing"`,
+			goHas:  "reading directory /no/such/goonix-readdir-missing: No such file or directory",
+			nixHas: "reading directory /no/such/goonix-readdir-missing: No such file or directory",
+		},
+		{
 			expr:   `builtins.readDir (builtins.filterSource (p: t: true) "` + dir + `")`,
 			goHas:  "is not valid",
 			nixHas: "is not valid",
+		},
+		{
+			expr:   `builtins.toJSON (x: x)`,
+			goHas:  "cannot convert a function to JSON",
+			nixHas: "cannot convert a function to JSON",
 		},
 	}
 	ver, _ := exec.Command("nix-instantiate", "--version").CombinedOutput()
@@ -103,8 +143,19 @@ func TestNix224ErrorTextMatch(t *testing.T) {
 		if nerr == nil || !strings.Contains(nerr.Error(), c.nixHas) {
 			t.Fatalf("%s\nnix=%v", c.expr, nerr)
 		}
-		if strings.Contains(string(ver), "2.24.9") && !strings.Contains(nerr.Error(), c.goHas) && c.goHas != "is not valid" {
+		if strings.Contains(string(ver), "2.24.9") && !strings.Contains(nerr.Error(), c.goHas) {
 			t.Fatalf("2.24.9 mismatch %s\nnix=%v\ngo=%v", c.expr, nerr, gerr)
+		}
+		if strings.Contains(c.expr, "filterSource") && strings.Contains(string(ver), "2.24.9") {
+			msg := gerr.Error()
+			i := strings.Index(msg, "path '")
+			if i < 0 {
+				t.Fatalf("go readDir error %q", msg)
+			}
+			sentence := msg[i:]
+			if !strings.Contains(nerr.Error(), sentence) {
+				t.Fatalf("nix does not contain %q\nnix=%v\ngo=%v", sentence, nerr, gerr)
+			}
 		}
 	}
 }
@@ -147,6 +198,12 @@ func TestFromTOMLDuplicateAndReadFileTypeMatchNix(t *testing.T) {
 	_, gerr := evalPkgsExprStringAllowError(t, dup)
 	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), "already exists") || !strings.Contains(gerr.Error(), `value ("a") already exists`) {
 		t.Fatalf("duplicate key\nnix=%v\ngo=%v", nerr, gerr)
+	}
+	table := "builtins.fromTOML ''\n[t]\nx = 1\n[t]\ny = 2\n''"
+	_, nerr = lay.EvalExprAllowError(t, table)
+	_, gerr = evalPkgsExprStringAllowError(t, table)
+	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), `table ("t") already exists`) || !strings.Contains(gerr.Error(), `table ("t") already exists`) {
+		t.Fatalf("duplicate table\nnix=%v\ngo=%v", nerr, gerr)
 	}
 	missing := `builtins.readFileType "/no/such/goonix-readfiletype"`
 	_, nerr = lay.EvalExprAllowError(t, missing)

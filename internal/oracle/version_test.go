@@ -32,6 +32,6 @@ func TestPinnedNixVersionWhenPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if v != NixVersion {
-		t.Skipf("nix-instantiate version %q want pinned %q (install Nix %s for strict version check)", v, NixVersion, NixVersion)
+		RequireNix224(t)
 	}
 }

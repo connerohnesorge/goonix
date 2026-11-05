@@ -9,7 +9,10 @@ import (
 
 func TestNoBuiltinStubBodies(t *testing.T) {
 	root := modRoot(t)
-	for _, dir := range []string{"eval", "builder", "store"} {
+	// cmd and parser are scanned too. The only exemptions are the comment
+	// "stub-scan: exempt" on the parser fallthrough, and Nix's own sentence
+	// "cannot show unsupported input".
+	for _, dir := range []string{"eval", "builder", "store", "cmd", "parser"} {
 		scanStubSources(t, filepath.Join(root, dir))
 	}
 }

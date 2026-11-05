@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 )
 
@@ -34,24 +35,6 @@ func TestFlakeBuiltinsRequireFeatureLikeNix224(t *testing.T) {
 		}
 	}
 
-	ver := nixInstantiateVersion(t)
-	if strings.Contains(ver, "2.24.9") {
-		for _, name := range names {
-			nixHas := nixEval224(t, "builtins.toJSON (builtins ? "+name+")")
-			if nixHas != "false" {
-				t.Fatalf("nix 2.24.9 builtins ? %s = %s", name, nixHas)
-			}
-			nixNames := nixEval224(t, `builtins.concatStringsSep "," (builtins.attrNames builtins)`)
-			if strings.Contains(","+nixNames+",", ","+name+",") {
-				t.Fatalf("nix 2.24.9 attrNames contains %s", name)
-			}
-			_, nerr := nixEval224Err(t, "builtins."+name+" null")
-			if nerr == nil || !strings.Contains(nerr.Error(), "attribute '"+name+"' missing") {
-				t.Fatalf("nix 2.24.9 builtins.%s: %v", name, nerr)
-			}
-		}
-	}
-
 	on := eval.NewEvaluator().WithExperimental("flakes")
 	for _, name := range names {
 		if _, ok := on.Builtins[name]; !ok {
@@ -61,6 +44,22 @@ func TestFlakeBuiltinsRequireFeatureLikeNix224(t *testing.T) {
 	got := evalString(t, on, `builtins.flakeRefToString (builtins.parseFlakeRef "github:NixOS/nixpkgs")`)
 	if got != "github:NixOS/nixpkgs" {
 		t.Fatalf("got %q", got)
+	}
+
+	oracle.RequireNix224(t)
+	for _, name := range names {
+		nixHas := nixEval224(t, "builtins.toJSON (builtins ? "+name+")")
+		if nixHas != "false" {
+			t.Fatalf("nix 2.24.9 builtins ? %s = %s", name, nixHas)
+		}
+		nixNames := nixEval224(t, `builtins.concatStringsSep "," (builtins.attrNames builtins)`)
+		if strings.Contains(","+nixNames+",", ","+name+",") {
+			t.Fatalf("nix 2.24.9 attrNames contains %s", name)
+		}
+		_, nerr := nixEval224Err(t, "builtins."+name+" null")
+		if nerr == nil || !strings.Contains(nerr.Error(), "attribute '"+name+"' missing") {
+			t.Fatalf("nix 2.24.9 builtins.%s: %v", name, nerr)
+		}
 	}
 }
 
@@ -102,18 +101,6 @@ func mustEval(t *testing.T, ev *eval.Evaluator, expr string) *eval.Value {
 		t.Fatal(err)
 	}
 	return v
-}
-
-func nixInstantiateVersion(t *testing.T) string {
-	t.Helper()
-	if _, err := exec.LookPath("nix-instantiate"); err != nil {
-		return ""
-	}
-	out, err := exec.Command("nix-instantiate", "--version").CombinedOutput()
-	if err != nil {
-		return ""
-	}
-	return string(out)
 }
 
 func nixEval224(t *testing.T, expr string) string {
