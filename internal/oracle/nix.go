@@ -487,3 +487,54 @@ func NixBuildDerivation(t *testing.T, storeRoot, attrs string) string {
 	t.Fatalf("nix-build output missing out path:\n%s", out)
 	return ""
 }
+
+// NixBuildExpr builds a Nix expression with nix-build in storeRoot and returns the logical output path.
+func NixBuildExpr(t *testing.T, storeRoot, expr string) string {
+	t.Helper()
+	cmd := exec.Command("nix-build", append([]string{
+		"--store", LocalStoreURI(storeRoot),
+		"--no-out-link",
+	}, append(UnprivilegedBuildArgs(), "-E", expr)...)...)
+	cmd.Env = BuildCmdEnv(storeRoot)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("nix-build -E: %v\n%s", err, out)
+	}
+	text := strings.TrimSpace(string(out))
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "/nix/store/") && !strings.HasSuffix(line, ".drv") {
+			return line
+		}
+	}
+	t.Fatalf("nix-build output missing out path:\n%s", out)
+	return ""
+}
+
+// NixBuildStrictOutPath instantiates (builtins.derivationStrict attrs), realises it in storeRoot,
+// and returns the logical "out" store path (supports let … in attrs).
+func NixBuildStrictOutPath(t *testing.T, storeRoot, attrs string) string {
+	t.Helper()
+	lay := MustLayout(t)
+	drvPath := lay.InstantiateStrictInStore(t, storeRoot, attrs)
+	cmd := exec.Command("nix-store", append([]string{
+		"--store", LocalStoreURI(storeRoot),
+		"--realise", drvPath,
+	})...)
+	cmd.Env = BuildCmdEnv(storeRoot)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("nix-store --realise %s: %v\n%s", drvPath, err, out)
+	}
+	var last string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "/nix/store/") && !strings.HasSuffix(line, ".drv") {
+			last = line
+		}
+	}
+	if last == "" {
+		t.Fatalf("nix-store --realise missing out path:\n%s", out)
+	}
+	return last
+}
