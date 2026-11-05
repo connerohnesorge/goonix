@@ -15,6 +15,8 @@
 package eval
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -28,6 +30,7 @@ import (
 	"github.com/connerohnesorge/goonix/internal/nixversion"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store"
+	"github.com/nix-community/go-nix/pkg/nixhash"
 )
 
 // Builtin is a primitive function registered on the global builtin attrset.
@@ -83,7 +86,7 @@ func (ev *Evaluator) registerBuiltins() {
 	register("appendContext", builtinAppendContext)
 	register("toFile", builtinToFile)
 	register("path", builtinPath)
-	register("filterSource", builtinFilterSourceStub)
+	register("filterSource", builtinFilterSource)
 	registerNullary("nixPath", builtinNixPath)
 	register("findFile", builtinFindFile)
 	registerNullary("storeDir", builtinStoreDir)
@@ -975,9 +978,9 @@ func builtinStorePath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		return nil, err
 	}
 	if !strings.HasPrefix(p, ev.Effects.StoreDir()+"/") {
-		return nil, evalErr(pos, "not a store path")
+		return nil, evalErr(pos, "path '%s' is not in the Nix store", p)
 	}
-	return Path(p), nil
+	return StrWithContext(p, []StringContextElem{{StorePath: p}}, pos), nil
 }
 
 func builtinPlaceholder(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1208,33 +1211,47 @@ func builtinToFile(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 }
 
 func builtinPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-	if len(args) < 1 {
-		return nil, evalErr(pos, "path expects at least 1 argument")
+	if err := arity(pos, args, 1); err != nil {
+		return nil, err
 	}
-	p, err := ev.forceString(args[0])
+	set, err := ev.forceValue(args[0])
 	if err != nil {
 		return nil, err
 	}
-	name := filepath.Base(p)
-	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
-	storePath, err := cfg.StorePathForFilesystemPath(p, name)
+	if set.Kind != VKAttrs {
+		return nil, evalErr(pos, "expected a set but found a %s", valueKindName(set.Kind))
+	}
+	p, err := getAttrString(ev, set, "path")
 	if err != nil {
 		return nil, err
 	}
-	err = ev.Effects.RealiseStorePath(storePath, func() error {
-		return store.CopyPathToStore(p, ev.physicalStorePath(storePath))
-	})
-	if err != nil {
-		return nil, err
+	name, err := getAttrString(ev, set, "name")
+	if err != nil || name == "" {
+		name = filepath.Base(p)
 	}
-	return Path(storePath), nil
+	if filter, ok, err := attrValue(ev, set, "filter"); err != nil {
+		return nil, err
+	} else if ok {
+		return ev.filterSourceToStore(pos, filter, p, name)
+	}
+	if sha, err := getAttrString(ev, set, "sha256"); err == nil && sha != "" {
+		if err := verifyTreeHash(p, sha); err != nil {
+			return nil, err
+		}
+	}
+	return ev.materializeTreeSource(p, name)
 }
 
-func builtinFilterSourceStub(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-	if len(args) < 2 {
-		return nil, evalErr(pos, "filterSource expects 2 arguments")
+func builtinFilterSource(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
+	if err := arity(pos, args, 2); err != nil {
+		return nil, err
 	}
-	return args[len(args)-1], nil
+	src, err := ev.forceString(args[1])
+	if err != nil {
+		return nil, err
+	}
+	name := filepath.Base(src)
+	return ev.filterSourceToStore(pos, args[0], src, name)
 }
 
 func builtinNixPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1325,43 +1342,51 @@ func builtinFetchurl(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 		return nil, err
 	}
 	if params.Kind != VKAttrs {
-		return nil, evalErr(pos, "fetchurl expects attribute set")
+		return nil, evalErr(pos, "expected a set but found a %s", valueKindName(params.Kind))
 	}
-	url, err := getAttrString(ev, params, "url")
+	rawURL, err := getAttrString(ev, params, "url")
 	if err != nil {
 		return nil, err
 	}
-	hash, _ := getAttrString(ev, params, "sha256")
-	name := filepath.Base(url)
+	name := filepath.Base(rawURL)
 	if n, err := getAttrString(ev, params, "name"); err == nil && n != "" {
 		name = n
 	}
-	// Fixed-output derivation stub: return attrset mimicking fetchurl.nix result.
-	drv := &DerivationValue{
-		Name:    name,
-		System:  currentSystemString(),
-		Builder: "builtin:fetchurl",
-		Args:    []string{url},
-		Env: map[string]string{
-			"url": url,
-		},
-		Outputs: map[string]struct{}{"out": {}},
-	}
-	if hash != "" {
-		drv.Env["outputHash"] = hash
-		if !isSRIHashString(hash) {
-			drv.Env["outputHashAlgo"] = "sha256"
-		}
-	}
-	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
-	drvPath, outPaths, err := computeDerivationPaths(ev, cfg, drv)
+	data, err := fetchURLBytes(rawURL)
 	if err != nil {
 		return nil, err
 	}
-	drv.DrvPath = drvPath
-	drv.OutPaths = outPaths
-	ev.rememberStrictDerivation(drv)
-	return ev.derivationValueToAttrs(drv), nil
+	if want, err := getAttrString(ev, params, "sha256"); err == nil && want != "" {
+		sum := sha256.Sum256(data)
+		got, gerr := nixhash.NewHash(nixhash.SHA256, sum[:])
+		if gerr != nil {
+			return nil, gerr
+		}
+		hashText := want
+		if !strings.Contains(want, ":") && !strings.HasPrefix(want, "sha256-") && len(want) == 64 {
+			hashText = "sha256:" + want
+		}
+		specified, serr := store.ParseHash(hashText)
+		if serr != nil {
+			return nil, serr
+		}
+		if specified.Format(nixhash.Base16, false) != got.Format(nixhash.Base16, false) {
+			return nil, evalErr(pos, "hash mismatch in file downloaded from '%s':\n  specified: %s\n  got:       %s", rawURL, specified.Format(nixhash.NixBase32, true), got.Format(nixhash.NixBase32, true))
+		}
+	}
+	sum := sha256.Sum256(data)
+	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
+	logical, err := store.FlatSHA256OutputPath(cfg, name, hex.EncodeToString(sum[:]))
+	if err != nil {
+		return nil, err
+	}
+	phys := ev.physicalStorePath(logical)
+	if err := ev.Effects.RealiseStorePath(logical, func() error {
+		return store.WriteTextToStore(phys, string(data))
+	}); err != nil {
+		return nil, err
+	}
+	return StrWithContext(logical, []StringContextElem{{StorePath: logical}}, pos), nil
 }
 
 func getAttrString(ev *Evaluator, set *Value, name string) (string, error) {

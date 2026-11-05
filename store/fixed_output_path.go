@@ -38,6 +38,20 @@ func FixedOutputPaths(cfg Config, d *gonixdrv.Derivation) (map[string]string, er
 	return out, nil
 }
 
+// FlatSHA256OutputPath is the store path of a flat fixed-output file (builtins.fetchurl).
+func FlatSHA256OutputPath(cfg Config, name, sha256Base16 string) (string, error) {
+	d := &gonixdrv.Derivation{
+		Env: map[string]string{
+			"name":           name,
+			"outputHashMode": "flat",
+		},
+		Outputs: map[string]*gonixdrv.Output{
+			"out": {Hash: sha256Base16, HashAlgorithm: "sha256"},
+		},
+	}
+	return MakeFixedOutputPath(cfg, d, "out", d.Outputs["out"])
+}
+
 // MakeFixedOutputPath implements Nix 2.24.9 store-api makeFixedOutputPath.
 func MakeFixedOutputPath(cfg Config, d *gonixdrv.Derivation, outName string, o *gonixdrv.Output) (string, error) {
 	pathName := d.Name()

@@ -27,9 +27,7 @@ func (ev *Evaluator) registerExtendedBuiltins() {
 		}
 		return Bool(v.Kind == VKNull), nil
 	}, false)
-	add("langVersion", func(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-		return Int(5), nil
-	}, true)
+	add("langVersion", builtinLangVersion6, true)
 	add("warn", func(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 		if err := arity(pos, args, 2); err != nil {
 			return nil, err
@@ -48,12 +46,7 @@ func (ev *Evaluator) registerExtendedBuiltins() {
 	add("builtins", func(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 		return ev.BuiltinAttrSet(), nil
 	}, true)
-	add("hasContext", func(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-		if err := arity(pos, args, 1); err != nil {
-			return nil, err
-		}
-		return Bool(false), nil
-	}, false)
+	add("hasContext", builtinHasContextReal, false)
 	add("ceil", func(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 		if err := arity(pos, args, 1); err != nil {
 			return nil, err
@@ -88,16 +81,25 @@ func (ev *Evaluator) registerExtendedBuiltins() {
 			return nil, evalErr(pos, "floor expects a number")
 		}
 	}, false)
-	for _, name := range []string{
-		"groupBy", "partition", "convertHash", "hashFile", "fromTOML", "toXML",
-		"readFileType", "scopedImport", "fetchTarball", "fetchGit", "fetchMercurial",
-		"fetchTree", "toPath", "traceVerbose", "addDrvOutputDependencies",
-		"break", "currentTime", "getFlake", "flakeRefToString", "parseFlakeRef",
-		"unsafeDiscardOutputDependency",
-	} {
-		n := name
-		add(n, func(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-			return nil, evalErr(pos, "builtins.%s is not implemented", n)
-		}, false)
-	}
+	add("groupBy", builtinGroupBy, false)
+	add("partition", builtinPartition, false)
+	add("convertHash", builtinConvertHash, false)
+	add("hashFile", builtinHashFile, false)
+	add("fromTOML", builtinFromTOML, false)
+	add("toXML", builtinToXML, false)
+	add("readFileType", builtinReadFileType, false)
+	add("scopedImport", builtinScopedImport, false)
+	add("fetchTarball", builtinFetchTarball, false)
+	add("fetchGit", builtinFetchGit, false)
+	add("fetchMercurial", builtinFetchMercurial, false)
+	add("fetchTree", builtinFetchTree, false)
+	add("toPath", builtinToPath, false)
+	add("traceVerbose", builtinTraceVerbose, false)
+	add("addDrvOutputDependencies", builtinAddDrvOutputDependencies, false)
+	add("break", builtinBreak, false)
+	add("currentTime", builtinCurrentTime, true)
+	add("getFlake", builtinGetFlake, false)
+	add("flakeRefToString", builtinFlakeRefToString, false)
+	add("parseFlakeRef", builtinParseFlakeRef, false)
+	add("unsafeDiscardOutputDependency", builtinUnsafeDiscardOutputDependency, false)
 }
