@@ -20,6 +20,7 @@ import (
 
 type flakeRef struct {
 	Type    string
+	ID      string
 	Owner   string
 	Repo    string
 	Rev     string
@@ -28,6 +29,61 @@ type flakeRef struct {
 	Host    string
 	NarHash string
 	Path    string
+}
+
+func flakeIDPattern(s string) bool {
+	if s == "" {
+		return false
+	}
+	c := s[0]
+	if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c = s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// parseIndirectFlakeRef parses Nix's indirect flake ids. A bare id that is
+// not a flake id returns ok=false so the caller can try another form.
+// fromURL is the flake: scheme, which reports an invalid id instead.
+func parseIndirectFlakeRef(original, path string, fromURL bool) (flakeRef, bool, error) {
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" || !flakeIDPattern(parts[0]) {
+		if fromURL && parts[0] != "" {
+			return flakeRef{}, true, fmt.Errorf("'%s' is not a valid flake ID", parts[0])
+		}
+		return flakeRef{}, false, nil
+	}
+	out := flakeRef{Type: "indirect", ID: parts[0]}
+	switch len(parts) {
+	case 1:
+	case 2:
+		if isGitRev(parts[1]) {
+			out.Rev = parts[1]
+		} else if isGitRef(parts[1]) {
+			out.Ref = parts[1]
+		} else {
+			return flakeRef{}, true, fmt.Errorf("in flake URL '%s', '%s' is not a commit hash or branch/tag name", original, parts[1])
+		}
+	case 3:
+		if !isGitRef(parts[1]) {
+			return flakeRef{}, true, fmt.Errorf("in flake URL '%s', '%s' is not a branch/tag name", original, parts[1])
+		}
+		if !isGitRev(parts[2]) {
+			return flakeRef{}, true, fmt.Errorf("in flake URL '%s', '%s' is not a commit hash", original, parts[2])
+		}
+		out.Ref = parts[1]
+		out.Rev = parts[2]
+	default:
+		return flakeRef{}, true, fmt.Errorf("GitHub URL '%s' is invalid", original)
+	}
+	return out, true, nil
 }
 
 func isGitRev(s string) bool {
@@ -51,6 +107,11 @@ func parseFlakeRefString(ref string) (flakeRef, error) {
 	if strings.HasPrefix(ref, "/") {
 		return flakeRef{Type: "path", Path: ref}, nil
 	}
+	if !strings.Contains(ref, ":") {
+		if parsed, ok, err := parseIndirectFlakeRef(ref, ref, false); ok || err != nil {
+			return parsed, err
+		}
+	}
 	scheme, rest, ok := strings.Cut(ref, ":")
 	if !ok || scheme == "" || strings.Contains(scheme, "/") {
 		return flakeRef{}, fmt.Errorf("flake reference '%s' is not an absolute path", ref)
@@ -61,9 +122,16 @@ func parseFlakeRefString(ref string) (flakeRef, error) {
 			return flakeRef{}, fmt.Errorf("flake reference '%s' is not an absolute path", ref)
 		}
 		return flakeRef{Type: "path", Path: rest}, nil
-	case "github", "gitlab":
-		// github and gitlab share Nix's GitArchiveInputScheme.
+	case "github", "gitlab", "sourcehut":
+		// github, gitlab, and sourcehut share Nix's GitArchiveInputScheme.
+		// A sourcehut owner may contain '~'.
 		return parseGitArchiveRef(scheme, rest, ref)
+	case "flake":
+		if strings.ContainsAny(rest, " \t") {
+			return flakeRef{}, fmt.Errorf("flake reference '%s' is not an absolute path", ref)
+		}
+		parsed, _, err := parseIndirectFlakeRef(ref, rest, true)
+		return parsed, err
 	default:
 		return flakeRef{}, fmt.Errorf("flake reference '%s' is not an absolute path", ref)
 	}
@@ -183,7 +251,16 @@ func percentEncodeQuery(s string) string {
 
 func (f flakeRef) String() string {
 	switch f.Type {
-	case "github", "gitlab":
+	case "indirect":
+		s := "flake:" + f.ID
+		if f.Ref != "" {
+			s += "/" + f.Ref
+		}
+		if f.Rev != "" {
+			s += "/" + f.Rev
+		}
+		return s
+	case "github", "gitlab", "sourcehut":
 		s := f.Type + ":" + f.Owner + "/" + f.Repo
 		switch {
 		case f.Rev != "":
@@ -225,7 +302,18 @@ func flakeRefAttrs(ev *Evaluator, f flakeRef, pos parser.Pos) *Value {
 	}
 	put("type", f.Type)
 	switch f.Type {
-	case "github", "gitlab":
+	case "indirect":
+		put("id", f.ID)
+		if f.Rev != "" {
+			put("rev", f.Rev)
+		}
+		if f.Ref != "" {
+			put("ref", f.Ref)
+		}
+		if f.NarHash != "" {
+			put("narHash", f.NarHash)
+		}
+	case "github", "gitlab", "sourcehut":
 		put("owner", f.Owner)
 		put("repo", f.Repo)
 		if f.Rev != "" {
@@ -287,7 +375,21 @@ func builtinFlakeRefToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 	}
 	f := flakeRef{Type: typ}
 	switch typ {
-	case "github", "gitlab":
+	case "indirect":
+		f.ID, err = getAttrString(ev, set, "id")
+		if err != nil {
+			return nil, err
+		}
+		if !flakeIDPattern(f.ID) {
+			return nil, evalErr(pos, "'%s' is not a valid flake ID", f.ID)
+		}
+		if rev, err := getAttrString(ev, set, "rev"); err == nil && rev != "" {
+			f.Rev = rev
+		}
+		if ref, err := getAttrString(ev, set, "ref"); err == nil {
+			f.Ref = ref
+		}
+	case "github", "gitlab", "sourcehut":
 		f.Owner, err = getAttrString(ev, set, "owner")
 		if err != nil {
 			return nil, err
@@ -339,6 +441,13 @@ func builtinGetFlake(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	parsed, err := parseFlakeRefString(ref)
 	if err != nil {
 		return nil, evalErr(pos, "%s", err.Error())
+	}
+	if parsed.Type == "indirect" {
+		resolved, err := lookupFlakeInput(flakeInputFromRef(parsed))
+		if err != nil {
+			return nil, evalErr(pos, "%s", err.Error())
+		}
+		parsed = flakeRefFromInput(resolved)
 	}
 	dir := parsed.Path
 	var cleanup func()

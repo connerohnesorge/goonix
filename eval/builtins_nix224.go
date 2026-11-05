@@ -783,8 +783,22 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		rev, _ := getAttrString(ev, params, "rev")
 		return ev.fetchTreeSourceHut(owner, repo, rev)
 	case "indirect":
-		id, _ := getAttrString(ev, params, "id")
-		return nil, evalErr(pos, "cannot find flake 'flake:%s' in the flake registries", id)
+		id, err := getAttrString(ev, params, "id")
+		if err != nil {
+			return nil, err
+		}
+		in := flakeInput{attrs: map[string]string{"type": "indirect", "id": id}}
+		if ref, err := getAttrString(ev, params, "ref"); err == nil && ref != "" {
+			in.attrs["ref"] = ref
+		}
+		if rev, err := getAttrString(ev, params, "rev"); err == nil && rev != "" {
+			in.attrs["rev"] = rev
+		}
+		resolved, err := lookupFlakeInput(in)
+		if err != nil {
+			return nil, evalErr(pos, "%s", err.Error())
+		}
+		return ev.fetchResolvedTree(pos, resolved)
 	default:
 		// Nix 2.24 prints the input attrs. A single type attribute is the common case.
 		return nil, evalErr(pos, "cannot show unsupported input '{\"type\":%q}'", typ)
@@ -897,7 +911,15 @@ func (ev *Evaluator) fetchTreeURL(pos parser.Pos, raw string) (*Value, error) {
 		}
 		return ev.fetchTreeSourceHut(parts[0], parts[1], "")
 	case strings.HasPrefix(raw, "flake:"):
-		return nil, evalErr(pos, "cannot find flake '%s' in the flake registries", raw)
+		parsed, err := parseFlakeRefString(raw)
+		if err != nil {
+			return nil, evalErr(pos, "%s", err.Error())
+		}
+		resolved, err := lookupFlakeInput(flakeInputFromRef(parsed))
+		if err != nil {
+			return nil, evalErr(pos, "%s", err.Error())
+		}
+		return ev.fetchResolvedTree(pos, resolved)
 	default:
 		return ev.fetchTreeTarball(raw, true)
 	}
