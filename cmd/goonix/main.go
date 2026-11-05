@@ -163,7 +163,7 @@ func cmdInstantiate(args []string) {
 		os.Exit(1)
 	}
 	cfg := store.Config{StoreDir: *storeDir}
-	if err := eval.WriteDerivation(cfg, drv); err != nil {
+	if err := ev.WriteDerivationClosure(cfg, drv); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

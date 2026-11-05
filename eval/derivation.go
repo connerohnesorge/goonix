@@ -20,9 +20,9 @@ import (
 	"os"
 	"path/filepath"
 
-	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 	"github.com/connerohnesorge/goonix/store"
 	"github.com/connerohnesorge/goonix/store/local"
+	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 )
 
 func computeDerivationPaths(ev *Evaluator, cfg store.Config, drv *DerivationValue) (drvPath string, outPaths map[string]string, err error) {
@@ -260,17 +260,66 @@ func (ev *Evaluator) AttrsToDerivation(attrs *Value) (*DerivationValue, error) {
 	return ev.attrsToDerivation(attrs)
 }
 
-// InstantiateDerivation evaluates attrs and writes the resulting .drv to the store.
+// InstantiateDerivation evaluates attrs and writes the resulting .drv and every
+// dependency .drv to the store.
 func (ev *Evaluator) InstantiateDerivation(attrs *Value) (string, error) {
 	drv, err := ev.attrsToDerivation(attrs)
 	if err != nil {
 		return "", err
 	}
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
-	if err := WriteDerivation(cfg, drv); err != nil {
+	if err := ev.WriteDerivationClosure(cfg, drv); err != nil {
 		return "", err
 	}
 	return drv.DrvPath, nil
+}
+
+// WriteDerivationClosure writes drv and every derivation registered while it
+// was evaluated, including dependencies that are not the top-level value.
+func (ev *Evaluator) WriteDerivationClosure(cfg store.Config, drv *DerivationValue) error {
+	seen := map[string]bool{}
+	if drv != nil {
+		if err := ev.writeDrvClosure(cfg, drv, seen); err != nil {
+			return err
+		}
+	}
+	if ev == nil {
+		return nil
+	}
+	for _, dep := range ev.drvStrictByPath {
+		if err := ev.writeDrvClosure(cfg, dep, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (ev *Evaluator) writeDrvClosure(cfg store.Config, drv *DerivationValue, seen map[string]bool) error {
+	if drv == nil {
+		return fmt.Errorf("nil derivation")
+	}
+	if drv.DrvPath == "" {
+		p, outs, err := computeDerivationPaths(ev, cfg, drv)
+		if err != nil {
+			return err
+		}
+		drv.DrvPath = p
+		drv.OutPaths = outs
+	}
+	if seen[drv.DrvPath] {
+		return nil
+	}
+	seen[drv.DrvPath] = true
+	for inp := range drv.InputDerivations {
+		dep, ok := ev.drvStrictByPath[inp]
+		if !ok {
+			return fmt.Errorf("derivation %s depends on %s, which was not registered", drv.DrvPath, inp)
+		}
+		if err := ev.writeDrvClosure(cfg, dep, seen); err != nil {
+			return err
+		}
+	}
+	return WriteDerivation(cfg, drv)
 }
 
 // PrepareDerivationPaths fills drvPath and output paths on drv the same way as derivationStrict.
