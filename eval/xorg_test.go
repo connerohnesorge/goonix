@@ -1,20 +1,17 @@
 package eval_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/internal/testutil"
 	"github.com/connerohnesorge/goonix/parser"
 )
 
 func TestPkgsXorgIsAttrset(t *testing.T) {
-	root := modRoot(t)
-	nixpkgs := filepath.Join(root, "testdata", "nixpkgs")
-	if _, err := os.Stat(nixpkgs); err != nil {
-		t.Skip("no nixpkgs")
-	}
+	nixpkgs := testutil.NixpkgsPath(t)
+	root := testutil.ModuleRoot(t)
 	src := `
 let pkgs = import "` + nixpkgs + `" {
   system = "x86_64-linux";
@@ -45,15 +42,5 @@ in pkgs.xorg
 
 func modRoot(t *testing.T) string {
 	t.Helper()
-	wd, _ := os.Getwd()
-	for {
-		if _, err := os.Stat(filepath.Join(wd, "go.mod")); err == nil {
-			return wd
-		}
-		p := filepath.Dir(wd)
-		if p == wd {
-			t.Fatal("no go.mod")
-		}
-		wd = p
-	}
+	return testutil.ModuleRoot(t)
 }
