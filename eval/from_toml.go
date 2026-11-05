@@ -6,7 +6,6 @@ package eval
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 
@@ -17,7 +16,7 @@ import (
 func parseTOMLDocument(ev *Evaluator, src string) (*Value, error) {
 	var p unstable.Parser
 	p.Reset([]byte(src))
-	doc := &tomlDoc{ev: ev, root: Attrs(false), cur: nil}
+	doc := &tomlDoc{ev: ev, root: Attrs(false), cur: nil, closed: map[*Value]bool{}}
 	doc.cur = doc.root
 	timestamps := ev.xp != nil && ev.xp["parse-toml-timestamps"]
 	for p.NextExpression() {
@@ -56,9 +55,10 @@ func parseTOMLDocument(ev *Evaluator, src string) (*Value, error) {
 }
 
 type tomlDoc struct {
-	ev   *Evaluator
-	root *Value
-	cur  *Value
+	ev     *Evaluator
+	root   *Value
+	cur    *Value
+	closed map[*Value]bool // tables closed by a header or an inline table
 }
 
 func tomlKey(n *unstable.Node) []string {
@@ -124,12 +124,19 @@ func (d *tomlDoc) define(keys []string, array bool) (*Value, error) {
 			return t, nil
 		}
 		if ok && existing.Kind == VKAttrs {
+			// A header may reopen a table that dotted keys created implicitly.
+			// A second header, or a header over an inline table, is an error.
+			if d.closed[existing] {
+				return nil, fmt.Errorf("[error] toml::insert_value: table (%q) already exists.", k)
+			}
+			d.closed[existing] = true
 			return existing, nil
 		}
 		if ok {
-			return nil, fmt.Errorf("TOML key %q already exists", k)
+			return nil, fmt.Errorf("[error] toml::insert_value: value (%q) already exists.", strings.Join(keys, "."))
 		}
 		t := Attrs(false)
+		d.closed[t] = true
 		d.put(cur, k, t)
 		return t, nil
 	}
@@ -183,10 +190,7 @@ func (d *tomlDoc) value(n *unstable.Node, timestamps bool) (*Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Nix 2.24.9's toml11 turns non-finite floats into null.
-		if math.IsInf(f, 0) || math.IsNaN(f) {
-			return Null(), nil
-		}
+		// inf and nan are Nix floats. toJSON prints them as null.
 		return &Value{Kind: VKFloat, Float: f}, nil
 	case unstable.Array:
 		var elems []*Value
@@ -212,6 +216,7 @@ func (d *tomlDoc) value(n *unstable.Node, timestamps bool) (*Value, error) {
 				return nil, err
 			}
 		}
+		d.closed[t] = true
 		return t, nil
 	case unstable.LocalDate, unstable.LocalTime, unstable.LocalDateTime, unstable.DateTime:
 		if !timestamps {
