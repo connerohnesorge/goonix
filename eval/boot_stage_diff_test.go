@@ -3,11 +3,11 @@ package eval_test
 import (
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/connerohnesorge/goonix/eval"
+	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 )
 
@@ -21,21 +21,9 @@ type bootStageRow struct {
 
 func evalOracleNix(t *testing.T, path string) map[string]any {
 	t.Helper()
-	if _, err := exec.LookPath("nix-instantiate"); err != nil {
-		t.Skip("nix-instantiate not available")
-	}
-	out, err := exec.Command("nix-instantiate", "--eval", "--strict", "--json", "-E", "import "+path+" {}").Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			t.Fatalf("nix: %s\n%s", err, ee.Stderr)
-		}
-		t.Fatal(err)
-	}
-	var v map[string]any
-	if err := json.Unmarshal(out, &v); err != nil {
-		t.Fatalf("json: %v\n%s", err, out)
-	}
-	return v
+	oracle.SkipIfUnavailable(t)
+	lay := oracle.MustLayout(t)
+	return lay.EvalImportJSON(t, path)
 }
 
 func evalGoonixFile(t *testing.T, importPath string) map[string]any {
@@ -274,15 +262,11 @@ func TestLinuxBootStageDfoldStubMatchesNixOracle(t *testing.T) {
 }
 
 func evalOracleNixOptional(path string) (map[string]any, error) {
-	out, err := exec.Command("nix-instantiate", "--eval", "--strict", "--json", "-E", "import "+path+" {}").Output()
+	lay, err := oracle.FindLayout()
 	if err != nil {
 		return nil, err
 	}
-	var v map[string]any
-	if err := json.Unmarshal(out, &v); err != nil {
-		return nil, err
-	}
-	return v, nil
+	return lay.EvalImportJSONAllowError(path)
 }
 
 func TestLinuxBootStageChainMatchesNixOracle(t *testing.T) {

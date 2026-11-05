@@ -251,7 +251,7 @@ func (l Layout) EvalStrictOutPath(t *testing.T, attrs string) string {
 		strictArg = "(" + attrs + ")"
 	}
 	pathExpr := fmt.Sprintf(`(builtins.derivationStrict %s).out`, strictArg)
-	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--raw", "-E", pathExpr)
+	args := append(append([]string{}, l.instantiateArgsWithStore("")...), "--eval", "--json", "-E", pathExpr)
 	cmd := exec.Command("nix-instantiate", args...)
 	cmd.Env = l.HermeticEnv()
 	out, err := cmd.Output()
@@ -261,7 +261,54 @@ func (l Layout) EvalStrictOutPath(t *testing.T, attrs string) string {
 		}
 		t.Fatal(err)
 	}
-	return strings.TrimSpace(string(out))
+	s, err := decodeNixInstantiateJSON(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// EvalImportJSON evaluates (import absPath {}) with hermetic -I flags and returns a JSON object.
+func (l Layout) EvalImportJSON(t *testing.T, absPath string) map[string]any {
+	t.Helper()
+	quoted := `"` + strings.ReplaceAll(absPath, `"`, `\"`) + `"`
+	expr := "import " + quoted + " {}"
+	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--strict", "--json", "-E", expr)
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			t.Fatalf("nix-instantiate: %v\n%s", err, ee.Stderr)
+		}
+		t.Fatal(err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(out, &v); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	return v
+}
+
+// EvalImportJSONAllowError is like EvalImportJSON but returns errors instead of failing the test.
+func (l Layout) EvalImportJSONAllowError(absPath string) (map[string]any, error) {
+	quoted := `"` + strings.ReplaceAll(absPath, `"`, `\"`) + `"`
+	expr := "import " + quoted + " {}"
+	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--strict", "--json", "-E", expr)
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return nil, fmt.Errorf("nix-instantiate: %w\n%s", err, ee.Stderr)
+		}
+		return nil, fmt.Errorf("nix-instantiate: %w", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(out, &v); err != nil {
+		return nil, fmt.Errorf("json: %w\n%s", err, out)
+	}
+	return v, nil
 }
 
 // EvalStrictDrvPath evaluates (builtins.derivationStrict attrs).drvPath hermetically.
