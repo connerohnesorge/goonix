@@ -17,12 +17,12 @@ go test ./... -count=1
 |-------|--------|------------------|------|
 | **0** | Repo, CI, CGO gate, goldens | `scripts/check-cgo.sh`, `.github/workflows/ci.yml`, `ladder/*`, `internal/oracle` | — |
 | **1** | Parser / lang | `parser/*`, `lang/*` (`parse-okay-*`) | CRLF / subversion parse cases skipped in lang harness |
-| **2** | Eval core | `eval/*`, fixpoint, merge, `with` | — |
-| **2b** | Builtins, Nix files | `eval/builtins*.go`, oracle repros | — |
+| **2** | Eval core | `eval/*`, fixpoint, merge, `with` | Lexical builtins before `with`; POSIX regex leftmost-longest |
+| **2b** | Builtins, Nix files | `eval/builtins*.go`, oracle repros | Several 2.24 builtins stubbed (`fetchGit`, `fetchTarball`, …); embedded `<nix/fetchurl.nix>` |
 | **3** | Spike / decision | README, go-nix | — |
 | **4a** | Store paths, hashes, ATerm | `store/*`, `store/drvshow/*`, modulo oracles | — |
 | **4b** | Local SQLite store | `store/local/*` | GC roots stub; no daemon |
-| **5** | Builder | `builder/*`, `cmd/goonix build` | FOD matrix oracle; goonix **sandbox off by default**; `TestBuildEchoHiMatchesNixBuild` uses `nix-build --store local?root=…` with **sandbox on** + hermetic env (no host `NIX_STORE`) so CI can write outputs |
+| **5** | Builder | `builder/*`, `cmd/goonix build` | Output paths from strict `.drv` env; `/nix/store` bind mount when `unshare` works else phys fallback; non-builtin FOD builds then verifies hash |
 | **6** | Substituter | `substituter/*` | Live cache test skips on `-short`/offline |
 | **7** | CLI | `cmd/goonix` | — |
 | **#13** | Bootstrap ladder | stage stdenv ATerm oracles | — |
