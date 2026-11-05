@@ -614,11 +614,6 @@ func (ev *Evaluator) applyLambda(l *LambdaValue, args []*Value, pos parser.Pos) 
 	if l == nil {
 		return nil, evalErr(pos, "invalid lambda")
 	}
-	if l.SimpleArg == "fn" && len(args) == 1 {
-		if out, ok, err := ev.tryMergeCallPackageWithAuto(l, args[0], pos); ok || err != nil {
-			return out, err
-		}
-	}
 	child := l.Env.extend()
 	if ev.applyingCallable != nil {
 		child.Applying = ev.applyingCallable
@@ -750,12 +745,6 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 				}
 				if fb.Attrs.Blackhole {
 					return blackholeAttrs(), nil
-				}
-				if pred, ok := ev.systemPredicatesFromSystemField(fb, name); ok {
-					return pred, nil
-				}
-				if name == "contentAddressedByDefault" {
-					return Bool(false), nil
 				}
 				return nil, evalErr(s.P, "attribute %q missing", name)
 			}

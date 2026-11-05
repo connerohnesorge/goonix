@@ -22,13 +22,13 @@ func TestStdenvCrossLine23Subexprs(t *testing.T) {
 	src := `
 let
   lib = import "` + libPath + `";
-  localSystem = { system = "x86_64-linux"; };
+  localSystem = lib.systems.elaborate { system = "x86_64-linux"; };
   overlays = [ ];
   bootStages = import "` + stdenvPath + `" {
     inherit lib localSystem overlays;
     crossSystem = localSystem;
     crossOverlays = [ ];
-    config = builtins.removeAttrs { } [ "replaceStdenv" ];
+    config = { contentAddressedByDefault = false; };
   };
 in {
   bootStagesType = builtins.typeOf bootStages;
