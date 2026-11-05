@@ -68,7 +68,7 @@ func TestBuildTrivialShAndToFileDep(t *testing.T) {
 		InputSources: []string{docPath},
 		Platform:     "x86_64-linux",
 		Builder:      "/bin/sh",
-		Arguments:    []string{"-c", "/bin/mkdir -p $out && /bin/cat " + docPath + " > $out/doc"},
+		Arguments:    []string{"-c", "while IFS= read -r line || [ -n \"$line\" ]; do printf '%s\\n' \"$line\"; done < " + docPath + " > \"$out\""},
 		Env: map[string]string{
 			"name":    "with-doc",
 			"out":     store.OutputPlaceholder("out"),
@@ -88,7 +88,7 @@ func TestBuildTrivialShAndToFileDep(t *testing.T) {
 		InputDerivations: map[string][]string{textDrvPath: {"out"}},
 		Platform:         "x86_64-linux",
 		Builder:          "/bin/sh",
-		Arguments:        []string{"-c", "/bin/mkdir -p $out && echo ok > $out/status"},
+		Arguments:        []string{"-c", "printf '%s\\n' ok > \"$out\""},
 		Env: map[string]string{
 			"name":    "trivial",
 			"out":     store.OutputPlaceholder("out"),

@@ -38,7 +38,9 @@ type Substituter interface {
 
 // Config controls builder behaviour.
 type Config struct {
-	// Sandbox enables a minimal build sandbox (default off; builds run unsandboxed).
+	// Sandbox is retained for callers. Linux builds already run inside a
+	// user and mount namespace (see execBuildCommandMount); the flag does not
+	// select a second backend.
 	Sandbox bool
 	// Substituter is optional; when set, output paths are fetched before building.
 	Substituter Substituter
@@ -53,6 +55,15 @@ type Builder struct {
 	Store  *local.Store
 	Config Config
 	Load   Loader
+	// plan is the sandbox view for the build currently running.
+	plan buildPlan
+}
+
+// buildPlan lists the store paths mounted into the sandbox and the outputs
+// copied back to the host store after a successful builder.
+type buildPlan struct {
+	closure []string
+	outputs []string
 }
 
 // BuildRealisation builds rootDrv and everything it depends on.
@@ -310,9 +321,6 @@ func (b *Builder) registerBuilt(logicalPath, phys string, refs []string) error {
 }
 
 func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths map[string]string) error {
-	if b.Config.Sandbox {
-		return fmt.Errorf("sandbox mode not implemented")
-	}
 	cfg := b.Store.Config()
 	if cfg.LogicalStoreDir() != store.DefaultStoreDir && !b.Config.AllowRelocated {
 		return fmt.Errorf("logical store directory is %q (expected %q); set AllowRelocated only for tests", cfg.LogicalStoreDir(), store.DefaultStoreDir)
@@ -327,6 +335,11 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 	for name, logical := range outPaths {
 		physOuts[name] = local.PhysicalPath(b.Store.Root, logical)
 	}
+	b.plan = buildPlan{
+		closure: b.closurePhys(d, outPaths),
+		outputs: outputPhysList(physOuts),
+	}
+	defer func() { b.plan = buildPlan{} }()
 	builder := d.Builder
 	args := append([]string{}, d.Arguments...)
 	for i, a := range args {
@@ -340,9 +353,11 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 	cmd.Stderr = os.Stderr
 	if err := b.execBuildCommand(cmd); err != nil {
 		if err != errMountFallback {
+			removePhysOutputs(physOuts)
 			return err
 		}
 		if !b.Config.AllowRelocated {
+			removePhysOutputs(physOuts)
 			return fmt.Errorf("cannot build with logical /nix/store paths: %w (set AllowRelocated for tests only, or enable user namespaces for bind mount)", err)
 		}
 		for i, a := range args {
@@ -351,6 +366,7 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 		cmd.Args = append([]string{builder}, args...)
 		cmd.Env = b.buildEnvPhys(d, outPaths, physOuts, tmpDir)
 		if err := cmd.Run(); err != nil {
+			removePhysOutputs(physOuts)
 			return err
 		}
 	}
@@ -466,6 +482,73 @@ func (b *Builder) rewriteValueLogical(val string, d *gonixdrv.Derivation, outPat
 		out = strings.ReplaceAll(out, inp, inp)
 	}
 	return cfg.RewriteDefaultStoreDir(out)
+}
+
+func outputPhysList(physOuts map[string]string) []string {
+	out := make([]string, 0, len(physOuts))
+	for _, p := range physOuts {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func removePhysOutputs(physOuts map[string]string) {
+	for _, p := range physOuts {
+		_ = os.RemoveAll(p)
+	}
+}
+
+// closurePhys is the physical paths of the derivation's inputs and their references.
+// Outputs of this build are not included.
+func (b *Builder) closurePhys(d *gonixdrv.Derivation, outPaths map[string]string) []string {
+	skip := map[string]bool{}
+	for _, logical := range outPaths {
+		skip[logical] = true
+	}
+	seen := map[string]bool{}
+	var phys []string
+	var walk func(logical string)
+	walk = func(logical string) {
+		if logical == "" || skip[logical] || seen[logical] {
+			return
+		}
+		seen[logical] = true
+		p := local.PhysicalPath(b.Store.Root, logical)
+		if st, err := os.Lstat(p); err != nil || st == nil {
+			return
+		}
+		phys = append(phys, p)
+		refs, err := b.Store.QueryReferences(logical)
+		if err != nil {
+			return
+		}
+		for _, ref := range refs {
+			walk(ref)
+		}
+	}
+	for _, src := range d.InputSources {
+		walk(src)
+	}
+	for inp := range d.InputDerivations {
+		walk(inp)
+		if b.Load == nil {
+			continue
+		}
+		dep, err := b.Load(inp)
+		if err != nil || dep == nil {
+			continue
+		}
+		depOuts, err := store.LogicalOutputPaths(dep)
+		if err != nil {
+			continue
+		}
+		for _, logical := range depOuts {
+			walk(logical)
+		}
+	}
+	sort.Strings(phys)
+	return phys
 }
 
 // DefaultSubstituter returns a cache.nixos.org client.

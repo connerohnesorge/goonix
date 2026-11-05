@@ -16,7 +16,7 @@ import (
 )
 
 func userMountNSAvailable() bool {
-	return exec.Command("unshare", "-rm", "true").Run() == nil
+	return exec.Command("unshare", "-rmp", "--fork", "--propagation", "private", "true").Run() == nil
 }
 
 func TestBuildRejectsRelocatedStoreWithoutAllowRelocated(t *testing.T) {

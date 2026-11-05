@@ -4,9 +4,11 @@
 
 // Package builder executes Nix derivations against a local store (Phase 5).
 //
-// Builds run unsandboxed by default (see Config.Sandbox). Set Sandbox true only
-// when a sandbox backend is wired; today it returns an error.
+// On Linux, builds run in a user, mount, and pid namespace. The builder is
+// uid 1000 inside that namespace and sees a root that contains the build
+// directory, the inputs' closure, /bin/sh, /dev basics, and /proc. When that
+// setup cannot be created, the build fails unless AllowRelocated is set.
 package builder
 
-// Doc documents unsandboxed default for go doc consumers.
-const Doc = "unsandboxed by default"
+// Doc documents the Linux build sandbox for go doc consumers.
+const Doc = "sandboxed by default on linux"
