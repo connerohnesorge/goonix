@@ -1,6 +1,6 @@
 # goonix v0 status (issues #2–#14)
 
-Oracle: **Nix 2.24.9** (`internal/nixversion`, CI **ladder** job via `cachix/install-nix-action` + `install_url` for 2.24.9). Optional **Nix 2.35.1** job (`nix-2-35`, `continue-on-error: true`) runs ATerm / strict-rung / FOD smoke. nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. Latest green CI: https://github.com/connerohnesorge/goonix/actions/runs/41968119579 (commit `2a66e0b42`).
+Oracle: **Nix 2.24.9** (`internal/nixversion`, CI **ladder** job via `cachix/install-nix-action` + `install_url` for 2.24.9). Optional **Nix 2.35.1** job (`nix-2-35`, `continue-on-error: true`) runs ATerm / strict-rung / FOD smoke. nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. Latest green CI: https://github.com/connerohnesorge/goonix/actions/runs/42042754279 (commit `2159de518`).
 
 ```bash
 bash scripts/check-cgo.sh
@@ -18,11 +18,11 @@ go test ./... -count=1
 | **0** | Repo, CI, CGO gate, goldens | `scripts/check-cgo.sh`, `.github/workflows/ci.yml`, `ladder/*`, `internal/oracle` | — |
 | **1** | Parser / lang | `parser/*`, `lang/*` (`parse-okay-*`) | CRLF / subversion parse cases skipped in lang harness |
 | **2** | Eval core | `eval/*`, fixpoint, merge, `with` | Lexical builtins before `with`; POSIX regex leftmost-longest |
-| **2b** | Builtins, Nix files | `eval/builtins*.go`, oracle repros | Several 2.24 builtins stubbed (`fetchGit`, `fetchTarball`, …); embedded `<nix/fetchurl.nix>` |
+| **2b** | Builtins, Nix files | `eval/builtins*.go`, `builtins_impl_oracle_test.go` | 2.24 builtins that used to throw "not implemented" now have real bodies and oracles (`fetchTarball`, `fetchGit`, `fetchTree`, `fetchurl`, `fromTOML`, `toXML`, `path`, `filterSource`, …). `getFlake` matches Nix on bad refs and path flakes. `fromTOML` does not parse nested tables. Embedded `<nix/fetchurl.nix>` |
 | **3** | Spike / decision | README, go-nix | — |
 | **4a** | Store paths, hashes, ATerm | `store/*`, `store/drvshow/*`, modulo oracles | — |
 | **4b** | Local SQLite store | `store/local/*` | GC roots stub; no daemon |
-| **5** | Builder | `builder/*`, `cmd/goonix build` | Output paths from strict `.drv` env; `/nix/store` bind mount when `unshare` works else phys fallback; non-builtin FOD builds then verifies hash |
+| **5** | Builder | `builder/*`, `cmd/goonix build` | No `$out` pre-creation. Logical `/nix/store` via mount namespace; physical rewrite only with `AllowRelocated` / `--allow-relocated-store`. Chain oracle (`TestBuildChainQuotedArgsMatchesNixBuild`) in the ladder job |
 | **6** | Substituter | `substituter/*` | Live cache test skips on `-short`/offline |
 | **7** | CLI | `cmd/goonix` | — |
 | **#13** | Bootstrap ladder | stage stdenv ATerm oracles | — |
@@ -37,6 +37,8 @@ go test ./... -count=1
 | **Linux boot chain** | `eval/boot_stage_diff_test.go` + `testdata/oracle/linux_boot_stage_chain.nix` | Stage count + dfold order vs Nix (not full production boot walk — needs bootstrap store paths) |
 | **xorg + splicing** | `eval/xorg_drvpath_oracle_test.go`, `eval/uri_query_oracle_test.go`, `eval/builtin_regex_oracle_test.go`, `eval/with_scoping_oracle_test.go` | POSIX `match`/`split`; `lib.strings.sanitizeDerivationName`; smoke oracles include **`pkgs.git.out.drvPath`** |
 | **FOD** | `builder/fod_oracle_test.go` | sha1/sha256/sha512 flat, sha256 recursive, HTTP + `file://`; out paths vs Nix strict |
+| **Build chain** | `builder/build_chain_oracle_test.go` | `nix-build` chain; args include quote, backslash, newline, tab; out paths and NAR hashes |
+| **Builtin bodies** | `eval/builtins_impl_oracle_test.go`, `eval/no_stub_builtin_test.go` | Nix 2.24.9 oracles; fails if `eval/*.go` still contains `is not implemented` |
 
 ## Post-hack test audit (item 5)
 
