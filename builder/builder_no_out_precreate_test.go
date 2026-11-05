@@ -158,7 +158,7 @@ func realiseAttrs(t *testing.T, st *local.Store, attrs string, allowRelocated bo
 	return b.BuildRealisation(drvPath)
 }
 
-func TestBuildWithoutMkdirOutSubpathFailsLikeNix(t *testing.T) {
+func TestBuildWithoutMkdirOutFailsLikeNix(t *testing.T) {
 	if _, err := exec.LookPath("/bin/sh"); err != nil {
 		t.Skip("no /bin/sh")
 	}
@@ -166,7 +166,7 @@ func TestBuildWithoutMkdirOutSubpathFailsLikeNix(t *testing.T) {
 	  name = "no-mkdir-out";
 	  system = "x86_64-linux";
 	  builder = "/bin/sh";
-	  args = [ "-c" "echo x > $out/sub/file" ];
+	  args = [ "-c" "echo x > $out/file" ];
 	}`
 	lay := oracle.MustLayout(t)
 	if _, err := lay.EvalDerivationDrvPathAllowError(attrs); err == nil {
