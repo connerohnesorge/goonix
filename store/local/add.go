@@ -5,6 +5,7 @@
 package local
 
 import (
+	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -328,6 +329,9 @@ func VerifyFlatOutput(filePath, wantBase16, algo string) error {
 	}
 	var gotBase16 string
 	switch algo {
+	case "md5":
+		sum := md5.Sum(data)
+		gotBase16 = hex.EncodeToString(sum[:])
 	case "sha256":
 		sum := sha256.Sum256(data)
 		gotBase16 = hex.EncodeToString(sum[:])
@@ -338,7 +342,7 @@ func VerifyFlatOutput(filePath, wantBase16, algo string) error {
 		sum := sha512.Sum512(data)
 		gotBase16 = hex.EncodeToString(sum[:])
 	default:
-		return fmt.Errorf("unsupported flat outputHashAlgo %q", algo)
+		return fmt.Errorf("unknown hash algorithm '%s', expect 'md5', 'sha1', 'sha256', or 'sha512'", algo)
 	}
 	if gotBase16 != wantBase16 {
 		return fmt.Errorf("fixed-output hash mismatch: got %s want %s", gotBase16, wantBase16)

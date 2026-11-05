@@ -61,6 +61,18 @@ func MakeFixedOutputPath(cfg Config, d *gonixdrv.Derivation, outName string, o *
 	algo := fixedMethodAlgo(d, o)
 	base16Hash := o.Hash
 
+	// Text is makeStorePath("text", sha256:hash), not the fixed:out digest.
+	if strings.HasPrefix(algo, "text:") {
+		if algo != "text:sha256" {
+			return "", fmt.Errorf("text output hash must be sha256")
+		}
+		storeHash := hashStringsModulo("text", "sha256", base16Hash, cfg.storeDir(), pathName)
+		return makeStorePathFromHash(cfg, pathName, storeHash)
+	}
+	if strings.HasPrefix(algo, "git:") && algo != "git:sha1" {
+		return "", fmt.Errorf("Git file ingestion must use SHA-1 hash")
+	}
+
 	if o.HashAlgorithm == "r:sha256" || algo == "r:sha256" {
 		storeHash := hashStringsModulo("source", "sha256", base16Hash, cfg.storeDir(), pathName)
 		return makeStorePathFromHash(cfg, pathName, storeHash)
@@ -90,7 +102,7 @@ func fixedMethodAlgo(d *gonixdrv.Derivation, o *gonixdrv.Output) string {
 	if algo == "" {
 		algo = "sha256"
 	}
-	if strings.HasPrefix(algo, "r:") || strings.HasPrefix(algo, "git:") {
+	if strings.HasPrefix(algo, "r:") || strings.HasPrefix(algo, "git:") || strings.HasPrefix(algo, "text:") {
 		return algo
 	}
 	mode := d.Env["outputHashMode"]
@@ -99,6 +111,8 @@ func fixedMethodAlgo(d *gonixdrv.Derivation, o *gonixdrv.Output) string {
 		return "r:" + strings.TrimPrefix(algo, "r:")
 	case "git":
 		return "git:" + strings.TrimPrefix(algo, "git:")
+	case "text":
+		return "text:" + strings.TrimPrefix(algo, "text:")
 	default:
 		return strings.TrimPrefix(algo, "r:")
 	}
@@ -140,6 +154,8 @@ func ParseFixedOutputHash(envHash, envAlgo, envMode string) (base16 string, drvA
 		drvAlgo = "r:" + strings.TrimPrefix(algo, "r:")
 	case "git":
 		drvAlgo = "git:" + strings.TrimPrefix(algo, "git:")
+	case "text":
+		drvAlgo = "text:" + strings.TrimPrefix(algo, "text:")
 	default:
 		drvAlgo = strings.TrimPrefix(algo, "r:")
 	}

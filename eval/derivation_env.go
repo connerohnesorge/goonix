@@ -231,6 +231,9 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 			// stored in drv.Env[key] above
 		case "outputHashMode":
 			outputHashMode = s
+			if err := ev.checkOutputHashMode(pos, s); err != nil {
+				return err
+			}
 		case "outputs":
 			outs, err := parseOutputNamesFromEnv(s)
 			if err != nil {
@@ -258,4 +261,19 @@ func (ev *Evaluator) fillDerivationFromAttrs(attrs *Value, drv *DerivationValue,
 		return err
 	}
 	return nil
+}
+
+// checkOutputHashMode accepts the modes Nix 2.24.9's derivationStrict accepts.
+// "text" requires dynamic-derivations and "git" requires git-hashing.
+func (ev *Evaluator) checkOutputHashMode(pos parser.Pos, mode string) error {
+	switch mode {
+	case "", "flat", "nar", "recursive":
+		return nil
+	case "text":
+		return ev.requireExperimental(pos, "dynamic-derivations")
+	case "git":
+		return ev.requireExperimental(pos, "git-hashing")
+	default:
+		return evalErr(pos, "invalid value '%s' for 'outputHashMode' attribute", mode)
+	}
 }

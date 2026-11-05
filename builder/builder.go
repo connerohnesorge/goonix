@@ -185,14 +185,26 @@ func (b *Builder) buildFixedOutput(drvPath string, d *gonixdrv.Derivation, outPa
 	switch mode {
 	case "flat", "":
 		if err := local.VerifyFlatOutput(phys, want, algo); err != nil {
+			os.RemoveAll(phys)
 			return err
 		}
 	case "nar", "recursive":
 		if err := local.VerifyRecursiveOutput(phys, want); err != nil {
+			os.RemoveAll(phys)
+			return err
+		}
+	case "text":
+		if err := verifyTextOutput(outPath, phys, want, algo); err != nil {
+			os.RemoveAll(phys)
+			return err
+		}
+	case "git":
+		if err := local.VerifyGitOutput(phys, want, algo); err != nil {
+			os.RemoveAll(phys)
 			return err
 		}
 	default:
-		return fmt.Errorf("unsupported outputHashMode %q", mode)
+		return fmt.Errorf("invalid value '%s' for 'outputHashMode' attribute", mode)
 	}
 	refs, err := b.Store.ScanPathReferences(outPath)
 	if err != nil {
@@ -202,6 +214,21 @@ func (b *Builder) buildFixedOutput(drvPath string, d *gonixdrv.Derivation, outPa
 		return err
 	}
 	return b.registerBuilt(outPath, phys, refs)
+}
+
+func verifyTextOutput(logical, phys, want, algo string) error {
+	fi, err := os.Lstat(phys)
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() || fi.Mode()&0o111 != 0 {
+		return fmt.Errorf("output path '%s' should be a non-executable regular file since recursive hashing is not enabled (one of outputHashMode={flat,text} is true)", logical)
+	}
+	raw := strings.TrimPrefix(algo, "text:")
+	if raw == "" {
+		raw = "sha256"
+	}
+	return local.VerifyFlatOutput(phys, want, raw)
 }
 
 func (b *Builder) fetchFixedOutputURL(d *gonixdrv.Derivation, phys, hashMode string) error {
