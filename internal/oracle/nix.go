@@ -433,10 +433,11 @@ func LocalStoreURI(storeRoot string) string {
 	return "local?root=" + storeRoot
 }
 
-// UnprivilegedBuildArgs are nix-build flags suitable for unprivileged CI runners.
+// UnprivilegedBuildArgs are nix-build flags for an isolated local?root store on unprivileged hosts.
+// Sandbox must be enabled so $out is mapped into the store mount; sandbox false writes to host /nix/store and fails on CI.
 func UnprivilegedBuildArgs() []string {
 	return []string{
-		"--option", "sandbox", "false",
+		"--option", "sandbox", "true",
 		"--option", "build-users-group", "",
 	}
 }

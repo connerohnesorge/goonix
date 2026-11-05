@@ -22,7 +22,7 @@ go test ./... -count=1
 | **3** | Spike / decision | README, go-nix | — |
 | **4a** | Store paths, hashes, ATerm | `store/*`, `store/drvshow/*`, modulo oracles | — |
 | **4b** | Local SQLite store | `store/local/*` | GC roots stub; no daemon |
-| **5** | Builder | `builder/*`, `cmd/goonix build` | FOD matrix oracle; flat verify uses **content** hash; **sandbox off by default** (`builder.Config.Sandbox`); echo-hi oracle uses `nix-build --store local?root=…` with sandbox disabled |
+| **5** | Builder | `builder/*`, `cmd/goonix build` | FOD matrix oracle; goonix **sandbox off by default**; `TestBuildEchoHiMatchesNixBuild` uses `nix-build --store local?root=…` with **sandbox on** + hermetic env (no host `NIX_STORE`) so CI can write outputs |
 | **6** | Substituter | `substituter/*` | Live cache test skips on `-short`/offline |
 | **7** | CLI | `cmd/goonix` | — |
 | **#13** | Bootstrap ladder | stage stdenv ATerm oracles | — |
