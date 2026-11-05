@@ -105,7 +105,10 @@ func TestReviewBuiltinsMatchNix(t *testing.T) {
 	dirExpr := `builtins.path { path = "` + filepath.Dir(flat) + `"; recursive = false; }`
 	_, nerr := lay.EvalExprAllowError(t, dirExpr)
 	_, gerr := evalPkgsExprStringAllowError(t, dirExpr)
-	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), "not a regular file") || !strings.Contains(gerr.Error(), "not a regular file") {
+	if nerr == nil || gerr == nil || !strings.Contains(gerr.Error(), "Is a directory") {
+		t.Fatalf("path dir nix=%v go=%v", nerr, gerr)
+	}
+	if !strings.Contains(nerr.Error(), "Is a directory") && !strings.Contains(nerr.Error(), "not a regular file") {
 		t.Fatalf("path dir nix=%v go=%v", nerr, gerr)
 	}
 

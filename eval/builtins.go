@@ -1241,7 +1241,8 @@ func builtinPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 			return nil, serr
 		}
 		if !info.Mode().IsRegular() {
-			return nil, evalErr(pos, "file '%s' is not a regular file", p)
+			// Nix 2.24.9: addToStore on a directory with a flat method.
+			return nil, evalErr(pos, "reading from file '%s': Is a directory", p)
 		}
 		return ev.materializeFlatFile(pos, p, name, optionalAttrString(ev, set, "sha256"))
 	}
