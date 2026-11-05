@@ -7,41 +7,59 @@ bash scripts/check-cgo.sh
 go test ./... -count=1
 ```
 
-CI: **ubuntu/macos** run `go test ./...` (CGO off). **ladder** job installs Nix 2.24.9 and runs `./internal/oracle/...`, `./ladder/...`, `./eval/...`.
+**CI:** ubuntu/macos `go test ./...` (CGO off). **ladder** job: Nix 2.24.9 + `./internal/oracle/...`, `./ladder/...`, `./eval/...`.
 
 ## Phase map
 
 | Phase | Scope | Tests / evidence | Left |
 |-------|--------|------------------|------|
 | **0** | Repo, CI, CGO gate, goldens | `scripts/check-cgo.sh`, `.github/workflows/ci.yml`, `ladder/*`, `internal/oracle` | — |
-| **1** | Parser / lang | `parser/*`, `lang/*` (`parse-okay-*`) | CRLF / subversion parse cases still skipped in lang harness |
-| **2** | Eval core | `eval/*` unit tests, fixpoint, merge, `with` | Full xorg `makeScopeWithSplicing` on real `default.nix` (skipped; Nix aborts on some self-`//` probes too) |
-| **2b** | Builtins, Nix files | `eval/builtins*.go`, oracle repros under `eval/testdata/` | `__structuredAttrs` byte oracle (not started) |
-| **3** | Spike / decision | docs in README, go-nix usage | — |
+| **1** | Parser / lang | `parser/*`, `lang/*` (`parse-okay-*`) | CRLF / subversion parse cases skipped in lang harness (upstream corpus gaps; documented in test) |
+| **2** | Eval core | `eval/*`, fixpoint, merge, `with` | — |
+| **2b** | Builtins, Nix files | `eval/builtins*.go`, oracle repros | — |
+| **3** | Spike / decision | README, go-nix | — |
 | **4a** | Store paths, hashes, ATerm | `store/*`, `store/drvshow/*`, modulo oracles | — |
-| **4b** | Local SQLite store | `store/local/*`, `TestNarHash*` / registration tests | GC roots stub only; no daemon |
-| **5** | Builder | `builder/*`, trivial `sh` + toFile acceptance (Nix hash oracle when `nix-store` present) | Linux user-namespace sandbox (flag; default off, unsandboxed) |
-| **6** | Substituter | `substituter/*`, fixture narinfo unit tests | Live cache integration optional/offline skip |
-| **7** | CLI / integration | `cmd/goonix` | — |
+| **4b** | Local SQLite store | `store/local/*` (800 LOC, 4 tests) | GC roots stub; no daemon |
+| **5** | Builder | `builder/*` (693 LOC, 3 tests), `cmd/goonix build` | Linux user-namespace sandbox (flag; default off) |
+| **6** | Substituter | `substituter/*` (338 LOC, 5 tests) | Live cache test skips offline (`TestSubstituteNetToolsFromCache`) |
+| **7** | CLI | `cmd/goonix` (`build`, `eval`, …) | `TestGoonixBuildEchoHiInTempStore` |
 | **#11** | go-nix integration | `store`, `eval` serialization | — |
-| **#13** | Bootstrap ladder | ATerm oracles, `TestBootstrapStage2StdenvOracle*` | **stage2 stdenv byte ATerm** via stdenvNoCC closure probe: extra gcc-wrapper path in `env.defaultNativeBuildInputs` (skipped test; list oracle green) |
-| **#14** | drvPath ladder | `ladder.TestHelloDrvPathMatchesGolden`, stdenvNoCC, curl | Full hello-closure byte diff (`TestDrvDiffHelloGoldenClosure`) is diagnostic only |
+| **#13** | Bootstrap ladder | `TestBootstrapStage2StdenvLinuxATermMatchesNix`, closure key-set probe | — |
+| **#14** | drvPath ladder | `ladder.TestHelloDrvPathMatchesGolden`, stdenvNoCC, curl | `TestDrvDiffHelloGoldenClosure` diagnostic only |
+
+### Package inventory (lines / tests)
+
+| Package | Lines (.go) | Test functions |
+|---------|-------------|----------------|
+| `store/local` | 800 | `TestNarHashMatchesGoNixDump`, `TestAddToStoreTextAndReferences`, `TestNarHashMatchesNixStoreDump`, `TestGCRootStub` |
+| `builder` | 693 | `TestTopoSortOrder`, `TestBuildTrivialShAndToFileDep`, `TestBuildEchoHiMatchesNixBuild` |
+| `substituter` | 338 | `TestParseFixtureNarinfo`, `TestFixtureNarinfoSignatureVerifies`, `TestFixtureNarinfoSignatureRejectedWhenTampered`, `TestSubstituteNetToolsFromCache`, `TestDecompressNonePassthrough` |
+
+Legacy stub packages `build/` and `substitute/` removed (replaced by `builder/` and `substituter/`).
+
+## Skips (explained)
+
+| Skip | Reason |
+|------|--------|
+| `lang` CRLF / subversion | Parser corpus cases not in scope for v0 |
+| `TestBuild*` / CLI when no `/bin/sh` | Host has no POSIX shell |
+| `TestBuildEchoHiMatchesNixBuild` when no `nix-build` | Nix CLI not installed |
+| `TestPkgConfigFetchurl*` when no `/nix/store` | Fetchurl oracle needs host store path materialisation |
+| `TestSubstituteNetToolsFromCache` / `testing.Short` | Network or cache unreachable |
+| Oracle tests when `nix-instantiate` missing | CI ladder job provides Nix; unit job skips |
 
 ## Oracle / tooling
 
-- **`internal/oracle`**: `nix-instantiate --eval --json` (2.24.9-safe); `EvalFileRawBytes` preserves string newlines.
-- **`store/drvshow`**: parses Nix 2.24 `derivation show` (flat map) and v4 `{derivations,version}`.
-- **`drvdiff`**: closure byte compare uses **NameStdenv BFS pairing** for duplicate logical drvs.
-
-## Hello “green”
-
-`ladder.TestHelloDrvPathMatchesGolden`: Nix-oracle `drvPath` then pinned golden `testdata/golden/hello.drvPath` (`…/gciipqhqkdlqqn803zd4a389v86ran45-hello-2.12.1.drv`). Not a full closure ATerm match.
+- **`internal/oracle`**: hermetic `nix-instantiate` (2.24.9); temp-store probes via `--store` + `ChrootIOEffects`.
+- **`store/drvshow`**: Nix 2.24 flat map + v4; **exact map-key pairing** for duplicate logical drvs (stage2 stdenv).
+- **`drvdiff`**: closure compare; BFS pairing with exact-key preference.
 
 ## Semantics (recent)
 
-- **`derivationStrict`**: returns `drvPath` + output paths only; `type`/`name`/… on `builtins.derivation` wrapper (`derivation_builtin.go`). Oracle: `TestDerivationStrictAttrNamesMatchNix`.
-- **`genList`**: lazy elements (`deferredApplyCall`).
-- **`builtins.nixVersion`**: `internal/nixversion` (no `testing` import in eval).
+- **`derivationStrict`**: `drvPath` + outputs only on strict value; strict attr access throws on missing/non-attrs (Nix-aligned).
+- **`__structuredAttrs`**: `TestStructuredAttrsStrictATermMatchesNix` (derivationStrict rung oracle).
+- **Rung08 `toFile`**: drvPath oracle in isolated temp store (`ChrootIOEffects` + nix `--store`).
+- **`makeScopeWithSplicing`**: `TestMakeScopeWithSplicingCallPackageWithAutoMergeMatchesNix` (small lib probe; invalid xorg abort probes removed).
 
 ## CGO
 
