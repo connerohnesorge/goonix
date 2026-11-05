@@ -731,7 +731,24 @@ func builtinReadDir(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
 	}
-	p, err := ev.forceString(args[0])
+	fv, err := ev.forceValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	// nix-instantiate does not register filterSource/path results, so
+	// realising their store context fails before the directory is read.
+	if fv.Kind == VKString {
+		for _, c := range fv.Ctx {
+			sp := c.StorePath
+			if sp == "" {
+				sp = c.DrvPath
+			}
+			if sp != "" {
+				return nil, evalErr(pos, "path '%s' is not valid", sp)
+			}
+		}
+	}
+	p, err := ev.forceString(fv)
 	if err != nil {
 		return nil, err
 	}
@@ -1226,6 +1243,7 @@ func builtinPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err != nil {
 		return nil, err
 	}
+	addedFrom := p
 	name, err := getAttrString(ev, set, "name")
 	if err != nil || name == "" {
 		name = filepath.Base(p)
@@ -1261,7 +1279,7 @@ func builtinPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	}
 	if sha, err := getAttrString(ev, set, "sha256"); err == nil && sha != "" {
 		if err := verifyTreeHash(p, sha); err != nil {
-			return nil, err
+			return nil, evalErr(pos, "store path mismatch in (possibly filtered) path added from '%s'", addedFrom)
 		}
 	}
 	return ev.materializeTreeSource(p, name)

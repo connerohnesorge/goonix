@@ -55,6 +55,60 @@ func TestBuiltinImplementationsMatchNix(t *testing.T) {
 	}
 }
 
+func TestNix224ErrorTextMatch(t *testing.T) {
+	lay := oracle.MustLayout(t)
+	dir := t.TempDir()
+	flat := filepath.Join(dir, "f")
+	if err := os.WriteFile(flat, []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		expr   string
+		goHas  string
+		nixHas string
+	}{
+		{
+			expr:   `builtins.convertHash { hash = "abcd"; hashAlgo = "sha256"; toHashFormat = "base16"; }`,
+			goHas:  "hash 'abcd' has wrong length for hash algorithm 'sha256'",
+			nixHas: "has wrong length for hash algorithm",
+		},
+		{
+			expr:   `builtins.fetchurl "file:///no/such/goonix-fetchurl"`,
+			goHas:  "unable to download 'file:///no/such/goonix-fetchurl': Couldn't read a file:// file (37)",
+			nixHas: "unable to download 'file:///no/such/goonix-fetchurl'",
+		},
+		{
+			expr:   `builtins.fetchTarball "file:///no/such/goonix-fetch.tar.gz"`,
+			goHas:  "Failed to open archive (Source threw exception: error: unable to download 'file:///no/such/goonix-fetch.tar.gz': Couldn't read a file:// file (37))",
+			nixHas: "file:///no/such/goonix-fetch.tar.gz",
+		},
+		{
+			expr:   `builtins.path { path = "` + flat + `"; sha256 = "0000000000000000000000000000000000000000000000000000000000000000"; }`,
+			goHas:  "store path mismatch in (possibly filtered) path added from '" + flat + "'",
+			nixHas: "store path mismatch",
+		},
+		{
+			expr:   `builtins.readDir (builtins.filterSource (p: t: true) "` + dir + `")`,
+			goHas:  "is not valid",
+			nixHas: "is not valid",
+		},
+	}
+	ver, _ := exec.Command("nix-instantiate", "--version").CombinedOutput()
+	for _, c := range cases {
+		_, nerr := lay.EvalExprAllowError(t, c.expr)
+		_, gerr := evalPkgsExprStringAllowError(t, c.expr)
+		if gerr == nil || !strings.Contains(gerr.Error(), c.goHas) {
+			t.Fatalf("%s\ngo=%v", c.expr, gerr)
+		}
+		if nerr == nil || !strings.Contains(nerr.Error(), c.nixHas) {
+			t.Fatalf("%s\nnix=%v", c.expr, nerr)
+		}
+		if strings.Contains(string(ver), "2.24.9") && !strings.Contains(nerr.Error(), c.goHas) && c.goHas != "is not valid" {
+			t.Fatalf("2.24.9 mismatch %s\nnix=%v\ngo=%v", c.expr, nerr, gerr)
+		}
+	}
+}
+
 func TestUnsafeGetAttrPosInheritAndListToAttrsMatchNix(t *testing.T) {
 	lay := oracle.MustLayout(t)
 	dir := t.TempDir()

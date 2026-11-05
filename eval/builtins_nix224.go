@@ -221,15 +221,20 @@ func builtinConvertHash(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, e
 		return nil, err
 	}
 	var algo *nixhash.Algorithm
+	algoName := ""
 	if name, err := getAttrString(ev, set, "hashAlgo"); err == nil && name != "" {
 		a, aerr := nixhash.ParseAlgorithm(name)
 		if aerr != nil {
 			return nil, evalErr(pos, "unknown hash algorithm '%s'", name)
 		}
 		algo = &a
+		algoName = name
 	}
 	hw, err := nixhash.ParseAny(hashStr, algo)
 	if err != nil {
+		if algoName != "" {
+			return nil, evalErr(pos, "hash '%s' has wrong length for hash algorithm '%s'", hashStr, algoName)
+		}
 		return nil, evalErr(pos, "%s", err.Error())
 	}
 	var enc nixhash.Encoding
@@ -481,7 +486,12 @@ func fetchURLBytes(rawURL string) ([]byte, error) {
 		if runtime.GOOS == "windows" && strings.HasPrefix(p, "/") {
 			p = p[1:]
 		}
-		return os.ReadFile(p)
+		b, rerr := os.ReadFile(p)
+		if rerr != nil {
+			// Nix 2.24.9's curl file:// error, including the CURLE code.
+			return nil, fmt.Errorf("unable to download '%s': Couldn't read a file:// file (37)", rawURL)
+		}
+		return b, nil
 	case "http", "https":
 		resp, err := http.Get(rawURL)
 		if err != nil {
@@ -579,6 +589,9 @@ func builtinFetchTarball(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	}
 	data, err := fetchURLBytes(rawURL)
 	if err != nil {
+		if strings.Contains(err.Error(), "Couldn't read a file:// file") {
+			return nil, fmt.Errorf("Failed to open archive (Source threw exception: error: %s)", err.Error())
+		}
 		return nil, err
 	}
 	tmp, err := os.MkdirTemp("", "goonix-tar-")
