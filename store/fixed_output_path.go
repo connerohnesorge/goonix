@@ -20,7 +20,7 @@ func FixedOutputPaths(cfg Config, d *gonixdrv.Derivation) (map[string]string, er
 	if d == nil {
 		return nil, fmt.Errorf("nil derivation")
 	}
-	name := d.Name()
+	name := derivationName(d)
 	if name == "" {
 		return nil, fmt.Errorf("derivation missing name")
 	}

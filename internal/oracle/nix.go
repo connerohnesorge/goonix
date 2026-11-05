@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -79,6 +80,14 @@ func (l Layout) InstantiateArgs() []string {
 		"-I", "nixpkgs=" + l.Nixpkgs,
 		"-I", "nix=" + l.Nix,
 	}
+}
+
+func (l Layout) instantiateArgsWithStore(storeDir string) []string {
+	args := append([]string{}, l.InstantiateArgs()...)
+	if storeDir != "" {
+		args = append([]string{"--store", storeDir}, args...)
+	}
+	return args
 }
 
 func (l Layout) evalRaw(t *testing.T, expr string) (string, error) {
@@ -183,15 +192,105 @@ func (l Layout) Instantiate(t *testing.T, nixFile string) string {
 	return strings.Trim(strings.TrimSpace(string(out)), `"`)
 }
 
+// RealiseDrvInStore ensures drvPath exists in storeDir and returns its .drv bytes.
+func (l Layout) RealiseDrvInStore(t *testing.T, storeDir, drvPath string) []byte {
+	t.Helper()
+	if raw, err := os.ReadFile(l.storeDrvPath(storeDir, drvPath)); err == nil {
+		return raw
+	}
+	args := []string{"--realise", drvPath}
+	if storeDir != "" {
+		args = append([]string{"--store", storeDir}, args...)
+	}
+	cmd := exec.Command("nix-store", args...)
+	cmd.Env = l.HermeticEnv()
+	if err := cmd.Run(); err != nil {
+		return nil
+	}
+	raw, err := os.ReadFile(l.storeDrvPath(storeDir, drvPath))
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+func (l Layout) storeDrvPath(storeDir, logicalDrvPath string) string {
+	base := strings.TrimPrefix(logicalDrvPath, "/nix/store/")
+	if storeDir == "" {
+		storeDir = "/nix/store"
+	}
+	return filepath.Join(storeDir, base)
+}
+
+// InstantiateStrictInStore materialises (builtins.derivationStrict attrs) into storeDir.
+func (l Layout) InstantiateStrictInStore(t *testing.T, storeDir, attrs string) string {
+	t.Helper()
+	strictArg := attrs
+	if strings.HasPrefix(strings.TrimSpace(attrs), "let") {
+		strictArg = "(" + attrs + ")"
+	}
+	expr := fmt.Sprintf(`(builtins.derivationStrict %s)`, strictArg)
+	args := append(append([]string{}, l.instantiateArgsWithStore(storeDir)...), "-E", expr)
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			t.Fatalf("nix-instantiate: %v\n%s", err, ee.Stderr)
+		}
+		t.Fatal(err)
+	}
+	return strings.Trim(strings.TrimSpace(string(out)), `"`)
+}
+
 // EvalStrictDrvPath evaluates (builtins.derivationStrict attrs).drvPath hermetically.
 func (l Layout) EvalStrictDrvPath(t *testing.T, attrs string) string {
+	return l.EvalStrictDrvPathInStore(t, "", attrs)
+}
+
+// EvalStrictDrvPathInStore is like EvalStrictDrvPath but uses nix-instantiate --store.
+func (l Layout) EvalStrictDrvPathInStore(t *testing.T, storeDir, attrs string) string {
 	t.Helper()
 	strictArg := attrs
 	if strings.HasPrefix(strings.TrimSpace(attrs), "let") {
 		strictArg = "(" + attrs + ")"
 	}
 	pathExpr := fmt.Sprintf(`(builtins.derivationStrict %s).drvPath`, strictArg)
-	return l.EvalRaw(t, pathExpr)
+	args := append(append([]string{}, l.instantiateArgsWithStore(storeDir)...), "--eval", "--json", "-E", pathExpr)
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			t.Fatalf("nix-instantiate: %v\n%s", err, ee.Stderr)
+		}
+		t.Fatal(err)
+	}
+	s, err := decodeNixInstantiateJSON(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// ReadStoreDrvPath reads a .drv file from a logical store path (honours --store layout).
+func (l Layout) ReadStoreDrvPath(t *testing.T, storeDir, logicalDrvPath string) []byte {
+	t.Helper()
+	base := strings.TrimPrefix(logicalDrvPath, "/nix/store/")
+	if storeDir == "" {
+		storeDir = "/nix/store"
+	}
+	path := filepath.Join(storeDir, base)
+	if strings.HasSuffix(path, ".drv") {
+		// already basename
+	} else if !strings.HasSuffix(base, ".drv") {
+		path += ".drv"
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return raw
 }
 
 // EvalStdinRaw evaluates Nix source from stdin.

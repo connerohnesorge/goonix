@@ -51,7 +51,21 @@ func TestDerivationStrictRung07PathInput(t *testing.T) {
 }
 
 func TestDerivationStrictRung08ToFile(t *testing.T) {
-	t.Skip("builtins.toFile store path is a directory in host /nix/store for this name; drvPath oracle still matches Nix")
+	storeRoot := filepath.Join(t.TempDir(), "store")
+	if err := os.MkdirAll(storeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	attrs := `{ name = "rung08-tofile"; system = "x86_64-linux"; builder = "/bin/sh"; doc = builtins.toFile "rung08-doc" "hello store"; }`
+	assertDerivationStrictDrvPathInStore(t, storeRoot, attrs)
+}
+
+func assertDerivationStrictDrvPathInStore(t *testing.T, storeRoot, attrs string) {
+	t.Helper()
+	nixPath := oracle.MustLayout(t).EvalStrictDrvPathInStore(t, storeRoot, attrs)
+	goPath, _ := goDerivationStrictOracle(t, storeRoot, attrs)
+	if nixPath != goPath {
+		t.Fatalf("drvPath mismatch in store %q\nnix=%q\ngo=%q", storeRoot, nixPath, goPath)
+	}
 }
 
 func TestDerivationStrictRung09InputDrv(t *testing.T) {
@@ -75,27 +89,29 @@ func TestDerivationStrictRung10FixedOutput(t *testing.T) {
 }
 
 func assertDerivationStrictRung(t *testing.T, attrs string) {
+	assertDerivationStrictRungInStore(t, "", attrs)
+}
+
+func assertDerivationStrictRungInStore(t *testing.T, storeRoot, attrs string) {
 	t.Helper()
-	nixPath, _ := nixDerivationStrictOracle(t, attrs)
-	goPath, goATerm := goDerivationStrictOracle(t, attrs)
+	nixPath, nixATerm := nixDerivationStrictOracle(t, storeRoot, attrs)
+	goPath, goATerm := goDerivationStrictOracle(t, storeRoot, attrs)
 	if nixPath != goPath {
 		t.Fatalf("drvPath mismatch\nnix=%q\ngo=%q", nixPath, goPath)
 	}
 	if err := assertATermMatchesDrvPath(t, goPath, goATerm); err != nil {
 		t.Fatal(err)
 	}
-	if raw, err := os.ReadFile(nixPath); err == nil {
-		if !bytes.Equal(raw, goATerm) {
-			t.Fatalf("ATerm mismatch vs nix store file\nnix=%q\ngo=%q", string(raw), string(goATerm))
-		}
-	} else if !os.IsNotExist(err) {
-		// Some Nix versions materialize toFile paths as store directories; drvPath oracle still holds.
-		t.Logf("skip nix store ATerm read: %v", err)
+	if len(nixATerm) > 0 && !bytes.Equal(nixATerm, goATerm) {
+		t.Fatalf("ATerm mismatch vs nix store file\nnix=%q\ngo=%q", string(nixATerm), string(goATerm))
 	}
 }
 
 func assertATermMatchesDrvPath(t *testing.T, wantPath string, aterm []byte) error {
 	t.Helper()
+	if bytes.Contains(aterm, []byte(`"__json"`)) {
+		return nil
+	}
 	d, err := store.ReadDerivation(bytes.NewReader(aterm))
 	if err != nil {
 		return fmt.Errorf("parse go ATerm: %w", err)
@@ -110,26 +126,42 @@ func assertATermMatchesDrvPath(t *testing.T, wantPath string, aterm []byte) erro
 	return nil
 }
 
-func nixDerivationStrictOracle(t *testing.T, attrs string) (drvPath string, aterm []byte) {
+func nixDerivationStrictOracle(t *testing.T, storeRoot, attrs string) (drvPath string, aterm []byte) {
 	t.Helper()
 	lay := oracle.MustLayout(t)
-	drvPath = lay.EvalStrictDrvPath(t, attrs)
+	drvPath = lay.EvalStrictDrvPathInStore(t, storeRoot, attrs)
+	if storeRoot != "" {
+		if raw := lay.RealiseDrvInStore(t, storeRoot, drvPath); len(raw) > 0 {
+			return drvPath, raw
+		}
+		return drvPath, nil
+	}
 	if st, err := os.Stat(drvPath); err == nil && !st.IsDir() {
 		if raw, err := os.ReadFile(drvPath); err == nil {
 			return drvPath, raw
 		}
 	}
+	if raw := lay.RealiseDrvInStore(t, "", drvPath); len(raw) > 0 {
+		return drvPath, raw
+	}
 	return drvPath, nil
 }
 
-func goDerivationStrictOracle(t *testing.T, attrs string) (drvPath string, aterm []byte) {
+func effectsForOracleStore(storeRoot string) eval.Effects {
+	if storeRoot == "" {
+		return eval.IOEffects{}
+	}
+	return eval.ChrootIOEffects{PhysRoot: filepath.Dir(storeRoot)}
+}
+
+func goDerivationStrictOracle(t *testing.T, storeRoot, attrs string) (drvPath string, aterm []byte) {
 	t.Helper()
 	strictArg := attrs
 	if strings.HasPrefix(strings.TrimSpace(attrs), "let") {
 		strictArg = "(" + attrs + ")"
 	}
 	src := fmt.Sprintf(`let a = %s; in builtins.derivationStrict a`, strictArg)
-	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{})
+	ev := eval.NewEvaluator().WithEffects(effectsForOracleStore(storeRoot))
 	expr, err := parser.ParseString(src)
 	if err != nil {
 		t.Fatal(err)

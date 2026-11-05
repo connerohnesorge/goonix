@@ -25,21 +25,22 @@ type Derivation = gonixdrv.Derivation
 
 // ReadDerivation parses a derivation from r.
 func ReadDerivation(r io.Reader) (*Derivation, error) {
-	return gonixdrv.ReadDerivation(r)
+	d, err := gonixdrv.ReadDerivation(r)
+	if err != nil {
+		return nil, err
+	}
+	ensureStructuredName(d)
+	return d, nil
 }
 
 // DrvPath returns the store path for d using the default /nix/store prefix.
 func DrvPath(d *Derivation) (string, error) {
-	return d.DrvPath()
+	return DrvPathFromDerivation(Config{}, d)
 }
 
 // DrvPathWithConfig returns the store path for d, rewriting the prefix to cfg.
 func DrvPathWithConfig(d *Derivation, cfg Config) (string, error) {
-	p, err := d.DrvPath()
-	if err != nil {
-		return "", err
-	}
-	return cfg.RewriteDefaultStoreDir(p), nil
+	return DrvPathFromDerivation(cfg, d)
 }
 
 // OutputPaths computes output store paths for d.

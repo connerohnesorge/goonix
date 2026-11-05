@@ -79,7 +79,7 @@ func (ev *Evaluator) lazySelectStrictAttr(strict *Value, attr string, pos parser
 				return nil, err
 			}
 			if sv == nil || sv.Kind != VKAttrs {
-				return Null(), nil
+				return nil, evalErr(pos, "value is not an attribute set")
 			}
 			b, ok := sv.Attrs.Binds[sym]
 			if !ok {
@@ -106,7 +106,7 @@ func (ev *Evaluator) derivationOutputOverlayLazy(strict *Value, outputName strin
 					return nil, err
 				}
 				if sv == nil || sv.Kind != VKAttrs {
-					return Null(), nil
+					return nil, evalErr(pos, "value is not an attribute set")
 				}
 				for _, name := range []string{"outPath", "out"} {
 					if b, ok := sv.Attrs.Binds[e.Intern.Intern(name)]; ok {

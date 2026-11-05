@@ -203,7 +203,7 @@ func fixedOutputModulo(d *gonixdrv.Derivation) (ModuloResult, bool) {
 
 // OutputPathsModulo computes output store paths using hashDerivationModulo (maskOutputs=true).
 func OutputPathsModulo(cfg Config, d *gonixdrv.Derivation, cache *ModuloCache) (map[string]string, error) {
-	name := d.Name()
+	name := derivationName(d)
 	if name == "" {
 		return nil, fmt.Errorf("derivation missing name")
 	}
@@ -257,9 +257,4 @@ func InputReplacementsHex(cache *ModuloCache, d *gonixdrv.Derivation) (map[strin
 		out[k] = v
 	}
 	return out, nil
-}
-
-// DrvPathFromDerivation returns the .drv store path for d (hashes full unmasked ATerm).
-func DrvPathFromDerivation(cfg Config, d *gonixdrv.Derivation) (string, error) {
-	return d.DrvPath()
 }

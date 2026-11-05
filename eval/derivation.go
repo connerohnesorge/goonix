@@ -49,7 +49,7 @@ func computeDerivationPaths(ev *Evaluator, cfg store.Config, drv *DerivationValu
 		d.Env[name] = path
 		drv.Env[name] = path
 	}
-	drvPath, err = d.DrvPath()
+	drvPath, err = store.DrvPathFromDerivation(cfg, d)
 	if err != nil {
 		return "", nil, err
 	}
@@ -103,6 +103,9 @@ func derivationValueToGoNix(drv *DerivationValue) (*gonixdrv.Derivation, error) 
 	}
 	for k, v := range drv.Env {
 		d.Env[k] = v
+	}
+	if drv.Name != "" && d.Env["__json"] == "" {
+		d.Env["name"] = drv.Name
 	}
 
 	outputs := drv.Outputs

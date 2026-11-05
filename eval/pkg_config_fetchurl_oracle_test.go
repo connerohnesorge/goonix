@@ -23,8 +23,8 @@ func TestPkgConfigFetchurlNixBase32OutputHashMatchesNix(t *testing.T) {
 	  preferLocalBuild = true;
 	  impureEnvVars = [ "http_proxy" "https_proxy" "ftp_proxy" "all_proxy" "no_proxy" ];
 	}`
-	nixPath, nixATerm := nixDerivationStrictOracle(t, attrs)
-	goPath, goATerm := goDerivationStrictOracle(t, attrs)
+	nixPath, nixATerm := nixDerivationStrictOracle(t, "", attrs)
+	goPath, goATerm := goDerivationStrictOracle(t, "", attrs)
 	if nixPath != goPath {
 		t.Fatalf("drvPath mismatch\nnix=%q\ngo=%q", nixPath, goPath)
 	}
