@@ -64,12 +64,23 @@ jobs:
         env:
           CGO_ENABLED: '0'
           # An oracle that would skip because Nix is not 2.24.9 fails this job.
+          # fail_oracle_skip also fails any other skip, including store and cmd.
           GOONIX_REQUIRE_NIX_224: '1'
         run: |
           set -o pipefail
           fail_oracle_skip() {
             python3 - "$1" <<'PY'
           import json, sys
+          # These skips are intentional and are not Nix comparisons. Every
+          # other skip in the ladder logs fails the job, including store and
+          # cmd tests and oracle tests whose names do not contain Oracle.
+          allow = {
+              "TestOrFallbackNullUsesRight",
+              "TestPkgConfigFetchurlGoATermDebug",
+              "TestPkgConfigFetchurlNixATermDebug",
+              "TestWrapperMissingInputsDebug",
+              "TestBrokenWrapperNameInspect",
+          }
           bad = []
           path = sys.argv[1]
           for line in open(path, errors="replace"):
@@ -83,18 +94,20 @@ jobs:
               if ev.get("Action") != "skip":
                   continue
               name = ev.get("Test") or ""
-              if any(s in name for s in ("Oracle", "Nix224", "MatchesNix", "LikeNix", "MatchNix")):
-                  bad.append((ev.get("Package") or "") + " " + name)
+              leaf = name.split("/")[-1]
+              if leaf in allow:
+                  continue
+              bad.append((ev.get("Package") or "") + " " + name)
           if bad:
-              print("oracle test skipped on the Nix 2.24.9 ladder:")
+              print("test skipped on the Nix 2.24.9 ladder:")
               print("\n".join(bad))
               sys.exit(1)
           PY
           }
           go test -json ./internal/oracle/... ./ladder/... ./eval/... -count=1 -timeout 20m | tee /tmp/goonix-eval.json
           fail_oracle_skip /tmp/goonix-eval.json
-          go test ./store/... ./store/local/... ./cmd/... -count=1 -timeout 15m -v 2>&1 | tee /tmp/goonix-store-cmd-test.log
-          grep -E '^(--- SKIP:|PASS|FAIL|ok )' /tmp/goonix-store-cmd-test.log || true
+          go test -json ./store/... ./store/local/... ./cmd/... -count=1 -timeout 15m | tee /tmp/goonix-store-cmd.json
+          fail_oracle_skip /tmp/goonix-store-cmd.json
           go test -json ./builder/... -count=1 -timeout 10m | tee /tmp/goonix-builder.json
           fail_oracle_skip /tmp/goonix-builder.json
           go test ./substituter/... -run TestSubstituteHelloFromCache -count=1 -timeout 5m
