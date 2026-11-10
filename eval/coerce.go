@@ -83,11 +83,30 @@ func (ev *Evaluator) coerceToString(v *Value, cc CoerceContext) (*Value, error) 
 		return ev.coerceAttrSetToString(fv, cc)
 	case VKNull, VKBool, VKInt, VKFloat, VKList:
 		if cc.Mode != CoerceString {
-			return nil, evalErr(pos, "cannot coerce %s to string", valueKindName(fv.Kind))
+			return nil, strictCoerceError(pos, fv)
 		}
 		return ev.coerceToStringScalarList(fv, cc)
 	default:
 		return nil, evalErr(pos, "cannot coerce %s to string", valueKindName(fv.Kind))
+	}
+}
+
+func strictCoerceError(pos parser.Pos, fv *Value) error {
+	switch fv.Kind {
+	case VKNull:
+		return evalErr(pos, "cannot coerce null to a string: null")
+	case VKBool:
+		shown := "false"
+		if fv.Bool {
+			shown = "true"
+		}
+		return evalErr(pos, "cannot coerce a Boolean to a string: %s", shown)
+	case VKInt:
+		return evalErr(pos, "cannot coerce an integer to a string: %d", fv.Int)
+	case VKFloat:
+		return evalErr(pos, "cannot coerce a float to a string: %s", nixXMLFloat(fv.Float))
+	default:
+		return evalErr(pos, "cannot coerce a %s to a string", valueKindName(fv.Kind))
 	}
 }
 

@@ -1058,7 +1058,7 @@ func (ev *Evaluator) jsonAttrsCoerce(fv *Value) (any, []StringContextElem, bool,
 			s, ctx, err := ev.jsonCopiedPath(result.Path)
 			return s, ctx, true, err
 		}
-		sv, err := ev.coerceToString(result, CoerceContext{Mode: CoerceString, Pos: parser.Pos{}, CopyPaths: true})
+		sv, err := ev.coerceToString(result, CoerceContext{Mode: CoerceStrict, Pos: parser.Pos{}, CopyPaths: true})
 		if err != nil {
 			return nil, nil, true, err
 		}

@@ -1,12 +1,34 @@
 package eval_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/connerohnesorge/goonix/eval"
 	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
 )
+
+func TestToStringReturningIntMatchesNix(t *testing.T) {
+	lay := oracle.MustLayout(t)
+	bad := []string{
+		`let s = { __toString = _: 1; }; in "${s}"`,
+		`builtins.toJSON { __toString = _: 1; }`,
+		`"${1}"`,
+	}
+	frag := "cannot coerce an integer to a string: 1"
+	for _, expr := range bad {
+		_, goErr := evalPkgsExprStringAllowError(t, expr)
+		_, nixErr := lay.EvalExprAllowError(t, expr)
+		if goErr == nil || nixErr == nil || !strings.Contains(goErr.Error(), frag) || !strings.Contains(nixErr.Error(), frag) {
+			t.Fatalf("%s\ngo=%v\nnix=%v", expr, goErr, nixErr)
+		}
+	}
+	ok := `builtins.toString { __toString = _: 1; }`
+	if got, want := evalPkgsExprString(t, ok), lay.EvalRaw(t, ok); got != want {
+		t.Fatalf("toString\ngo=%s\nnix=%s", got, want)
+	}
+}
 
 func TestToXMLFloatMatchesNix(t *testing.T) {
 	lay := oracle.MustLayout(t)
