@@ -774,8 +774,7 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		if err != nil {
 			return nil, err
 		}
-		rev, _ := getAttrString(ev, params, "rev")
-		return ev.fetchTreeGitHub(owner, repo, rev)
+		return ev.fetchTreeGitHub(owner, repo, fetchTreeRevOrRef(ev, params))
 	case "gitlab":
 		owner, err := getAttrString(ev, params, "owner")
 		if err != nil {
@@ -785,8 +784,7 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		if err != nil {
 			return nil, err
 		}
-		rev, _ := getAttrString(ev, params, "rev")
-		return ev.fetchTreeGitLab(owner, repo, rev)
+		return ev.fetchTreeGitLab(owner, repo, fetchTreeRevOrRef(ev, params))
 	case "sourcehut":
 		owner, err := getAttrString(ev, params, "owner")
 		if err != nil {
@@ -796,8 +794,7 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		if err != nil {
 			return nil, err
 		}
-		rev, _ := getAttrString(ev, params, "rev")
-		return ev.fetchTreeSourceHut(owner, repo, rev)
+		return ev.fetchTreeSourceHut(owner, repo, fetchTreeRevOrRef(ev, params))
 	case "indirect":
 		id, err := getAttrString(ev, params, "id")
 		if err != nil {
@@ -987,6 +984,19 @@ func stripSingleDir(dir string) string {
 		return dir
 	}
 	return filepath.Join(dir, ents[0].Name())
+}
+
+// fetchTreeRevOrRef prefers an explicit rev, then a ref. The string form
+// already does this. The attrset form has to as well, or ref="v1.0.0"
+// silently fetches the default branch.
+func fetchTreeRevOrRef(ev *Evaluator, params *Value) string {
+	if rev, err := getAttrString(ev, params, "rev"); err == nil && rev != "" {
+		return rev
+	}
+	if ref, err := getAttrString(ev, params, "ref"); err == nil {
+		return ref
+	}
+	return ""
 }
 
 func (ev *Evaluator) fetchTreeGitHub(owner, repo, rev string) (*Value, error) {
