@@ -157,12 +157,25 @@ func cmdInstantiate(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	cfg := store.Config{StoreDir: *storeDir}
+	if drvPath, err := eval.ForceStrictDrvPath(ev, fv); err == nil {
+		drv, ok := ev.LookupStrictDerivation(drvPath)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "derivation was not registered during eval")
+			os.Exit(1)
+		}
+		if err := ev.WriteDerivationClosure(cfg, drv); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(strings.TrimSpace(drv.DrvPath))
+		return
+	}
 	drv, err := ev.AttrsToDerivation(fv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	cfg := store.Config{StoreDir: *storeDir}
 	if err := ev.WriteDerivationClosure(cfg, drv); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

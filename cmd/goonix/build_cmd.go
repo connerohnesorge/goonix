@@ -78,12 +78,7 @@ func cmdBuild(args []string) {
 		fmt.Fprintln(os.Stderr, "derivation was not registered during eval")
 		os.Exit(1)
 	}
-	aterm, err := eval.SerializeGoNixDerivation(gd)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	if err := st.WriteDerivation(aterm, drvPath); err != nil {
+	if err := writeRegisteredDrvClosure(st, ev, drvPath, map[string]bool{}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -121,4 +116,25 @@ func cmdBuild(args []string) {
 		fmt.Printf("%s=%s\n", name, p)
 	}
 	_ = store.DefaultStoreDir
+}
+
+func writeRegisteredDrvClosure(st *local.Store, ev *eval.Evaluator, drvPath string, seen map[string]bool) error {
+	if seen[drvPath] {
+		return nil
+	}
+	seen[drvPath] = true
+	gd, ok := ev.RegisteredDerivation(drvPath)
+	if !ok {
+		return fmt.Errorf("derivation %s was not registered during eval", drvPath)
+	}
+	for dep := range gd.InputDerivations {
+		if err := writeRegisteredDrvClosure(st, ev, dep, seen); err != nil {
+			return err
+		}
+	}
+	aterm, err := eval.SerializeGoNixDerivation(gd)
+	if err != nil {
+		return err
+	}
+	return st.WriteDerivation(aterm, drvPath)
 }

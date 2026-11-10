@@ -289,6 +289,15 @@ func (ev *Evaluator) InstantiateDerivation(attrs *Value) (string, error) {
 	return drv.DrvPath, nil
 }
 
+// LookupStrictDerivation returns the derivation value registered for drvPath.
+func (ev *Evaluator) LookupStrictDerivation(drvPath string) (*DerivationValue, bool) {
+	if ev == nil || ev.drvStrictByPath == nil {
+		return nil, false
+	}
+	drv, ok := ev.drvStrictByPath[drvPath]
+	return drv, ok && drv != nil
+}
+
 // WriteDerivationClosure writes drv and every derivation registered while it
 // was evaluated, including dependencies that are not the top-level value.
 func (ev *Evaluator) WriteDerivationClosure(cfg store.Config, drv *DerivationValue) error {
