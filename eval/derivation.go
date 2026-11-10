@@ -183,9 +183,20 @@ func WriteDerivation(cfg store.Config, drv *DerivationValue) error {
 			return err
 		}
 	}
-	d, err := derivationValueToGoNix(drv)
+	body, err := derivationFileBody(drv)
 	if err != nil {
 		return err
+	}
+	dest := derivationOnDisk(drv.DrvPath)
+	// A previous realisation may have left the .drv read-only.
+	_ = os.Remove(dest)
+	return store.WriteTextToStore(dest, body)
+}
+
+func derivationFileBody(drv *DerivationValue) (string, error) {
+	d, err := derivationValueToGoNix(drv)
+	if err != nil {
+		return "", err
 	}
 	if drv.OutPaths != nil {
 		for name, path := range drv.OutPaths {
@@ -197,12 +208,9 @@ func WriteDerivation(cfg store.Config, drv *DerivationValue) error {
 	}
 	content := &stringsBuilder{}
 	if err := store.WriteDerivationForHash(content, d, false, nil); err != nil {
-		return err
+		return "", err
 	}
-	dest := derivationOnDisk(drv.DrvPath)
-	// A previous realisation may have left the .drv read-only.
-	_ = os.Remove(dest)
-	return store.WriteTextToStore(dest, content.String())
+	return content.String(), nil
 }
 
 // derivationOnDisk is the filesystem path for a logical .drv. When evaluation
@@ -343,7 +351,27 @@ func (ev *Evaluator) writeDrvClosure(cfg store.Config, drv *DerivationValue, see
 			return err
 		}
 	}
-	return WriteDerivation(cfg, drv)
+	return ev.writeDerivationFile(cfg, drv)
+}
+
+func (ev *Evaluator) writeDerivationFile(cfg store.Config, drv *DerivationValue) error {
+	if drv.DrvPath == "" {
+		var err error
+		drv.DrvPath, drv.OutPaths, err = computeDerivationPaths(ev, cfg, drv)
+		if err != nil {
+			return err
+		}
+	}
+	body, err := derivationFileBody(drv)
+	if err != nil {
+		return err
+	}
+	dest := drv.DrvPath
+	if ev != nil {
+		dest = ev.physicalStorePath(drv.DrvPath)
+	}
+	_ = os.Remove(dest)
+	return store.WriteTextToStore(dest, body)
 }
 
 // PrepareDerivationPaths fills drvPath and output paths on drv the same way as derivationStrict.

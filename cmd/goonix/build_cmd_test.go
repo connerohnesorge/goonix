@@ -39,7 +39,7 @@ func TestGoonixBuildEchoHiInTempStore(t *testing.T) {
 		bin = out
 	}
 	args := []string{"build", "--store", storeRoot}
-	if err := exec.Command("unshare", "-m", "true").Run(); err != nil {
+	if err := exec.Command("unshare", "-rm", "true").Run(); err != nil {
 		args = append(args, "--allow-relocated-store")
 	}
 	args = append(args, nixFile)
@@ -86,7 +86,7 @@ func TestGoonixBuildDrvFileHashesToItsPath(t *testing.T) {
 	}
 	bin := buildGoonix(t, root)
 	args := []string{"build", "--store", storeRoot}
-	if err := exec.Command("unshare", "-m", "true").Run(); err != nil {
+	if err := exec.Command("unshare", "-rm", "true").Run(); err != nil {
 		args = append(args, "--allow-relocated-store")
 	}
 	args = append(args, nixFile)

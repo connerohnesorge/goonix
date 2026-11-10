@@ -40,8 +40,7 @@ in derivation {
 	if err := os.MkdirAll(instRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, "instantiate", nixFile)
-	cmd.Env = append(os.Environ(), "GOONIX_CHROOT_PHYS="+instRoot)
+	cmd := exec.Command(bin, "instantiate", "--store", instRoot, nixFile)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("goonix instantiate: %v\n%s", err, out)
@@ -54,7 +53,7 @@ in derivation {
 
 	buildStore := filepath.Join(root, "build-store")
 	args := []string{"build", "--store", buildStore}
-	if err := exec.Command("unshare", "-m", "true").Run(); err != nil {
+	if err := exec.Command("unshare", "-rm", "true").Run(); err != nil {
 		args = append(args, "--allow-relocated-store")
 	}
 	args = append(args, nixFile)

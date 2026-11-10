@@ -133,14 +133,19 @@ func cmdEval(args []string) {
 
 func cmdInstantiate(args []string) {
 	fs := flag.NewFlagSet("instantiate", flag.ExitOnError)
-	storeDir := fs.String("store", store.DefaultStoreDir, "store directory")
+	storeFlag := fs.String("store", "", "physical store root (contains store/ subdirectory)")
 	_ = fs.Parse(args)
 	rest := fs.Args()
 	if len(rest) != 1 {
 		fmt.Fprintln(os.Stderr, "instantiate expects one file argument")
 		os.Exit(2)
 	}
-	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{Root: *storeDir})
+	// --store is the same physical root build uses. Logical paths stay /nix/store.
+	var eff eval.Effects = eval.IOEffects{}
+	if *storeFlag != "" {
+		eff = eval.ChrootIOEffects{PhysRoot: *storeFlag}
+	}
+	ev := eval.NewEvaluator().WithEffects(eff)
 	ev.SetCurFile(rest[0])
 	expr, err := parser.ParseFile(rest[0])
 	if err != nil {
@@ -157,7 +162,7 @@ func cmdInstantiate(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	cfg := store.Config{StoreDir: *storeDir}
+	cfg := store.Config{}
 	if drvPath, err := eval.ForceStrictDrvPath(ev, fv); err == nil {
 		drv, ok := ev.LookupStrictDerivation(drvPath)
 		if !ok {
