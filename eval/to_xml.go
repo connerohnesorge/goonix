@@ -5,7 +5,6 @@
 package eval
 
 import (
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -219,10 +218,7 @@ func attrNames(ev *Evaluator, set *Value) []string {
 }
 
 func nixXMLFloat(f float64) string {
-	if !math.IsInf(f, 0) && !math.IsNaN(f) && f == math.Trunc(f) && f >= math.MinInt64 && f <= math.MaxInt64 {
-		return strconv.FormatInt(int64(f), 10)
-	}
-	return strconv.FormatFloat(f, 'f', -1, 64)
+	return strconv.FormatFloat(f, 'g', 6, 64)
 }
 
 func xmlEscape(s string) string {

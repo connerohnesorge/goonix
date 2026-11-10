@@ -8,6 +8,28 @@ import (
 	"github.com/connerohnesorge/goonix/parser"
 )
 
+func TestToXMLFloatMatchesNix(t *testing.T) {
+	lay := oracle.MustLayout(t)
+	exprs := []string{
+		`builtins.toXML { a = 1.0e20; }`,
+		`builtins.toXML { a = 1.0e-7; }`,
+		`builtins.toXML { a = 100.0; }`,
+		`builtins.toXML { a = 1.0e6; }`,
+		`builtins.toXML { a = 1234567.0; }`,
+		`builtins.toXML { a = 1.2345678901234567; }`,
+	}
+	for _, expr := range exprs {
+		want := lay.EvalRawExact(t, expr)
+		got, err := goEvalString(t, expr)
+		if err != nil {
+			t.Fatalf("%s: %v", expr, err)
+		}
+		if got != want {
+			t.Fatalf("%s\nnix=%q\ngo=%q", expr, want, got)
+		}
+	}
+}
+
 func TestFromJSONNumberKindMatchesNix(t *testing.T) {
 	lay := oracle.MustLayout(t)
 	exprs := []string{
