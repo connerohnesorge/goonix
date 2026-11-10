@@ -5,6 +5,7 @@
 package builder
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"strings"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
+	"github.com/nix-community/go-nix/pkg/nixbase32"
 	"github.com/nix-community/go-nix/pkg/nixhash"
 
 	"github.com/connerohnesorge/goonix/store"
@@ -395,7 +397,11 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 	}
 	cmd := exec.Command(builder, args...)
 	cmd.Dir = tmpDir
-	cmd.Env = b.buildEnvLogical(d, outPaths, tmpDir)
+	env, err := b.buildEnvLogical(d, outPaths, tmpDir)
+	if err != nil {
+		return err
+	}
+	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := b.execBuildCommand(cmd); err != nil {
@@ -411,7 +417,12 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 			args[i] = b.rewriteValuePhys(a, d, outPaths, physOuts)
 		}
 		cmd.Args = append([]string{builder}, args...)
-		cmd.Env = b.buildEnvPhys(d, outPaths, physOuts, tmpDir)
+		env, err = b.buildEnvPhys(d, outPaths, physOuts, tmpDir)
+		if err != nil {
+			removePhysOutputs(physOuts)
+			return err
+		}
+		cmd.Env = env
 		if err := cmd.Run(); err != nil {
 			removePhysOutputs(physOuts)
 			return err
@@ -453,13 +464,24 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 	return nil
 }
 
-func (b *Builder) buildEnvLogical(d *gonixdrv.Derivation, outPaths map[string]string, tmpDir string) []string {
+func (b *Builder) buildEnvLogical(d *gonixdrv.Derivation, outPaths map[string]string, tmpDir string) ([]string, error) {
 	cfg := b.Store.Config()
 	storeDir := cfg.LogicalStoreDir()
 	structured := d.Env["__json"] != ""
+	passAsFile := map[string]struct{}{}
+	if !structured {
+		for _, name := range strings.Fields(d.Env["passAsFile"]) {
+			if name != "" {
+				passAsFile[name] = struct{}{}
+			}
+		}
+	}
 	keys := make([]string, 0, len(d.Env)+8)
 	if !structured {
 		for k := range d.Env {
+			if _, skip := passAsFile[k]; skip {
+				continue
+			}
 			keys = append(keys, k)
 		}
 	}
@@ -471,6 +493,14 @@ func (b *Builder) buildEnvLogical(d *gonixdrv.Derivation, outPaths map[string]st
 	if !structured {
 		for name, logical := range outPaths {
 			env = append(env, name+"="+logical)
+		}
+		if err := b.writePassAsFiles(passAsFile, d, tmpDir, func(v string) string {
+			return b.rewriteValueLogical(v, d, outPaths)
+		}); err != nil {
+			return nil, err
+		}
+		for name := range passAsFile {
+			env = append(env, name+"Path="+filepath.Join(tmpDir, passAsFileName(name)))
 		}
 	}
 	env = append(env, b.structuredAttrsEnv(d, tmpDir)...)
@@ -494,11 +524,29 @@ func (b *Builder) buildEnvLogical(d *gonixdrv.Derivation, outPaths map[string]st
 	} else {
 		env = append(env, "NIX_LOG_FD="+strconv.Itoa(2))
 	}
-	return env
+	return env, nil
 }
 
-func (b *Builder) buildEnvPhys(d *gonixdrv.Derivation, outPaths, physOuts map[string]string, tmpDir string) []string {
-	env := b.buildEnvLogical(d, outPaths, tmpDir)
+func passAsFileName(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return ".attr-" + nixbase32.EncodeToString(sum[:])
+}
+
+func (b *Builder) writePassAsFiles(names map[string]struct{}, d *gonixdrv.Derivation, tmpDir string, rewrite func(string) string) error {
+	for name := range names {
+		body := rewrite(d.Env[name])
+		if err := os.WriteFile(filepath.Join(tmpDir, passAsFileName(name)), []byte(body), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Builder) buildEnvPhys(d *gonixdrv.Derivation, outPaths, physOuts map[string]string, tmpDir string) ([]string, error) {
+	env, err := b.buildEnvLogical(d, outPaths, tmpDir)
+	if err != nil {
+		return nil, err
+	}
 	for i, e := range env {
 		key, val, ok := strings.Cut(e, "=")
 		if !ok {
@@ -510,7 +558,20 @@ func (b *Builder) buildEnvPhys(d *gonixdrv.Derivation, outPaths, physOuts map[st
 		}
 		env[i] = key + "=" + b.rewriteValuePhys(val, d, outPaths, physOuts)
 	}
-	return env
+	if d.Env["__json"] == "" {
+		names := map[string]struct{}{}
+		for _, name := range strings.Fields(d.Env["passAsFile"]) {
+			if name != "" {
+				names[name] = struct{}{}
+			}
+		}
+		if err := b.writePassAsFiles(names, d, tmpDir, func(v string) string {
+			return b.rewriteValuePhys(v, d, outPaths, physOuts)
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return env, nil
 }
 
 func (b *Builder) rewriteValuePhys(val string, d *gonixdrv.Derivation, outPaths, physOuts map[string]string) string {
