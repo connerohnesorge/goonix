@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -504,27 +505,99 @@ func (b *Builder) buildEnvLogical(d *gonixdrv.Derivation, outPaths map[string]st
 		}
 	}
 	env = append(env, b.structuredAttrsEnv(d, tmpDir)...)
-	cores := d.Env["NIX_BUILD_CORES"]
-	if cores == "" {
-		cores = "1"
-	}
 	env = append(env,
 		"NIX_BUILD_TOP="+tmpDir,
 		"TMPDIR="+tmpDir,
 		"TEMP="+tmpDir,
 		"TMP="+tmpDir,
 		"TEMPDIR="+tmpDir,
-		"NIX_BUILD_CORES="+cores,
 		"NIX_STORE="+storeDir,
 		"HOME=/homeless-shelter",
 		"PATH=/path-not-set",
 	)
+	// A derivation that sets NIX_BUILD_CORES keeps that value. Otherwise the
+	// cores setting is used, and an unset setting means all CPUs. 0 is passed
+	// through: GNU make treats -j0 as every CPU. TERM is always the value Nix
+	// 2.24.9 writes after the derivation environment.
+	env = setEnv(env, "NIX_BUILD_CORES", builderCores(d.Env["NIX_BUILD_CORES"]))
+	env = setEnv(env, "TERM", "xterm-256color")
 	if fd := os.Getenv("NIX_LOG_FD"); fd != "" {
 		env = append(env, "NIX_LOG_FD="+fd)
 	} else {
 		env = append(env, "NIX_LOG_FD="+strconv.Itoa(2))
 	}
 	return env, nil
+}
+
+func setEnv(env []string, key, val string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			env[i] = prefix + val
+			return env
+		}
+	}
+	return append(env, prefix+val)
+}
+
+func builderCores(drvValue string) string {
+	if drvValue != "" {
+		return drvValue
+	}
+	if v, ok := builderNixSetting("cores"); ok && v != "" {
+		return v
+	}
+	n := runtime.NumCPU()
+	if n < 1 {
+		n = 1
+	}
+	return strconv.Itoa(n)
+}
+
+func builderNixSetting(key string) (string, bool) {
+	if v, ok := parseNixConfText(os.Getenv("NIX_CONFIG"))[key]; ok {
+		return v, true
+	}
+	dirs := os.Getenv("NIX_CONF_DIR")
+	if dirs != "" {
+		for _, dir := range strings.Split(dirs, ":") {
+			if dir == "" {
+				continue
+			}
+			if v, ok := parseNixConfFile(filepath.Join(dir, "nix.conf"))[key]; ok {
+				return v, true
+			}
+		}
+		return "", false
+	}
+	if v, ok := parseNixConfFile("/etc/nix/nix.conf")[key]; ok {
+		return v, true
+	}
+	return "", false
+}
+
+func parseNixConfFile(path string) map[string]string {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return parseNixConfText(string(body))
+}
+
+func parseNixConfText(text string) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	return out
 }
 
 func passAsFileName(name string) string {

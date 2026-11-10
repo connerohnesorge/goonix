@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -75,6 +77,89 @@ func TestSandboxHidesHostAndRunsAsNixbld(t *testing.T) {
 		if !before[m] {
 			t.Fatalf("mount marker left behind: %s", m)
 		}
+	}
+}
+
+func TestSandboxLoopbackCoresAndTerm(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	if !userMountNSAvailable() {
+		t.Skip("user namespace unavailable")
+	}
+	conf := t.TempDir()
+	t.Setenv("NIX_CONF_DIR", conf)
+	t.Setenv("NIX_CONFIG", "cores = 0\n")
+	st, err := local.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	script := `
+	    found=
+	    while IFS= read -r line; do
+	      case $line in
+	        *127.0.0.1*) found=1 ;;
+	      esac
+	    done < /proc/net/fib_trie
+	    if [ -z "$found" ]; then
+	      printf 'no-lo\n' > "$out"
+	      exit 1
+	    fi
+	    printf '%s %s\n' "$TERM" "$NIX_BUILD_CORES" > "$out"
+	`
+	attrs := `{
+	  name = "envprobe";
+	  system = "x86_64-linux";
+	  builder = "/bin/sh";
+	  TERM = "vt100";
+	  args = [ "-c" ''` + script + `'' ];
+	}`
+	if err := realiseAttrs(t, st, attrs, false); err != nil {
+		t.Fatal(err)
+	}
+	if body := readStoreFileSkipping(t, st, ""); body != "xterm-256color 0\n" {
+		t.Fatalf("term/cores %q", body)
+	}
+
+	t.Setenv("NIX_CONFIG", "cores = 2\n")
+	st2, err := local.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	drvCores := `{
+	  name = "envprobe-drv";
+	  system = "x86_64-linux";
+	  builder = "/bin/sh";
+	  NIX_BUILD_CORES = "9";
+	  args = [ "-c" "printf '%s\n' \"$NIX_BUILD_CORES\" > \"$out\"" ];
+	}`
+	if err := realiseAttrs(t, st2, drvCores, false); err != nil {
+		t.Fatal(err)
+	}
+	if body := readStoreFileSkipping(t, st2, ""); body != "9\n" {
+		t.Fatalf("drv cores %q", body)
+	}
+
+	t.Setenv("NIX_CONFIG", "sandbox = true\n")
+	st3, err := local.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st3.Close()
+	plain := `{
+	  name = "envprobe-default";
+	  system = "x86_64-linux";
+	  builder = "/bin/sh";
+	  args = [ "-c" "printf '%s\n' \"$NIX_BUILD_CORES\" > \"$out\"" ];
+	}`
+	if err := realiseAttrs(t, st3, plain, false); err != nil {
+		t.Fatal(err)
+	}
+	want := strconv.Itoa(runtime.NumCPU()) + "\n"
+	if body := readStoreFileSkipping(t, st3, ""); body != want {
+		t.Fatalf("default cores %q want %q", body, want)
 	}
 }
 

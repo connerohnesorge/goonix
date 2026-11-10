@@ -8,6 +8,7 @@ package builder
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,19 +28,53 @@ func init() {
 }
 
 type sandboxSpec struct {
-	StorePhys string   `json:"storePhys"`
-	BuildDir  string   `json:"buildDir"`
-	Sentinel  string   `json:"sentinel"`
-	Builder   string   `json:"builder"`
-	Args      []string `json:"args"`
-	Env       []string `json:"env"`
-	Closure   []string `json:"closure"`
-	Outputs   []string `json:"outputs"`
+	StorePhys  string   `json:"storePhys"`
+	BuildDir   string   `json:"buildDir"`
+	Sentinel   string   `json:"sentinel"`
+	Builder    string   `json:"builder"`
+	Args       []string `json:"args"`
+	Env        []string `json:"env"`
+	Closure    []string `json:"closure"`
+	Outputs    []string `json:"outputs"`
+	IsolateNet bool     `json:"isolateNet"`
 }
 
 type sandboxExit int
 
 func (e sandboxExit) Error() string { return fmt.Sprintf("builder exit %d", int(e)) }
+
+// bringUpLoopback sets lo up with 127.0.0.1. A fresh network namespace has
+// the interface down, so a builder cannot reach localhost until this runs.
+// Call it only inside the build network namespace.
+func bringUpLoopback() error {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	ifr, err := unix.NewIfreq("lo")
+	if err != nil {
+		return err
+	}
+	if err := unix.IoctlIfreq(fd, unix.SIOCGIFFLAGS, ifr); err != nil {
+		return err
+	}
+	ifr.SetUint16(ifr.Uint16() | unix.IFF_UP | unix.IFF_LOOPBACK | unix.IFF_RUNNING)
+	if err := unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, ifr); err != nil {
+		return err
+	}
+	addr, err := unix.NewIfreq("lo")
+	if err != nil {
+		return err
+	}
+	if err := addr.SetInet4Addr([]byte{127, 0, 0, 1}); err != nil {
+		return err
+	}
+	if err := unix.IoctlIfreq(fd, unix.SIOCSIFADDR, addr); err != nil && !errors.Is(err, unix.EEXIST) {
+		return err
+	}
+	return nil
+}
 
 func sandboxMain() int {
 	err := sandboxSetup()
@@ -117,6 +152,11 @@ func sandboxSetup() error {
 	}
 	if err := unix.Mount("proc", filepath.Join(root, "proc"), "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
 		return err
+	}
+	if spec.IsolateNet {
+		if err := bringUpLoopback(); err != nil {
+			return err
+		}
 	}
 	if err := unix.Mount("tmpfs", filepath.Join(root, "nix/store"), "tmpfs", 0, "mode=1777"); err != nil {
 		return err

@@ -57,14 +57,15 @@ func (b *Builder) execBuildCommandMount(cmd *exec.Cmd) error {
 		args = []string{cmd.Path}
 	}
 	spec := sandboxSpec{
-		StorePhys: storePhys,
-		BuildDir:  cmd.Dir,
-		Sentinel:  sentinel,
-		Builder:   cmd.Path,
-		Args:      args,
-		Env:       sandboxBuildEnv(cmd.Env, cmd.Dir),
-		Closure:   append([]string(nil), b.plan.closure...),
-		Outputs:   append([]string(nil), b.plan.outputs...),
+		StorePhys:  storePhys,
+		BuildDir:   cmd.Dir,
+		Sentinel:   sentinel,
+		Builder:    cmd.Path,
+		Args:       args,
+		Env:        sandboxBuildEnv(cmd.Env, cmd.Dir),
+		Closure:    append([]string(nil), b.plan.closure...),
+		Outputs:    append([]string(nil), b.plan.outputs...),
+		IsolateNet: b.plan.isolateNet,
 	}
 	f, err := os.CreateTemp("", "goonix-sandbox-spec-")
 	if err != nil {
