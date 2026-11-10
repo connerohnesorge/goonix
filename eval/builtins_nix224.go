@@ -737,7 +737,7 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		} else if ok {
 			submodules = b
 		}
-		dir, cleanup, meta, err := gitExportTreeMeta(rawURL, rev, !shallow)
+		dir, cleanup, meta, err := gitExportTreeMeta(rawURL, rev, !shallow, submodules)
 		if err != nil {
 			return nil, err
 		}
@@ -881,6 +881,12 @@ func (ev *Evaluator) fetchTreeURL(pos parser.Pos, raw string) (*Value, error) {
 			return nil, evalErr(pos, "%s", err.Error())
 		}
 		return ev.fetchTreeSourceHut(parsed.Owner, parsed.Repo, firstNonEmpty(parsed.Rev, parsed.Ref))
+	case strings.HasPrefix(raw, "git+http://"), strings.HasPrefix(raw, "git+https://"), strings.HasPrefix(raw, "git+ssh://"), strings.HasPrefix(raw, "git+file://"):
+		parsed, err := parseFlakeRefString(raw)
+		if err != nil {
+			return nil, evalErr(pos, "%s", err.Error())
+		}
+		return ev.fetchTreeGit(parsed)
 	case strings.HasPrefix(raw, "flake:"):
 		parsed, err := parseFlakeRefString(raw)
 		if err != nil {
@@ -997,6 +1003,26 @@ func fetchTreeRevOrRef(ev *Evaluator, params *Value) string {
 		return ref
 	}
 	return ""
+}
+
+func (ev *Evaluator) fetchTreeGit(f flakeRef) (*Value, error) {
+	rev := f.Rev
+	if rev == "" {
+		rev = f.Ref
+	}
+	sub := f.Submodules != nil && *f.Submodules
+	dir, cleanup, meta, err := gitExportTreeMeta(f.URL, rev, false, sub)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	if f.Submodules != nil {
+		meta.submodules = f.Submodules
+	} else {
+		off := false
+		meta.submodules = &off
+	}
+	return ev.treeFromDir(parser.Pos{}, dir, "source", meta, false)
 }
 
 func (ev *Evaluator) fetchTreeGitHub(owner, repo, rev string) (*Value, error) {

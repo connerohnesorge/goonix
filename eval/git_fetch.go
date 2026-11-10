@@ -6,6 +6,7 @@ package eval
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,11 +15,16 @@ import (
 )
 
 func gitExportTree(url, rev string) (checkoutDir string, cleanup func(), err error) {
-	dir, cleanup, _, err := gitExportTreeMeta(url, rev, false)
+	dir, cleanup, _, err := gitExportTreeMeta(url, rev, false, false)
 	return dir, cleanup, err
 }
 
-func gitExportTreeMeta(url, rev string, withCount bool) (checkoutDir string, cleanup func(), meta treeMeta, err error) {
+func gitCloneURL(raw string) string {
+	base, _, _ := strings.Cut(raw, "?")
+	return base
+}
+
+func gitExportTreeMeta(url, rev string, withCount, submodules bool) (checkoutDir string, cleanup func(), meta treeMeta, err error) {
 	if _, err := exec.LookPath("git"); err != nil {
 		return "", nil, treeMeta{}, fmt.Errorf("git not found on PATH")
 	}
@@ -28,7 +34,10 @@ func gitExportTreeMeta(url, rev string, withCount bool) (checkoutDir string, cle
 	}
 	cleanup = func() { os.RemoveAll(tmp) }
 	repo := filepath.Join(tmp, "repo")
-	if err := runGit("", "clone", "--quiet", url, repo); err != nil {
+	if rev == "" {
+		rev = "HEAD"
+	}
+	if err := runGit("", "clone", "--quiet", gitCloneURL(url), repo); err != nil {
 		cleanup()
 		return "", nil, treeMeta{}, err
 	}
@@ -67,7 +76,18 @@ func gitExportTreeMeta(url, rev string, withCount bool) (checkoutDir string, cle
 		}
 		meta.revCount = &count
 	}
-	if err := os.RemoveAll(filepath.Join(repo, ".git")); err != nil {
+	if submodules {
+		if err := runGit(repo, "submodule", "update", "--init", "--recursive"); err != nil {
+			cleanup()
+			return "", nil, treeMeta{}, err
+		}
+	} else if err := removeGitlinks(repo); err != nil {
+		// A gitlink with no checkout is an empty directory. Nix's export
+		// omits it unless submodules=1.
+		cleanup()
+		return "", nil, treeMeta{}, err
+	}
+	if err := removeGitDirs(repo); err != nil {
 		cleanup()
 		return "", nil, treeMeta{}, err
 	}
@@ -85,7 +105,46 @@ func gitOutput(dir string, args ...string) (string, error) {
 	return string(out), nil
 }
 
+func removeGitlinks(repo string) error {
+	out, err := gitOutput(repo, "ls-files", "-s")
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "160000 ") {
+			continue
+		}
+		_, path, ok := strings.Cut(line, "\t")
+		if !ok || path == "" {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(repo, path)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeGitDirs(root string) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || path == root {
+			return err
+		}
+		if d.Name() != ".git" {
+			return nil
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return fs.SkipDir
+		}
+		return nil
+	})
+}
+
 func runGit(dir string, args ...string) error {
+	args = append([]string{"-c", "protocol.file.allow=always"}, args...)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")

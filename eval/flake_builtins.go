@@ -19,17 +19,18 @@ import (
 )
 
 type flakeRef struct {
-	Type    string
-	ID      string
-	Owner   string
-	Repo    string
-	Rev     string
-	Ref     string
-	Dir     string
-	Host    string
-	NarHash string
-	Path    string
-	URL     string
+	Type       string
+	ID         string
+	Owner      string
+	Repo       string
+	Rev        string
+	Ref        string
+	Dir        string
+	Host       string
+	NarHash    string
+	Path       string
+	URL        string
+	Submodules *bool
 }
 
 func flakeIDPattern(s string) bool {
@@ -224,7 +225,39 @@ func parseURLFlakeRef(typ, raw string) (flakeRef, error) {
 		out.Ref = ref
 	}
 	out.NarHash = q["narHash"]
+	if typ == "git" {
+		// Git lifts submodules out of the URL. dir stays in the URL and is
+		// also the flake subdirectory getFlake evaluates.
+		if v, ok := q["submodules"]; ok {
+			b := v == "1"
+			out.Submodules = &b
+			delete(q, "submodules")
+		}
+		if dir := q["dir"]; dir != "" {
+			out.Dir = dir
+		}
+		delete(q, "rev")
+		delete(q, "ref")
+		delete(q, "narHash")
+		out.URL = base + sortedQuery(q)
+	}
 	return out, nil
+}
+
+func sortedQuery(q map[string]string) string {
+	if len(q) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(q))
+	for k := range q {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, percentEncodeQuery(k)+"="+percentEncodeQuery(q[k]))
+	}
+	return "?" + strings.Join(parts, "&")
 }
 
 func isGitRef(s string) bool {
@@ -330,13 +363,36 @@ func (f flakeRef) String() string {
 		return s + "?" + strings.Join(parts, "&")
 	case "path":
 		return "path:" + f.Path
-	case "git", "hg":
+	case "git":
+		return gitFlakeURLString(f)
+	case "hg":
 		return flakeURLString(f.Type+"+"+f.URL, f)
 	case "tarball", "file":
 		return flakeURLString(f.URL, f)
 	default:
 		return ""
 	}
+}
+
+func gitFlakeURLString(f flakeRef) string {
+	base, query, _ := strings.Cut(f.URL, "?")
+	q := decodeFlakeQuery(query)
+	if f.Ref != "" {
+		q["ref"] = f.Ref
+	}
+	if f.Rev != "" {
+		q["rev"] = f.Rev
+	}
+	if f.NarHash != "" {
+		q["narHash"] = f.NarHash
+	}
+	if f.Submodules != nil && *f.Submodules {
+		q["submodules"] = "1"
+	}
+	if f.Dir != "" {
+		q["dir"] = f.Dir
+	}
+	return "git+" + base + sortedQuery(q)
 }
 
 func flakeURLString(base string, f flakeRef) string {
@@ -413,6 +469,14 @@ func flakeRefAttrs(ev *Evaluator, f flakeRef, pos parser.Pos) *Value {
 		}
 		if f.NarHash != "" {
 			put("narHash", f.NarHash)
+		}
+		if f.Type == "git" {
+			if f.Dir != "" {
+				put("dir", f.Dir)
+			}
+			if f.Submodules != nil {
+				set.Attrs.Binds[ev.Intern.Intern("submodules")] = &AttrBinding{Value: Bool(*f.Submodules)}
+			}
 		}
 	}
 	return set
@@ -516,6 +580,16 @@ func builtinFlakeRefToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 		if narHash, err := getAttrString(ev, set, "narHash"); err == nil {
 			f.NarHash = narHash
 		}
+		if typ == "git" {
+			if dir, err := getAttrString(ev, set, "dir"); err == nil && dir != "" {
+				f.Dir = dir
+			}
+			if b, ok, err := getAttrBool(ev, set, "submodules"); err != nil {
+				return nil, err
+			} else if ok {
+				f.Submodules = &b
+			}
+		}
 	default:
 		return nil, evalErr(pos, "unknown flake reference type '%s'", typ)
 	}
@@ -566,8 +640,23 @@ func builtinGetFlake(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 		}
 		defer os.RemoveAll(filepath.Dir(unpacked))
 		dir = stripSingleDir(unpacked)
+	} else if parsed.Type == "git" {
+		rev := parsed.Rev
+		if rev == "" {
+			rev = parsed.Ref
+		}
+		sub := parsed.Submodules != nil && *parsed.Submodules
+		var err error
+		dir, cleanup, _, err = gitExportTreeMeta(gitCloneURL(parsed.URL), rev, false, sub)
+		if err != nil {
+			return nil, evalErr(pos, "%s", err.Error())
+		}
+		defer cleanup()
 	} else if parsed.Type != "path" {
 		return nil, evalErr(pos, "flake reference '%s' is not an absolute path", ref)
+	}
+	if parsed.Dir != "" {
+		dir = filepath.Join(dir, parsed.Dir)
 	}
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
