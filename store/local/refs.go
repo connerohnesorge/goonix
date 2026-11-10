@@ -14,9 +14,31 @@ import (
 
 // ScanReferences finds store path references in data by matching known valid paths.
 func (s *Store) ScanReferences(data []byte) ([]string, error) {
+	return s.scanReferences(data, nil)
+}
+
+// scanReferences matches data against registered paths plus extra candidates.
+// extra holds paths that are not valid yet: the output being scanned and its
+// sibling outputs. Nix's referenceable set is the input closure plus every
+// output of the derivation, including the output itself.
+func (s *Store) scanReferences(data []byte, extra []string) ([]string, error) {
 	candidates, err := s.listValidPaths()
 	if err != nil {
 		return nil, err
+	}
+	seen := make(map[string]struct{}, len(candidates)+len(extra))
+	for _, c := range candidates {
+		seen[c] = struct{}{}
+	}
+	for _, c := range extra {
+		if c == "" {
+			continue
+		}
+		if _, ok := seen[c]; ok {
+			continue
+		}
+		seen[c] = struct{}{}
+		candidates = append(candidates, c)
 	}
 	if len(candidates) == 0 {
 		return nil, nil
@@ -31,19 +53,29 @@ func (s *Store) ScanReferences(data []byte) ([]string, error) {
 	return scanner.References(), nil
 }
 
-// ScanPathReferences scans a store object (file or directory tree) for references.
+// ScanPathReferences scans a store object (file or directory tree) for references
+// to registered paths and to logicalPath itself.
 func (s *Store) ScanPathReferences(logicalPath string) ([]string, error) {
+	return s.ScanPathReferencesAmong(logicalPath, []string{logicalPath})
+}
+
+// ScanPathReferencesAmong scans logicalPath for references to registered paths
+// and to also (the output itself and its sibling outputs).
+func (s *Store) ScanPathReferencesAmong(logicalPath string, also []string) ([]string, error) {
 	phys := PhysicalPath(s.Root, logicalPath)
 	info, err := os.Stat(phys)
 	if err != nil {
 		return nil, err
 	}
+	extra := make([]string, 0, len(also)+1)
+	extra = append(extra, logicalPath)
+	extra = append(extra, also...)
 	if !info.IsDir() {
 		data, err := os.ReadFile(phys)
 		if err != nil {
 			return nil, err
 		}
-		return s.ScanReferences(data)
+		return s.scanReferences(data, extra)
 	}
 	merged := map[string]struct{}{}
 	err = filepath.WalkDir(phys, func(path string, d os.DirEntry, err error) error {
@@ -60,7 +92,7 @@ func (s *Store) ScanPathReferences(logicalPath string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		refs, err := s.ScanReferences(data)
+		refs, err := s.scanReferences(data, extra)
 		if err != nil {
 			return err
 		}
@@ -88,9 +120,6 @@ func (s *Store) RegisterReferences(referrer string, refs []string) error {
 	}
 	defer tx.Rollback()
 	for _, ref := range refs {
-		if ref == referrer {
-			continue
-		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO Refs(referrer, reference) VALUES (?, ?)`, referrer, ref); err != nil {
 			return err
 		}

@@ -158,6 +158,24 @@ func TestStructuredAttrsBuildMatchesNix(t *testing.T) {
 			t.Fatalf("maxSize error\ngo=%s\nnix=%s", goErr, nixErr)
 		}
 	}
+
+	selfRef := `builtins.derivationStrict {
+	  __structuredAttrs = true;
+	  name = "sa-selfref";
+	  system = "x86_64-linux";
+	  builder = "/bin/sh";
+	  outputChecks = { out = { allowedReferences = [ ]; }; };
+	  args = [ "-c" "printf %s \"$0\" > \"$0\"" (builtins.placeholder "out") ];
+	}`
+	_, goSelf := buildStrictEval(t, st, selfRef)
+	if goSelf == nil {
+		t.Fatal("allowedReferences = [] must reject an output that contains its own path")
+	}
+	nixSelf := realiseStructuredErr(t, t.TempDir(), selfRef)
+	frag := "is not allowed to refer to the following paths"
+	if !strings.Contains(goSelf.Error(), frag) || !strings.Contains(nixSelf, frag) {
+		t.Fatalf("self-reference check\ngo=%s\nnix=%s", goSelf, nixSelf)
+	}
 }
 
 func realiseStructuredErr(t *testing.T, storeRoot, expr string) string {

@@ -417,10 +417,14 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 			return err
 		}
 	}
+	also := make([]string, 0, len(outPaths))
+	for _, logicalOut := range outPaths {
+		also = append(also, logicalOut)
+	}
 	infos := make(map[string]builtOutput, len(outPaths))
 	for outName, logicalOut := range outPaths {
 		physOut := physOuts[outName]
-		refs, err := b.Store.ScanPathReferences(logicalOut)
+		refs, err := b.Store.ScanPathReferencesAmong(logicalOut, also)
 		if err != nil {
 			removePhysOutputs(physOuts)
 			return err
