@@ -12,6 +12,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -805,15 +806,21 @@ func builtinFetchTree(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 	}
 }
 
+// sourcehutRoot and gitlabAPI are the hosts fetchTree uses. Tests point
+// them at a local server.
+var (
+	sourcehutRoot = "https://git.sr.ht"
+	gitlabAPI     = "https://gitlab.com/api/v4"
+)
+
 func downloadChecked(rawURL string) ([]byte, error) {
-	if u, err := url.Parse(rawURL); err == nil && strings.HasSuffix(u.Hostname(), "sr.ht") {
-		// git.sr.ht answers Nix's libcurl with HTTP error 404, often only
-		// after the TLS handshake has sat for a couple of minutes. A 20s
-		// client gives up first. Match that fetch: HTTP/2, IPv4, no
-		// proxy, and a wait long enough for the 404.
-		return downloadWithCurl(rawURL)
-	}
 	client := &http.Client{Timeout: 20 * time.Second}
+	if u, err := url.Parse(rawURL); err == nil && strings.HasSuffix(u.Hostname(), "sr.ht") {
+		// The default HTTP/2 transport has stalled in the TLS handshake
+		// against git.sr.ht and never surfaced the 404 Nix reports. Forcing
+		// HTTP/1.1 gets that status from the same host.
+		client = srhtClient()
+	}
 	resp, err := client.Get(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
@@ -829,61 +836,13 @@ func downloadChecked(rawURL string) ([]byte, error) {
 	return body, nil
 }
 
-func curlEnvWithoutProxy() []string {
-	var out []string
-	for _, kv := range os.Environ() {
-		key, _, ok := strings.Cut(kv, "=")
-		if !ok {
-			continue
-		}
-		if strings.Contains(strings.ToLower(key), "proxy") {
-			continue
-		}
-		out = append(out, kv)
+func srhtClient() *http.Client {
+	tr := &http.Transport{
+		ForceAttemptHTTP2: false,
+		TLSClientConfig:   &tls.Config{NextProtos: []string{"http/1.1"}},
+		TLSNextProto:      map[string]func(string, *tls.Conn) http.RoundTripper{},
 	}
-	return out
-}
-
-func downloadWithCurl(rawURL string) ([]byte, error) {
-	if _, err := exec.LookPath("curl"); err != nil {
-		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, err.Error())
-	}
-	dir, err := os.MkdirTemp("", "goonix-curl-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
-	bodyPath := filepath.Join(dir, "body")
-	// Nix retries a failed download (download-attempts defaults to 5).
-	// git.sr.ht sometimes refuses the connection and sometimes answers
-	// only after a long TLS handshake.
-	cmd := exec.Command("curl", "-4", "--http2", "-sS", "-L", "--max-redirs", "10",
-		"--connect-timeout", "15", "--max-time", "240",
-		"--retry", "4", "--retry-all-errors", "--retry-delay", "1", "--retry-max-time", "180",
-		"-o", bodyPath, "-w", "%{http_code}", rawURL)
-	cmd.Env = curlEnvWithoutProxy()
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	runErr := cmd.Run()
-	body, readErr := os.ReadFile(bodyPath)
-	if readErr != nil && !os.IsNotExist(readErr) {
-		return nil, readErr
-	}
-	if runErr != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = runErr.Error()
-		}
-		return nil, fmt.Errorf("unable to download '%s': %s", rawURL, msg)
-	}
-	code := strings.TrimSpace(stdout.String())
-	if code != "200" {
-		status := 0
-		fmt.Sscanf(code, "%d", &status)
-		return nil, fmt.Errorf("unable to download '%s': HTTP error %d\n\nresponse body:\n\n%s", rawURL, status, body)
-	}
-	return body, nil
+	return &http.Client{Timeout: 60 * time.Second, Transport: tr}
 }
 
 func (ev *Evaluator) fetchTreeURL(pos parser.Pos, raw string) (*Value, error) {
@@ -899,17 +858,17 @@ func (ev *Evaluator) fetchTreeURL(pos parser.Pos, raw string) (*Value, error) {
 		}
 		return ev.fetchTreeGitHub(parts[0], parts[1], rev)
 	case strings.HasPrefix(raw, "gitlab:"):
-		parts := strings.Split(strings.TrimPrefix(raw, "gitlab:"), "/")
-		if len(parts) < 2 {
-			return nil, evalErr(pos, "URL '%s' is invalid", raw)
+		parsed, err := parseGitArchiveRef("gitlab", strings.TrimPrefix(raw, "gitlab:"), raw)
+		if err != nil {
+			return nil, evalErr(pos, "%s", err.Error())
 		}
-		return ev.fetchTreeGitLab(parts[0], parts[1], "")
+		return ev.fetchTreeGitLab(parsed.Owner, parsed.Repo, firstNonEmpty(parsed.Rev, parsed.Ref))
 	case strings.HasPrefix(raw, "sourcehut:"):
-		parts := strings.Split(strings.TrimPrefix(raw, "sourcehut:"), "/")
-		if len(parts) < 2 {
-			return nil, evalErr(pos, "URL '%s' is invalid", raw)
+		parsed, err := parseGitArchiveRef("sourcehut", strings.TrimPrefix(raw, "sourcehut:"), raw)
+		if err != nil {
+			return nil, evalErr(pos, "%s", err.Error())
 		}
-		return ev.fetchTreeSourceHut(parts[0], parts[1], "")
+		return ev.fetchTreeSourceHut(parsed.Owner, parsed.Repo, firstNonEmpty(parsed.Rev, parsed.Ref))
 	case strings.HasPrefix(raw, "flake:"):
 		parsed, err := parseFlakeRefString(raw)
 		if err != nil {
@@ -958,6 +917,10 @@ func archiveDownloadError(err error) error {
 }
 
 func (ev *Evaluator) fetchTreeTarball(rawURL string, strip bool) (*Value, error) {
+	return ev.fetchTreeTarballRev(rawURL, strip, "")
+}
+
+func (ev *Evaluator) fetchTreeTarballRev(rawURL string, strip bool, rev string) (*Value, error) {
 	data, err := fetchURLBytes(rawURL)
 	if err != nil {
 		return nil, archiveDownloadError(err)
@@ -979,6 +942,9 @@ func (ev *Evaluator) fetchTreeTarball(rawURL string, strip bool) (*Value, error)
 	if lm > 0 {
 		meta.hasLast = true
 		meta.lastModified = lm
+	}
+	if isGitRev(rev) {
+		meta.rev = rev
 	}
 	return ev.treeFromDir(parser.Pos{}, dest, "source", meta, false)
 }
@@ -1039,7 +1005,7 @@ func fetchGitHubTree(owner, repo, rev string) (string, func(), string, int64, er
 
 func (ev *Evaluator) fetchTreeGitLab(owner, repo, rev string) (*Value, error) {
 	project := url.PathEscape(owner + "/" + repo)
-	body, err := downloadChecked("https://gitlab.com/api/v4/projects/" + project + "/repository/commits?ref_name=" + url.QueryEscape(refOrHead(rev)))
+	body, err := downloadChecked(gitlabAPI + "/projects/" + project + "/repository/commits?ref_name=" + url.QueryEscape(refOrHead(rev)))
 	if err != nil {
 		return nil, err
 	}
@@ -1049,17 +1015,28 @@ func (ev *Evaluator) fetchTreeGitLab(owner, repo, rev string) (*Value, error) {
 	if err := json.Unmarshal(body, &commits); err != nil || len(commits) == 0 || commits[0].ID == "" {
 		return nil, fmt.Errorf("No commits returned by GitLab API -- does the git ref really exist?")
 	}
-	archive := "https://gitlab.com/api/v4/projects/" + project + "/repository/archive.tar.gz?sha=" + commits[0].ID
-	return ev.fetchTreeTarball(archive, true)
+	archive := gitlabAPI + "/projects/" + project + "/repository/archive.tar.gz?sha=" + commits[0].ID
+	return ev.fetchTreeTarballRev(archive, true, commits[0].ID)
 }
 
 func (ev *Evaluator) fetchTreeSourceHut(owner, repo, rev string) (*Value, error) {
 	ref := refOrHead(rev)
-	base := "https://git.sr.ht/" + owner + "/" + repo
+	base := sourcehutRoot + "/" + owner + "/" + repo
 	if _, err := downloadChecked(base + "/" + ref); err != nil {
 		return nil, err
 	}
-	return ev.fetchTreeTarball(base+"/archive/"+ref+".tar.gz", true)
+	known := ""
+	if isGitRev(rev) {
+		known = rev
+	}
+	return ev.fetchTreeTarballRev(base+"/archive/"+ref+".tar.gz", true, known)
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 func refOrHead(rev string) string {

@@ -7,20 +7,16 @@ package eval
 import (
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"strings"
 	"testing"
 )
 
-func TestDownloadWithCurlReportsHTTPStatus(t *testing.T) {
-	if _, err := exec.LookPath("curl"); err != nil {
-		t.Skip("curl is not installed")
-	}
+func TestDownloadCheckedReportsHTTPStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusNotFound)
 	}))
 	defer srv.Close()
-	_, err := downloadWithCurl(srv.URL)
+	_, err := downloadChecked(srv.URL)
 	if err == nil || !strings.Contains(err.Error(), "HTTP error 404") {
 		t.Fatal(err)
 	}
