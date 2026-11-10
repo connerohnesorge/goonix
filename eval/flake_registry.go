@@ -168,6 +168,7 @@ func flakeRefFromInput(in flakeInput) flakeRef {
 		NarHash: in.get("narHash"),
 		Path:    in.get("path"),
 		Dir:     in.get("dir"),
+		URL:     in.get("url"),
 	}
 }
 
@@ -197,6 +198,10 @@ func (ev *Evaluator) fetchResolvedTree(pos parser.Pos, in flakeInput) (*Value, e
 			rev = in.get("ref")
 		}
 		return ev.fetchTreeSourceHut(in.get("owner"), in.get("repo"), rev)
+	case "tarball":
+		// The global nixpkgs registry entry is a tarball, including
+		// nixexprs.tar.zst. fetchTree strips one top-level directory.
+		return ev.fetchTreeTarball(in.get("url"), true)
 	default:
 		return nil, evalErr(pos, "cannot show unsupported input '{\"type\":%q}'", in.get("type"))
 	}

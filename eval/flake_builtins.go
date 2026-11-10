@@ -555,6 +555,13 @@ func builtinGetFlake(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 			return nil, evalErr(pos, "%s", err.Error())
 		}
 		defer cleanup()
+	} else if parsed.Type == "tarball" {
+		unpacked, err := unpackTarballDir(parsed.URL)
+		if err != nil {
+			return nil, evalErr(pos, "%s", err.Error())
+		}
+		defer os.RemoveAll(filepath.Dir(unpacked))
+		dir = stripSingleDir(unpacked)
 	} else if parsed.Type != "path" {
 		return nil, evalErr(pos, "flake reference '%s' is not an absolute path", ref)
 	}

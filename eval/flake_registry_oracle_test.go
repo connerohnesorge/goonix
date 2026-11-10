@@ -1,12 +1,16 @@
 package eval_test
 
 import (
+	"archive/tar"
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/connerohnesorge/goonix/internal/oracle"
 )
@@ -106,6 +110,108 @@ func TestFlakeRegistryResolvesLikeNix(t *testing.T) {
 	}
 }
 
+func TestFlakeRegistryTarballTargetMatchesNix(t *testing.T) {
+	if _, err := exec.LookPath("nix-instantiate"); err != nil && nix224Binary() == "" {
+		t.Skip("no nix-instantiate")
+	}
+	if nix224Binary() == "" {
+		oracle.RequireNix224(t)
+	}
+	root := t.TempDir()
+	src := filepath.Join(root, "nixpkgs")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "flake.nix"), []byte("{ outputs = { self }: { testValue = \"nixpkgs\"; }; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "body"), []byte("channel\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(root, "nixexprs.tar.zst")
+	writeZstTarball(t, archive, "nixpkgs", map[string]string{
+		"flake.nix": "{ outputs = { self }: { testValue = \"nixpkgs\"; }; }\n",
+		"body":      "channel\n",
+	})
+	global := filepath.Join(root, "global.json")
+	writeRegistry(t, global, []regFlake{
+		{From: map[string]string{"type": "indirect", "id": "nixpkgs"}, Exact: true, To: map[string]string{"type": "tarball", "url": "file://" + archive}},
+	})
+	userDir := filepath.Join(root, "user")
+	sysDir := filepath.Join(root, "sys")
+	if err := os.MkdirAll(filepath.Join(userDir, "nix"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sysDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", userDir)
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("NIX_CONF_DIR", sysDir)
+	t.Setenv("NIX_CONFIG", "experimental-features = nix-command flakes\nflake-registry = "+global+"\n")
+
+	cases := []string{
+		`let t = builtins.fetchTree "flake:nixpkgs"; in "${t.outPath} ${t.narHash}"`,
+		`let t = builtins.getFlake "nixpkgs"; in "${t.outPath} ${t.narHash} ${t.testValue}"`,
+	}
+	for _, expr := range cases {
+		want := nixEvalRegistry(t, expr)
+		got := evalPkgsExprString(t, expr)
+		if got != want {
+			t.Fatalf("%s\ngo=%s\nnix=%s", expr, got, want)
+		}
+	}
+}
+
+func writeZstTarball(t *testing.T, dest, top string, files map[string]string) {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: top, Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	// Stable archive order. The NAR hash does not depend on tar order.
+	for i := 0; i < len(names); i++ {
+		for j := i + 1; j < len(names); j++ {
+			if names[j] < names[i] {
+				names[i], names[j] = names[j], names[i]
+			}
+		}
+	}
+	for _, name := range names {
+		body := files[name]
+		hdr := &tar.Header{Name: top + "/" + name, Mode: 0o644, Size: int64(len(body))}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zw, err := zstd.NewWriter(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zw.Write(buf.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type regFlake struct {
 	From  map[string]string `json:"from"`
 	To    map[string]string `json:"to"`
@@ -159,9 +265,15 @@ func nixEvalRegistryErr(t *testing.T, expr string) (string, error) {
 	if err != nil {
 		return "", &registryEvalError{msg: strings.TrimSpace(string(out))}
 	}
+	raw := strings.TrimSpace(string(out))
+	// Nix writes "unpacking ... into the Git cache" on stderr while the
+	// JSON result is on stdout. CombinedOutput keeps both.
+	if i := strings.LastIndex(raw, "\n"); i >= 0 {
+		raw = strings.TrimSpace(raw[i+1:])
+	}
 	var s string
-	if err := json.Unmarshal(out, &s); err != nil {
-		return strings.TrimSpace(string(out)), nil
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		return raw, nil
 	}
 	return s, nil
 }

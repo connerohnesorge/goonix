@@ -8,6 +8,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -16,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/klauspost/compress/zstd"
 	"hash"
 	"io"
 	"net/http"
@@ -564,6 +566,16 @@ func unpackTarball(data []byte, dest string) (int64, error) {
 		}
 		maxMtime = 0
 	}
+	if len(data) >= 4 && data[0] == 0x28 && data[1] == 0xb5 && data[2] == 0x2f && data[3] == 0xfd {
+		zr, zerr := zstd.NewReader(bytes.NewReader(data))
+		if zerr == nil {
+			defer zr.Close()
+			if err := try(zr); err == nil {
+				return maxMtime, nil
+			}
+			maxMtime = 0
+		}
+	}
 	if err := try(bytes.NewReader(data)); err != nil {
 		return 0, err
 	}
@@ -947,6 +959,23 @@ func (ev *Evaluator) fetchTreeTarballRev(rawURL string, strip bool, rev string) 
 		meta.rev = rev
 	}
 	return ev.treeFromDir(parser.Pos{}, dest, "source", meta, false)
+}
+
+func unpackTarballDir(rawURL string) (string, error) {
+	data, err := fetchURLBytes(rawURL)
+	if err != nil {
+		return "", archiveDownloadError(err)
+	}
+	tmp, err := os.MkdirTemp("", "goonix-flake-tar-")
+	if err != nil {
+		return "", err
+	}
+	dest := filepath.Join(tmp, "unpacked")
+	if _, err := unpackTarball(data, dest); err != nil {
+		os.RemoveAll(tmp)
+		return "", fmt.Errorf("Failed to open archive (Unrecognized archive format)")
+	}
+	return dest, nil
 }
 
 func stripSingleDir(dir string) string {
