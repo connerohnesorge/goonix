@@ -78,12 +78,12 @@ func cmdBuild(args []string) {
 		fmt.Fprintln(os.Stderr, "derivation was not registered during eval")
 		os.Exit(1)
 	}
-	var buf strings.Builder
-	if err := gd.WriteDerivation(&buf); err != nil {
+	aterm, err := eval.SerializeGoNixDerivation(gd)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := st.WriteDerivation([]byte(buf.String()), drvPath); err != nil {
+	if err := st.WriteDerivation(aterm, drvPath); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
