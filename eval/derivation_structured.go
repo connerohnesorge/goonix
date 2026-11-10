@@ -178,7 +178,10 @@ func (ev *Evaluator) valueToStructuredJSON(v *Value, pos parser.Pos, col *deriva
 	case VKInt:
 		return fv.Int, nil
 	case VKFloat:
-		return fv.Float, nil
+		if nixFloatNonFinite(fv.Float) {
+			return nil, nil
+		}
+		return json.Number(formatNixJSONFloat(fv.Float)), nil
 	case VKString:
 		col.mergeValueContext(fv)
 		return fv.String, nil

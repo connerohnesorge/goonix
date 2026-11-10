@@ -956,7 +956,7 @@ func valueToJSON(ev *Evaluator, v *Value) (any, []StringContextElem, error) {
 		if math.IsNaN(fv.Float) || math.IsInf(fv.Float, 0) {
 			return nil, nil, nil
 		}
-		return fv.Float, nil, nil
+		return json.Number(formatNixJSONFloat(fv.Float)), nil, nil
 	case VKString:
 		return fv.String, copyStringContext(fv.Ctx), nil
 	case VKPath:
@@ -1990,6 +1990,9 @@ func builtinAdd(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if a.Kind == VKInt && b.Kind == VKInt {
 		return Int(a.Int + b.Int), nil
 	}
+	if af, bf, ok := asFloatPair(a, b); ok {
+		return Float(af + bf), nil
+	}
 	return nil, evalErr(pos, "add expects integers")
 }
 
@@ -2007,6 +2010,9 @@ func builtinSub(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	}
 	if a.Kind == VKInt && b.Kind == VKInt {
 		return Int(a.Int - b.Int), nil
+	}
+	if af, bf, ok := asFloatPair(a, b); ok {
+		return Float(af - bf), nil
 	}
 	return nil, evalErr(pos, "sub expects integers")
 }
@@ -2309,7 +2315,27 @@ func builtinMul(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if a.Kind == VKInt && b.Kind == VKInt {
 		return Int(a.Int * b.Int), nil
 	}
+	if af, bf, ok := asFloatPair(a, b); ok {
+		return Float(af * bf), nil
+	}
 	return nil, evalErr(pos, "mul expects integers")
+}
+
+func asFloatPair(a, b *Value) (float64, float64, bool) {
+	af, aok := asFloat(a)
+	bf, bok := asFloat(b)
+	return af, bf, aok && bok
+}
+
+func asFloat(v *Value) (float64, bool) {
+	switch v.Kind {
+	case VKInt:
+		return float64(v.Int), true
+	case VKFloat:
+		return v.Float, true
+	default:
+		return 0, false
+	}
 }
 
 func builtinDiv(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {

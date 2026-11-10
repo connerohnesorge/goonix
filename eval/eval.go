@@ -1382,6 +1382,9 @@ func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {
 		return false, err
 	}
 	if fa == fb {
+		if fa.Kind == VKFloat && math.IsNaN(fa.Float) {
+			return false, nil
+		}
 		return true, nil
 	}
 	if fa.Kind == VKNull || fb.Kind == VKNull {
@@ -1396,7 +1399,7 @@ func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {
 	case VKInt:
 		return fa.Int == fb.Int, nil
 	case VKFloat:
-		return fa.Float == fb.Float || (math.IsNaN(fa.Float) && math.IsNaN(fb.Float)), nil
+		return fa.Float == fb.Float, nil
 	case VKString:
 		return fa.String == fb.String, nil
 	case VKPath:

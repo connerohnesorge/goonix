@@ -104,7 +104,7 @@ func (ev *Evaluator) coerceToStringScalarList(fv *Value, cc CoerceContext) (*Val
 	case VKInt:
 		return Str(strconv.FormatInt(fv.Int, 10), pos), nil
 	case VKFloat:
-		return Str(strconv.FormatFloat(fv.Float, 'g', -1, 64), pos), nil
+		return Str(formatNixToStringFloat(fv.Float), pos), nil
 	case VKList:
 		var parts []string
 		var ctx []StringContextElem
