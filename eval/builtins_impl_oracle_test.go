@@ -282,6 +282,19 @@ func TestFromTOMLDuplicateAndReadFileTypeMatchNix(t *testing.T) {
 			t.Fatalf("%s\nnix=%s\ngo=%s", expr, want, got)
 		}
 	}
+	arrVal := "builtins.fromTOML ''\na = [1]\n[[a]]\n''"
+	_, nerr = lay.EvalExprAllowError(t, arrVal)
+	_, gerr = evalPkgsExprStringAllowError(t, arrVal)
+	arrFrag := `array of table ("a") collides with existing value`
+	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), arrFrag) || !strings.Contains(gerr.Error(), arrFrag) {
+		t.Fatalf("array then array-of-tables\nnix=%v\ngo=%v", nerr, gerr)
+	}
+	nestedInline := "builtins.fromTOML ''\na = { b = { c = 1 } }\n[a.b]\n''"
+	_, nerr = lay.EvalExprAllowError(t, nestedInline)
+	_, gerr = evalPkgsExprStringAllowError(t, nestedInline)
+	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), inlineFrag) || !strings.Contains(gerr.Error(), inlineFrag) {
+		t.Fatalf("header inside inline table\nnix=%v\ngo=%v", nerr, gerr)
+	}
 	reopen := "builtins.toJSON (builtins.fromTOML ''\n[a.b]\nc = 1\n[a]\n'')"
 	if want, got := lay.EvalRaw(t, reopen), evalPkgsExprString(t, reopen); want != got {
 		t.Fatalf("header parent reopen\nnix=%s\ngo=%s", want, got)

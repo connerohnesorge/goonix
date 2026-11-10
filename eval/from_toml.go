@@ -17,7 +17,7 @@ import (
 func parseTOMLDocument(ev *Evaluator, src string) (*Value, error) {
 	var p unstable.Parser
 	p.Reset([]byte(src))
-	doc := &tomlDoc{ev: ev, root: Attrs(false), cur: nil, closed: map[*Value]bool{}, inline: map[*Value]bool{}}
+	doc := &tomlDoc{ev: ev, root: Attrs(false), cur: nil, closed: map[*Value]bool{}, inline: map[*Value]bool{}, arrays: map[*Value]bool{}}
 	doc.cur = doc.root
 	timestamps := ev.xp != nil && ev.xp["parse-toml-timestamps"]
 	for p.NextExpression() {
@@ -61,6 +61,7 @@ type tomlDoc struct {
 	cur    *Value
 	closed map[*Value]bool // tables closed by a header or a dotted key
 	inline map[*Value]bool // inline tables, which stay immutable
+	arrays map[*Value]bool // lists created by [[array of tables]]
 }
 
 func tomlKey(n *unstable.Node) []string {
@@ -106,6 +107,9 @@ func (d *tomlDoc) define(keys []string, array bool) (*Value, error) {
 				continue
 			}
 			if existing.Kind == VKAttrs {
+				if d.inline[existing] {
+					return nil, fmt.Errorf("[error] toml::insert_value: inserting to an inline table (%s) but inline tables are immutable", k)
+				}
 				cur = existing
 				continue
 			}
@@ -113,12 +117,13 @@ func (d *tomlDoc) define(keys []string, array bool) (*Value, error) {
 		}
 		if array {
 			var list *Value
-			if ok && existing.Kind == VKList {
+			if ok && existing.Kind == VKList && d.arrays[existing] {
 				list = existing
 			} else if ok {
-				return nil, fmt.Errorf("TOML key %q is not an array of tables", k)
+				return nil, fmt.Errorf("[error] toml::insert_value: array of table (%q) collides with existing value", k)
 			} else {
 				list = List()
+				d.arrays[list] = true
 				d.put(cur, k, list)
 			}
 			t := Attrs(false)
