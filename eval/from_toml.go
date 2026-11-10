@@ -6,6 +6,7 @@ package eval
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -16,7 +17,7 @@ import (
 func parseTOMLDocument(ev *Evaluator, src string) (*Value, error) {
 	var p unstable.Parser
 	p.Reset([]byte(src))
-	doc := &tomlDoc{ev: ev, root: Attrs(false), cur: nil, closed: map[*Value]bool{}}
+	doc := &tomlDoc{ev: ev, root: Attrs(false), cur: nil, closed: map[*Value]bool{}, inline: map[*Value]bool{}}
 	doc.cur = doc.root
 	timestamps := ev.xp != nil && ev.xp["parse-toml-timestamps"]
 	for p.NextExpression() {
@@ -58,7 +59,8 @@ type tomlDoc struct {
 	ev     *Evaluator
 	root   *Value
 	cur    *Value
-	closed map[*Value]bool // tables closed by a header or an inline table
+	closed map[*Value]bool // tables closed by a header or a dotted key
+	inline map[*Value]bool // inline tables, which stay immutable
 }
 
 func tomlKey(n *unstable.Node) []string {
@@ -173,6 +175,9 @@ func (d *tomlDoc) insert(cur *Value, keys []string, val *Value) error {
 		if existing.Kind != VKAttrs {
 			return fmt.Errorf("TOML key %q is not a table", k)
 		}
+		if d.inline[existing] {
+			return fmt.Errorf("[error] toml::insert_value: inserting to an inline table (%s) but inline tables are immutable", k)
+		}
 		cur = existing
 	}
 	return nil
@@ -194,7 +199,14 @@ func (d *tomlDoc) value(n *unstable.Node, timestamps bool) (*Value, error) {
 		}
 		return Int(i), nil
 	case unstable.Float:
-		f, err := strconv.ParseFloat(strings.ReplaceAll(string(n.Data), "_", ""), 64)
+		raw := strings.ToLower(strings.ReplaceAll(string(n.Data), "_", ""))
+		switch raw {
+		case "nan", "+nan":
+			return Float(math.NaN()), nil
+		case "-nan":
+			return Float(math.Copysign(math.NaN(), -1)), nil
+		}
+		f, err := strconv.ParseFloat(raw, 64)
 		if err != nil {
 			return nil, err
 		}
@@ -225,6 +237,7 @@ func (d *tomlDoc) value(n *unstable.Node, timestamps bool) (*Value, error) {
 			}
 		}
 		d.closed[t] = true
+		d.inline[t] = true
 		return t, nil
 	case unstable.LocalDate, unstable.LocalTime, unstable.LocalDateTime, unstable.DateTime:
 		if !timestamps {

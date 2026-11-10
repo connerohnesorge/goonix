@@ -252,6 +252,25 @@ func TestFromTOMLDuplicateAndReadFileTypeMatchNix(t *testing.T) {
 	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), `array of tables ("t") already exists`) || !strings.Contains(gerr.Error(), `array of tables ("t") already exists`) {
 		t.Fatalf("array then table\nnix=%v\ngo=%v", nerr, gerr)
 	}
+	inline := "builtins.fromTOML ''\na = { b = 1 }\na.c = 2\n''"
+	_, nerr = lay.EvalExprAllowError(t, inline)
+	_, gerr = evalPkgsExprStringAllowError(t, inline)
+	inlineFrag := "inserting to an inline table (a) but inline tables are immutable"
+	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), inlineFrag) || !strings.Contains(gerr.Error(), inlineFrag) {
+		t.Fatalf("inline table\nnix=%v\ngo=%v", nerr, gerr)
+	}
+	for _, expr := range []string{
+		`builtins.typeOf (builtins.fromTOML "a = +nan").a`,
+		`builtins.typeOf (builtins.fromTOML "a = -nan").a`,
+		`builtins.toString (builtins.fromTOML "a = +nan").a`,
+		`builtins.toString (builtins.fromTOML "a = -nan").a`,
+		`builtins.toJSON (builtins.fromTOML "a = -nan")`,
+		"builtins.toJSON (builtins.fromTOML ''\na.b = 1\na.c = 2\n'')",
+	} {
+		if want, got := lay.EvalRaw(t, expr), evalPkgsExprString(t, expr); want != got {
+			t.Fatalf("%s\nnix=%s\ngo=%s", expr, want, got)
+		}
+	}
 	reopen := "builtins.toJSON (builtins.fromTOML ''\n[a.b]\nc = 1\n[a]\n'')"
 	if want, got := lay.EvalRaw(t, reopen), evalPkgsExprString(t, reopen); want != got {
 		t.Fatalf("header parent reopen\nnix=%s\ngo=%s", want, got)
