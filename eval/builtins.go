@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"math"
@@ -26,6 +27,7 @@ import (
 	"runtime"
 	stdsort "sort"
 	"strings"
+	"syscall"
 
 	"github.com/connerohnesorge/goonix/data"
 	"github.com/connerohnesorge/goonix/internal/nixversion"
@@ -723,6 +725,9 @@ func builtinReadFile(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	}
 	b, err := ev.Effects.ReadFile(p)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, evalErr(pos, "opening file '%s': No such file or directory", p)
+		}
 		return nil, err
 	}
 	return Str(string(b), pos), nil
@@ -757,6 +762,9 @@ func builtinReadDir(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, evalErr(pos, "reading directory %s: No such file or directory", p)
+		}
+		if errors.Is(err, syscall.ENOTDIR) {
+			return nil, evalErr(pos, "reading directory %s: Not a directory", p)
 		}
 		return nil, err
 	}

@@ -149,6 +149,23 @@ func (l Layout) EvalRaw(t *testing.T, expr string) string {
 	return s
 }
 
+// EvalRawExact is EvalRaw without trimming. toXML's trailing newline is part of the value.
+func (l Layout) EvalRawExact(t *testing.T, expr string) string {
+	t.Helper()
+	args := append(append([]string{}, l.InstantiateArgs()...), "--eval", "--json", "-E", expr)
+	cmd := exec.Command("nix-instantiate", args...)
+	cmd.Env = l.HermeticEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("nix-instantiate: %v\n%s", err, out)
+	}
+	s, err := decodeNixInstantiateJSONPreserve(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
 // EvalExprAllowError evaluates expr and returns an error if nix-instantiate fails.
 func (l Layout) EvalExprAllowError(t *testing.T, expr string) (string, error) {
 	t.Helper()

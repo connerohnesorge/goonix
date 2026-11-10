@@ -24,7 +24,7 @@ func builtinToXML(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) 
 	if err := writeXMLValue(ev, &b, &ctx, seen, args[0], 1); err != nil {
 		return nil, err
 	}
-	b.WriteString("</expr>")
+	b.WriteString("</expr>\n")
 	return StrWithContext(b.String(), ctx, pos), nil
 }
 

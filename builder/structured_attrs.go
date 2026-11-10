@@ -399,11 +399,6 @@ func (b *Builder) finishStructuredOutputs(drvPath string, d *gonixdrv.Derivation
 	if err != nil {
 		return fmt.Errorf("cannot process __json attribute of '%s': %s", drvPath, err.Error())
 	}
-	for _, key := range []string{"allowedReferences", "allowedRequisites", "disallowedReferences", "disallowedRequisites", "maxSize", "maxClosureSize"} {
-		if _, ok := doc[key]; ok {
-			fmt.Fprintf(os.Stderr, "warning: 'structuredAttrs' disables the effect of the top-level attribute '%s'; use 'outputChecks' instead\n", key)
-		}
-	}
 	checks, _ := doc["outputChecks"].(map[string]any)
 	discard, _ := doc["unsafeDiscardReferences"].(map[string]any)
 	for name, info := range infos {

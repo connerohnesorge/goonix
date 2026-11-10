@@ -68,8 +68,12 @@ func TestReviewBuiltinsMatchNix(t *testing.T) {
 		`builtins.toXML /etc/hosts`,
 	}
 	for _, c := range xmlCases {
-		if w, g := lay.EvalRaw(t, c), evalPkgsExprString(t, c); w != g {
+		w, g := lay.EvalRawExact(t, c), evalPkgsExprString(t, c)
+		if w != g {
 			t.Fatalf("toXML %s\nnix=%q\ngo=%q", c, w, g)
+		}
+		if !strings.HasSuffix(g, "\n") {
+			t.Fatalf("toXML %s does not end with a newline: %q", c, g)
 		}
 	}
 

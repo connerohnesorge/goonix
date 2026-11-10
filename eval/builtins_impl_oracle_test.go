@@ -83,6 +83,9 @@ func TestBuiltinImplementationsMatchNix(t *testing.T) {
 	for _, expr := range cases {
 		t.Run(expr, func(t *testing.T) {
 			want := lay.EvalRaw(t, expr)
+			if strings.Contains(expr, "toXML") {
+				want = lay.EvalRawExact(t, expr)
+			}
 			got := evalPkgsExprString(t, expr)
 			if want != got {
 				t.Fatalf("nix=%q\ngo=%q", want, got)
@@ -132,6 +135,16 @@ func TestNix224ErrorTextMatch(t *testing.T) {
 			expr:   `builtins.path { path = "` + flat + `"; recursive = false; sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; }`,
 			goHas:  "store path mismatch in (possibly filtered) path added from '" + flat + "'",
 			nixHas: "store path mismatch",
+		},
+		{
+			expr:   `builtins.readFile "/no/such/goonix-readfile"`,
+			goHas:  "opening file '/no/such/goonix-readfile': No such file or directory",
+			nixHas: "opening file '/no/such/goonix-readfile': No such file or directory",
+		},
+		{
+			expr:   `builtins.readDir "/etc/hosts"`,
+			goHas:  "reading directory /etc/hosts: Not a directory",
+			nixHas: "reading directory /etc/hosts: Not a directory",
 		},
 		{
 			expr:   `builtins.readDir "/no/such/goonix-readdir-missing"`,
