@@ -8,6 +8,28 @@ import (
 	"github.com/connerohnesorge/goonix/parser"
 )
 
+func TestFromJSONNumberKindMatchesNix(t *testing.T) {
+	lay := oracle.MustLayout(t)
+	exprs := []string{
+		`builtins.typeOf (builtins.fromJSON "100.0")`,
+		`builtins.typeOf (builtins.fromJSON "100")`,
+		`builtins.typeOf (builtins.fromJSON "1e20")`,
+		`builtins.typeOf (builtins.fromJSON "1.0")`,
+		`builtins.toJSON (builtins.fromJSON "100.0")`,
+		`builtins.toJSON (builtins.fromJSON "100")`,
+	}
+	for _, expr := range exprs {
+		want := lay.EvalRaw(t, expr)
+		got, err := goEvalString(t, expr)
+		if err != nil {
+			t.Fatalf("%s: %v", expr, err)
+		}
+		if got != want {
+			t.Fatalf("%s\nnix=%s\ngo=%s", expr, want, got)
+		}
+	}
+}
+
 func TestFloatFormattingMatchesNix(t *testing.T) {
 	lay := oracle.MustLayout(t)
 	exprs := []string{

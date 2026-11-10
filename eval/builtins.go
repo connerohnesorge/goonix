@@ -22,10 +22,12 @@ import (
 	"fmt"
 	"io/fs"
 	"math"
+	"math/big"
 	"os"
 	"path/filepath"
 	"runtime"
 	stdsort "sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -892,11 +894,33 @@ func builtinFromJSON(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	if err != nil {
 		return nil, err
 	}
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
 	var raw any
-	if err := json.Unmarshal([]byte(s), &raw); err != nil {
+	if err := dec.Decode(&raw); err != nil {
 		return nil, evalErr(pos, "invalid JSON: %v", err)
 	}
 	return jsonToValue(ev, raw, pos), nil
+}
+
+func jsonNumberValue(n json.Number) *Value {
+	s := string(n)
+	if strings.ContainsAny(s, ".eE") {
+		f, err := n.Float64()
+		if err != nil {
+			return Float(math.Inf(1))
+		}
+		return Float(f)
+	}
+	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return Int(i)
+	}
+	mag := new(big.Int)
+	if _, ok := mag.SetString(s, 10); !ok {
+		return Int(0)
+	}
+	mod := new(big.Int).Mod(mag, new(big.Int).Lsh(big.NewInt(1), 64))
+	return Int(int64(mod.Uint64()))
 }
 
 func jsonToValue(ev *Evaluator, raw any, pos parser.Pos) *Value {
@@ -906,10 +930,9 @@ func jsonToValue(ev *Evaluator, raw any, pos parser.Pos) *Value {
 	case bool:
 		return Bool(t)
 	case float64:
-		if t == float64(int64(t)) {
-			return Int(int64(t))
-		}
 		return Float(t)
+	case json.Number:
+		return jsonNumberValue(t)
 	case string:
 		return Str(t, pos)
 	case []any:
