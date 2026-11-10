@@ -29,6 +29,7 @@ type flakeRef struct {
 	Host    string
 	NarHash string
 	Path    string
+	URL     string
 }
 
 func flakeIDPattern(s string) bool {
@@ -124,8 +125,14 @@ func parseFlakeRefString(ref string) (flakeRef, error) {
 		return flakeRef{Type: "path", Path: rest}, nil
 	case "github", "gitlab", "sourcehut":
 		// github, gitlab, and sourcehut share Nix's GitArchiveInputScheme.
-		// A sourcehut owner may contain '~'.
+		// A sourcehut owner may contain '~'. %2F is decoded before the
+		// owner/repo split, so gitlab:group%2Fsub/repo is owner group.
 		return parseGitArchiveRef(scheme, rest, ref)
+	case "http", "https":
+		return parseURLFlakeRef("tarball", ref)
+	case "git+http", "git+https", "tarball+http", "tarball+https", "file+http", "file+https":
+		typ, raw, _ := strings.Cut(scheme, "+")
+		return parseURLFlakeRef(typ, raw+":"+rest)
 	case "flake":
 		if strings.ContainsAny(rest, " \t") {
 			return flakeRef{}, fmt.Errorf("flake reference '%s' is not an absolute path", ref)
@@ -144,6 +151,9 @@ func parseFlakeRefString(ref string) (flakeRef, error) {
 // and dir are kept; other query keys are dropped.
 func parseGitArchiveRef(scheme, rest, original string) (flakeRef, error) {
 	pathPart, query, _ := strings.Cut(rest, "?")
+	if decoded, err := url.PathUnescape(pathPart); err == nil {
+		pathPart = decoded
+	}
 	parts := strings.Split(pathPart, "/")
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		return flakeRef{}, fmt.Errorf("invalid %s flake reference '%s'", scheme, original)
@@ -184,6 +194,32 @@ func parseGitArchiveRef(scheme, rest, original string) (flakeRef, error) {
 	out.Host = q["host"]
 	out.NarHash = q["narHash"]
 	out.Dir = q["dir"]
+	return out, nil
+}
+
+// parseURLFlakeRef parses git+https, tarball+https, file+https, and a bare
+// https URL. Nix records the transport URL without the type prefix and
+// keeps ref, rev, and narHash from the query.
+func parseURLFlakeRef(typ, raw string) (flakeRef, error) {
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+		return flakeRef{}, fmt.Errorf("flake reference '%s' is not an absolute path", raw)
+	}
+	base, query, _ := strings.Cut(raw, "?")
+	out := flakeRef{Type: typ, URL: base}
+	q := decodeFlakeQuery(query)
+	if rev := q["rev"]; rev != "" {
+		if !isGitRev(rev) {
+			return flakeRef{}, fmt.Errorf("hash '%s' has wrong length for hash algorithm 'sha1'", rev)
+		}
+		out.Rev = rev
+	}
+	if ref := q["ref"]; ref != "" {
+		if !isGitRef(ref) {
+			return flakeRef{}, fmt.Errorf("invalid %s flake reference '%s'", typ, raw)
+		}
+		out.Ref = ref
+	}
+	out.NarHash = q["narHash"]
 	return out, nil
 }
 
@@ -290,9 +326,39 @@ func (f flakeRef) String() string {
 		return s + "?" + strings.Join(parts, "&")
 	case "path":
 		return "path:" + f.Path
+	case "git":
+		return flakeURLString("git+"+f.URL, f)
+	case "tarball", "file":
+		return flakeURLString(f.URL, f)
 	default:
 		return ""
 	}
+}
+
+func flakeURLString(base string, f flakeRef) string {
+	q := map[string]string{}
+	if f.Ref != "" {
+		q["ref"] = f.Ref
+	}
+	if f.Rev != "" {
+		q["rev"] = f.Rev
+	}
+	if f.NarHash != "" {
+		q["narHash"] = f.NarHash
+	}
+	if len(q) == 0 {
+		return base
+	}
+	keys := make([]string, 0, len(q))
+	for k := range q {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, percentEncodeQuery(k)+"="+percentEncodeQuery(q[k]))
+	}
+	return base + "?" + strings.Join(parts, "&")
 }
 
 func flakeRefAttrs(ev *Evaluator, f flakeRef, pos parser.Pos) *Value {
@@ -333,6 +399,17 @@ func flakeRefAttrs(ev *Evaluator, f flakeRef, pos parser.Pos) *Value {
 		}
 	case "path":
 		put("path", f.Path)
+	case "git", "tarball", "file":
+		put("url", f.URL)
+		if f.Rev != "" {
+			put("rev", f.Rev)
+		}
+		if f.Ref != "" {
+			put("ref", f.Ref)
+		}
+		if f.NarHash != "" {
+			put("narHash", f.NarHash)
+		}
 	}
 	return set
 }
@@ -420,6 +497,20 @@ func builtinFlakeRefToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 		f.Path, err = getAttrString(ev, set, "path")
 		if err != nil {
 			return nil, err
+		}
+	case "git", "tarball", "file":
+		f.URL, err = getAttrString(ev, set, "url")
+		if err != nil {
+			return nil, err
+		}
+		if rev, err := getAttrString(ev, set, "rev"); err == nil && rev != "" {
+			f.Rev = rev
+		}
+		if ref, err := getAttrString(ev, set, "ref"); err == nil {
+			f.Ref = ref
+		}
+		if narHash, err := getAttrString(ev, set, "narHash"); err == nil {
+			f.NarHash = narHash
 		}
 	default:
 		return nil, evalErr(pos, "unknown flake reference type '%s'", typ)
