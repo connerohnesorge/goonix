@@ -1318,7 +1318,7 @@ func builtinToFile(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err != nil {
 		return nil, err
 	}
-	return Path(storePath), nil
+	return StrWithContext(storePath, []StringContextElem{{StorePath: storePath}}, pos), nil
 }
 
 // nixContextElemString is Nix's NixStringContextElem::to_string for a derivation reference.

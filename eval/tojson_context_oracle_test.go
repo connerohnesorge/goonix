@@ -37,6 +37,27 @@ func TestToJSONCarriesStringContextLikeNix(t *testing.T) {
 	}
 }
 
+func TestToFileReturnsStringContextLikeNix(t *testing.T) {
+	lay := oracle.MustLayout(t)
+	exprs := []string{
+		`builtins.typeOf (builtins.toFile "n" "hi")`,
+		`builtins.toJSON (builtins.getContext (builtins.toFile "n" "hi"))`,
+	}
+	for _, expr := range exprs {
+		want := lay.EvalRaw(t, expr)
+		got, err := goEvalString(t, expr)
+		if err != nil {
+			t.Fatalf("eval %s: %v", expr, err)
+		}
+		if got != want {
+			t.Fatalf("%s\nnix=%s\ngo=%s", expr, want, got)
+		}
+		if strings.Contains(expr, "typeOf") && got != "string" {
+			t.Fatalf("typeOf %q", got)
+		}
+	}
+}
+
 func goEvalString(t *testing.T, expr string) (string, error) {
 	t.Helper()
 	ev := eval.NewEvaluator().WithEffects(eval.ChrootIOEffects{PhysRoot: t.TempDir()})
