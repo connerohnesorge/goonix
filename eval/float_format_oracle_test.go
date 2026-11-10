@@ -9,6 +9,38 @@ import (
 	"github.com/connerohnesorge/goonix/parser"
 )
 
+func TestFloatEdgeValuesMatchNix(t *testing.T) {
+	lay := oracle.MustLayout(t)
+	exprs := []string{
+		`builtins.toJSON (-0.0)`,
+		`builtins.toString (-0.0)`,
+		`builtins.toJSON (-1.0 * 0.0)`,
+		`builtins.toString (-1.0 * 0.0)`,
+		`builtins.toJSON ((-0.0) == 0.0)`,
+		`builtins.toJSON ((-0.0) < 0.0)`,
+		`builtins.toString ((1.0e200 * 1.0e200) - (1.0e200 * 1.0e200))`,
+		`builtins.toJSON (2.2250738585072014e-308)`,
+	}
+	for _, expr := range exprs {
+		want := lay.EvalRaw(t, expr)
+		got, err := goEvalString(t, expr)
+		if err != nil {
+			t.Fatalf("%s: %v", expr, err)
+		}
+		if got != want {
+			t.Fatalf("%s\nnix=%s\ngo=%s", expr, want, got)
+		}
+	}
+	for _, expr := range []string{`5.0e-324`, `1.0e-308`} {
+		_, goErr := evalPkgsExprStringAllowError(t, expr)
+		_, nixErr := lay.EvalExprAllowError(t, expr)
+		frag := "invalid float '" + expr + "'"
+		if goErr == nil || nixErr == nil || !strings.Contains(goErr.Error(), frag) || !strings.Contains(nixErr.Error(), frag) {
+			t.Fatalf("%s\ngo=%v\nnix=%v", expr, goErr, nixErr)
+		}
+	}
+}
+
 func TestToStringReturningIntMatchesNix(t *testing.T) {
 	lay := oracle.MustLayout(t)
 	bad := []string{

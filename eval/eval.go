@@ -879,6 +879,11 @@ func (ev *Evaluator) evalUnary(u *parser.UnaryOp, env *Env) (*Value, error) {
 		case VKInt:
 			return Int(-fv.Int), nil
 		case VKFloat:
+			// Negating zero is zero. IEEE negation would produce -0.0,
+			// and Nix's toJSON of (-0.0) is 0.0.
+			if fv.Float == 0 {
+				return Float(0), nil
+			}
 			return Float(-fv.Float), nil
 		}
 	case "!":

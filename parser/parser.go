@@ -16,7 +16,9 @@ package parser
 
 import (
 	"fmt"
+	"math"
 	"os"
+	"strconv"
 )
 
 // ParseString parses a Nix expression from source text.
@@ -80,6 +82,21 @@ func (p *Parser) peek() Token {
 
 func (p *Parser) text(t Token) string {
 	return p.lr.slice(t.Start, t.End)
+}
+
+// nixFloatLiteralOK rejects values outside the normal float64 range. Nix
+// reports those literals as invalid, including 5.0e-324.
+func nixFloatLiteralOK(text string) bool {
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+		return false
+	}
+	if f == 0 {
+		return true
+	}
+	const minNormal = 2.2250738585072014e-308
+	abs := math.Abs(f)
+	return abs >= minNormal && abs <= math.MaxFloat64
 }
 
 func (p *Parser) errorf(format string, args ...interface{}) error {
@@ -586,8 +603,13 @@ func (p *Parser) parseAtom() (Expr, error) {
 		t := p.advance()
 		return &Path{P: t.Pos, Text: p.text(t)}, nil
 	case tokenFloat:
-		t := p.advance()
-		return &Float{P: t.Pos, Text: p.text(t)}, nil
+		t := p.cur()
+		text := p.text(t)
+		if !nixFloatLiteralOK(text) {
+			return nil, fmt.Errorf("%s:%d:%d: invalid float '%s'", t.Pos.File, t.Pos.Line, t.Pos.Col, text)
+		}
+		p.advance()
+		return &Float{P: t.Pos, Text: text}, nil
 	case tokenInt:
 		t := p.advance()
 		return &Integer{P: t.Pos, Text: p.text(t)}, nil
