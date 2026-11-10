@@ -929,7 +929,7 @@ func builtinToJSON(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := valueToJSON(ev, v)
+	raw, ctx, err := valueToJSON(ev, v)
 	if err != nil {
 		return nil, err
 	}
@@ -937,45 +937,48 @@ func builtinToJSON(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err != nil {
 		return nil, err
 	}
-	return Str(string(b), pos), nil
+	return StrWithContext(string(b), ctx, pos), nil
 }
 
-func valueToJSON(ev *Evaluator, v *Value) (any, error) {
+func valueToJSON(ev *Evaluator, v *Value) (any, []StringContextElem, error) {
 	fv, err := ev.forceValue(v)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	switch fv.Kind {
 	case VKNull:
-		return nil, nil
+		return nil, nil, nil
 	case VKBool:
-		return fv.Bool, nil
+		return fv.Bool, nil, nil
 	case VKInt:
-		return fv.Int, nil
+		return fv.Int, nil, nil
 	case VKFloat:
 		if math.IsNaN(fv.Float) || math.IsInf(fv.Float, 0) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return fv.Float, nil
+		return fv.Float, nil, nil
 	case VKString:
-		return fv.String, nil
+		return fv.String, copyStringContext(fv.Ctx), nil
 	case VKPath:
 		return ev.jsonCopiedPath(fv.Path)
 	case VKList:
 		out := make([]any, len(fv.List))
+		var ctx []StringContextElem
 		for i, el := range fv.List {
-			x, err := valueToJSON(ev, el)
+			x, c, err := valueToJSON(ev, el)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			out[i] = x
+			ctx = mergeStringContexts(ctx, c)
 		}
-		return out, nil
+		return out, ctx, nil
 	case VKAttrs:
-		if s, ok, err := ev.jsonAttrsCoerce(fv); err != nil || ok {
-			return s, err
+		if s, c, ok, err := ev.jsonAttrsCoerce(fv); err != nil || ok {
+			return s, c, err
 		}
 		m := make(map[string]any)
+		var ctx []StringContextElem
 		for sym, bind := range fv.Attrs.Binds {
 			name := ev.Intern.Lookup(sym)
 			var el *Value
@@ -985,19 +988,20 @@ func valueToJSON(ev *Evaluator, v *Value) (any, error) {
 				el = bind.Value
 			}
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			x, err := valueToJSON(ev, el)
+			x, c, err := valueToJSON(ev, el)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			m[name] = x
+			ctx = mergeStringContexts(ctx, c)
 		}
-		return m, nil
+		return m, ctx, nil
 	case VKLambda, VKBuiltin, VKPartialBuiltin:
-		return nil, fmt.Errorf("cannot convert a function to JSON")
+		return nil, nil, fmt.Errorf("cannot convert a function to JSON")
 	default:
-		return nil, fmt.Errorf("cannot convert a %s to JSON", valueKindName(fv.Kind))
+		return nil, nil, fmt.Errorf("cannot convert a %s to JSON", valueKindName(fv.Kind))
 	}
 }
 
@@ -1005,48 +1009,48 @@ func valueToJSON(ev *Evaluator, v *Value) (any, error) {
 // __toString is called and the result is coerced to a string. Otherwise an
 // outPath attribute is printed on its own, which is why a derivation does
 // not walk the `out` attribute back into itself.
-func (ev *Evaluator) jsonAttrsCoerce(fv *Value) (any, bool, error) {
+func (ev *Evaluator) jsonAttrsCoerce(fv *Value) (any, []StringContextElem, bool, error) {
 	if b := fv.Attrs.Binds[ev.Intern.Intern("__toString")]; b != nil {
 		tv, err := ev.attrsBindingForce(b)
 		if err != nil {
-			return nil, true, err
+			return nil, nil, true, err
 		}
 		result, err := ev.applyCallable(tv, fv, parser.Pos{})
 		if err != nil {
-			return nil, true, err
+			return nil, nil, true, err
 		}
 		result, err = ev.forceValue(result)
 		if err != nil {
-			return nil, true, err
+			return nil, nil, true, err
 		}
 		if result.Kind == VKPath {
-			s, err := ev.jsonCopiedPath(result.Path)
-			return s, true, err
+			s, ctx, err := ev.jsonCopiedPath(result.Path)
+			return s, ctx, true, err
 		}
 		sv, err := ev.coerceToString(result, CoerceContext{Mode: CoerceString, Pos: parser.Pos{}, CopyPaths: true})
 		if err != nil {
-			return nil, true, err
+			return nil, nil, true, err
 		}
-		return sv.String, true, nil
+		return sv.String, copyStringContext(sv.Ctx), true, nil
 	}
 	if b := fv.Attrs.Binds[ev.Intern.Intern("outPath")]; b != nil {
 		tv, err := ev.attrsBindingForce(b)
 		if err != nil {
-			return nil, true, err
+			return nil, nil, true, err
 		}
-		s, err := valueToJSON(ev, tv)
-		return s, true, err
+		s, ctx, err := valueToJSON(ev, tv)
+		return s, ctx, true, err
 	}
-	return nil, false, nil
+	return nil, nil, false, nil
 }
 
-func (ev *Evaluator) jsonCopiedPath(p string) (string, error) {
+func (ev *Evaluator) jsonCopiedPath(p string) (string, []StringContextElem, error) {
 	storeDir := ev.Effects.StoreDir()
 	if storeDir == "" {
 		storeDir = store.DefaultStoreDir
 	}
 	if p == storeDir || strings.HasPrefix(p, storeDir+"/") {
-		return p, nil
+		return p, []StringContextElem{{StorePath: p}}, nil
 	}
 	name := filepath.Base(p)
 	if name == "" || name == "." || name == "/" {
@@ -1054,9 +1058,9 @@ func (ev *Evaluator) jsonCopiedPath(p string) (string, error) {
 	}
 	v, err := ev.materializeTreeSource(p, name)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return v.String, nil
+	return v.String, copyStringContext(v.Ctx), nil
 }
 
 func builtinStorePath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1282,10 +1286,17 @@ func builtinToFile(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err != nil {
 		return nil, err
 	}
-	content, err := ev.forceString(args[1])
+	contentV, err := ev.coerceToString(args[1], CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true})
 	if err != nil {
 		return nil, err
 	}
+	for _, elem := range contentV.Ctx {
+		if elem.DrvPath == "" {
+			continue
+		}
+		return nil, evalErr(pos, "files created by builtins.toFile may not reference derivations, but %s references %s", name, nixContextElemString(elem))
+	}
+	content := contentV.String
 	cfg := store.Config{StoreDir: ev.Effects.StoreDir()}
 	storePath, err := cfg.StorePathForText(name, content)
 	if err != nil {
@@ -1298,6 +1309,16 @@ func builtinToFile(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 		return nil, err
 	}
 	return Path(storePath), nil
+}
+
+// nixContextElemString is Nix's NixStringContextElem::to_string for a derivation reference.
+// StorePath::to_string is the basename, so a built output is "!out!<hash>-name.drv".
+func nixContextElemString(elem StringContextElem) string {
+	out := elem.Output
+	if out == "" {
+		out = "out"
+	}
+	return "!" + out + "!" + filepath.Base(elem.DrvPath)
 }
 
 func builtinPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
