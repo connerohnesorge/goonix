@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -494,13 +495,17 @@ func fetchURLBytes(rawURL string) ([]byte, error) {
 		}
 		return b, nil
 	case "http", "https":
-		resp, err := http.Get(rawURL)
+		client := http.DefaultClient
+		if strings.HasSuffix(u.Hostname(), "sr.ht") {
+			client = srhtClient()
+		}
+		resp, err := client.Get(rawURL)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("HTTP %s", resp.Status)
+			return nil, fmt.Errorf("unable to download '%s': HTTP error %d", rawURL, resp.StatusCode)
 		}
 		return io.ReadAll(resp.Body)
 	default:
@@ -1047,16 +1052,62 @@ func (ev *Evaluator) fetchTreeGitLab(owner, repo, rev string) (*Value, error) {
 }
 
 func (ev *Evaluator) fetchTreeSourceHut(owner, repo, rev string) (*Value, error) {
-	ref := refOrHead(rev)
 	base := sourcehutRoot + "/" + owner + "/" + repo
-	if _, err := downloadChecked(base + "/" + ref); err != nil {
-		return nil, err
+	sha := rev
+	if !isGitRev(sha) {
+		// Nix resolves HEAD and tags through the dumb git protocol, not
+		// git.sr.ht/<owner>/<repo>/<rev>, which is always a 404.
+		resolved, err := sourcehutResolveRef(base, refOrHead(rev))
+		if err != nil {
+			return nil, err
+		}
+		sha = resolved
 	}
-	known := ""
-	if isGitRev(rev) {
-		known = rev
+	return ev.fetchTreeTarballRev(base+"/archive/"+sha+".tar.gz", true, sha)
+}
+
+var lsRemoteLine = regexp.MustCompile(`^(ref: *)?(\S+)(?:\t+(.*))?$`)
+
+func sourcehutResolveRef(base, ref string) (string, error) {
+	pattern := "refs/(heads|tags)/" + ref
+	if ref == "HEAD" {
+		body, err := downloadChecked(base + "/HEAD")
+		if err != nil {
+			return "", err
+		}
+		line, _, _ := strings.Cut(string(body), "\n")
+		_, target, _, ok := parseLsRemoteLine(strings.TrimRight(line, "\r"))
+		if !ok {
+			return "", fmt.Errorf("in '%s', couldn't resolve HEAD ref '%s'", base, ref)
+		}
+		pattern = target
 	}
-	return ev.fetchTreeTarballRev(base+"/archive/"+ref+".tar.gz", true, known)
+	re, err := regexp.Compile("^(?:" + pattern + ")$")
+	if err != nil {
+		return "", err
+	}
+	body, err := downloadChecked(base + "/info/refs")
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		_, target, reference, ok := parseLsRemoteLine(strings.TrimRight(line, "\r"))
+		if !ok || reference == "" {
+			continue
+		}
+		if re.MatchString(reference) {
+			return target, nil
+		}
+	}
+	return "", fmt.Errorf("in '%s', couldn't find ref '%s'", base, ref)
+}
+
+func parseLsRemoteLine(line string) (symbolic bool, target, reference string, ok bool) {
+	m := lsRemoteLine.FindStringSubmatch(line)
+	if m == nil {
+		return false, "", "", false
+	}
+	return m[1] != "", m[2], m[3], true
 }
 
 func firstNonEmpty(a, b string) string {

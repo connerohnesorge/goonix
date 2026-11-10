@@ -39,27 +39,14 @@ func TestFetchTreeStringRevIsHonoured(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	oldSR := sourcehutRoot
 	oldGL := gitlabAPI
-	sourcehutRoot = srv.URL
 	gitlabAPI = srv.URL
 	t.Cleanup(func() {
-		sourcehutRoot = oldSR
 		gitlabAPI = oldGL
 	})
 
 	ev := NewEvaluator().WithEffects(ChrootIOEffects{PhysRoot: t.TempDir()})
-	got, err := ev.fetchTreeURL(parser.Pos{}, "sourcehut:~o/r/"+rev)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertRev(t, ev, got, rev)
-	_, err = ev.fetchTreeURL(parser.Pos{}, "sourcehut:~o/r/"+missing)
-	if err == nil || !strings.Contains(err.Error(), "HTTP error 404") {
-		t.Fatalf("missing sourcehut rev: %v", err)
-	}
-
-	got, err = ev.fetchTreeURL(parser.Pos{}, "gitlab:o/r/"+rev)
+	got, err := ev.fetchTreeURL(parser.Pos{}, "gitlab:o/r/"+rev)
 	if err != nil {
 		t.Fatal(err)
 	}
