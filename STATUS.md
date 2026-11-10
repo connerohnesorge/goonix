@@ -1,6 +1,6 @@
 # goonix v0 status (issues #2–#13)
 
-Oracle: **Nix 2.24.9** (`internal/nixversion`, CI **ladder** job via `cachix/install-nix-action` + `install_url` for 2.24.9). Optional **Nix 2.35.1** job (`nix-2-35`, `continue-on-error: true`) runs ATerm / strict-rung / FOD smoke. nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. The code this note describes is `78ddd0add`. Its green run is https://github.com/connerohnesorge/goonix/actions/runs/42087047591 (ubuntu, macOS, the Nix 2.24.9 ladder, and the optional Nix 2.35 job). This file is the documentation commit on top of that SHA.
+Oracle: **Nix 2.24.9** (`internal/nixversion`, CI **ladder** job via `cachix/install-nix-action` + `install_url` for 2.24.9). Optional **Nix 2.35.1** job (`nix-2-35`, `continue-on-error: true`) runs ATerm / strict-rung / FOD smoke. nixpkgs **`50ab793786d9de88ee30ec4e4c24fb4236fc2674`**. Branch: `cursor/phase-0-scaffolding-7255`, PR #15. The code this note describes is `5c4dfbb6b`. The green Actions run for that commit is recorded below once the ladder, ubuntu, and macOS jobs finish.
 
 ```bash
 bash scripts/check-cgo.sh
@@ -11,7 +11,7 @@ go test ./... -count=1
 
 GitHub **#14** is "Post-v0: __structuredAttrs support". It is not the drvPath ladder. It is done. The `.drv` keeps user attributes in `__json` (plus the real output paths). The builder writes `.attrs.json` and `.attrs.sh`. `outputChecks`, `unsafeDiscardReferences`, `exportReferencesGraph`, and the `outputs` object match Nix 2.24.9. An output scan records the output's own store path and its sibling outputs, so `allowedReferences = []` on a self-referencing output fails the way Nix fails, and garbage collection keeps a sibling a rooted output refers to. `TestOutputScanRecordsSelfAndSiblings` is that check. `TestStructuredAttrsStrictATermMatchesNix` compares drvPath and out path. `TestStructuredAttrsBuildMatchesNix` compares the built store path and NAR, including a discarded reference and a `maxSize` failure. The top-level structuredAttrs warning is printed once, at evaluation, with Nix's message.
 
-Green run for `78ddd0add` (ubuntu, macOS, Nix 2.24.9 ladder, and the optional Nix 2.35 job all passed): https://github.com/connerohnesorge/goonix/actions/runs/42087047591
+The previous green run, for `78ddd0add`, is https://github.com/connerohnesorge/goonix/actions/runs/42087047591. It does not cover the reference scan, `toJSON` context, `passAsFile`, drv escaping, fetch rev, instantiate closure, float formatting, flake URL forms, fromTOML table errors, error text, registry tarballs, or the sandbox loopback.
 
 There is no Nix daemon in this tree. A daemon is out of scope for this map. `goonix gc` talks to the local SQLite store directly.
 
