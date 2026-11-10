@@ -880,9 +880,13 @@ func (ev *Evaluator) evalUnary(u *parser.UnaryOp, env *Env) (*Value, error) {
 			return Int(-fv.Int), nil
 		case VKFloat:
 			// Negating zero is zero. IEEE negation would produce -0.0,
-			// and Nix's toJSON of (-0.0) is 0.0.
+			// and Nix's toJSON of (-0.0) is 0.0. NaN keeps its sign bit:
+			// toString (-nan) stays nan, and negating -nan stays -nan.
 			if fv.Float == 0 {
 				return Float(0), nil
+			}
+			if math.IsNaN(fv.Float) {
+				return Float(fv.Float), nil
 			}
 			return Float(-fv.Float), nil
 		}

@@ -20,6 +20,7 @@ func TestFloatEdgeValuesMatchNix(t *testing.T) {
 		`builtins.toJSON ((-0.0) < 0.0)`,
 		`builtins.toString ((1.0e200 * 1.0e200) - (1.0e200 * 1.0e200))`,
 		`builtins.toJSON (2.2250738585072014e-308)`,
+		`let n = (builtins.fromTOML "a = nan").a; nn = (builtins.fromTOML "a = -nan").a; in "${builtins.toString (- n)}|${builtins.toString (- nn)}|${builtins.toString n}|${builtins.toString nn}"`,
 	}
 	for _, expr := range exprs {
 		want := lay.EvalRaw(t, expr)
