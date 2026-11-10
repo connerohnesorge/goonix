@@ -124,13 +124,17 @@ func (d *tomlDoc) define(keys []string, array bool) (*Value, error) {
 			return t, nil
 		}
 		if ok && existing.Kind == VKAttrs {
-			// A header may reopen a table that dotted keys created implicitly.
-			// A second header, or a header over an inline table, is an error.
+			// A header may reopen a parent that another header created.
+			// A dotted key closes its table, so [a] after a.b = 1 is an error,
+			// matching toml11. A second header is also an error.
 			if d.closed[existing] {
 				return nil, fmt.Errorf("[error] toml::insert_value: table (%q) already exists.", k)
 			}
 			d.closed[existing] = true
 			return existing, nil
+		}
+		if ok && existing.Kind == VKList {
+			return nil, fmt.Errorf("[error] toml::insert_value: array of tables (%q) already exists.", k)
 		}
 		if ok {
 			return nil, fmt.Errorf("[error] toml::insert_value: value (%q) already exists.", strings.Join(keys, "."))
@@ -158,6 +162,10 @@ func (d *tomlDoc) insert(cur *Value, keys []string, val *Value) error {
 		existing, ok := d.get(cur, k)
 		if !ok {
 			t := Attrs(false)
+			// Dotted keys close the tables they create. [a] after a.b = 1
+			// is "table already exists"; [a.b] then [a] stays valid because
+			// that parent is created by a header and is not closed.
+			d.closed[t] = true
 			d.put(cur, k, t)
 			cur = t
 			continue

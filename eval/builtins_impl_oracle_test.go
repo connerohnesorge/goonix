@@ -221,6 +221,22 @@ func TestFromTOMLDuplicateAndReadFileTypeMatchNix(t *testing.T) {
 	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), `table ("t") already exists`) || !strings.Contains(gerr.Error(), `table ("t") already exists`) {
 		t.Fatalf("duplicate table\nnix=%v\ngo=%v", nerr, gerr)
 	}
+	dotted := "builtins.fromTOML ''\na.b = 1\n[a]\n''"
+	_, nerr = lay.EvalExprAllowError(t, dotted)
+	_, gerr = evalPkgsExprStringAllowError(t, dotted)
+	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), `table ("a") already exists`) || !strings.Contains(gerr.Error(), `table ("a") already exists`) {
+		t.Fatalf("dotted then header\nnix=%v\ngo=%v", nerr, gerr)
+	}
+	arr := "builtins.fromTOML ''\n[[t]]\n[t]\n''"
+	_, nerr = lay.EvalExprAllowError(t, arr)
+	_, gerr = evalPkgsExprStringAllowError(t, arr)
+	if nerr == nil || gerr == nil || !strings.Contains(nerr.Error(), `array of tables ("t") already exists`) || !strings.Contains(gerr.Error(), `array of tables ("t") already exists`) {
+		t.Fatalf("array then table\nnix=%v\ngo=%v", nerr, gerr)
+	}
+	reopen := "builtins.toJSON (builtins.fromTOML ''\n[a.b]\nc = 1\n[a]\n'')"
+	if want, got := lay.EvalRaw(t, reopen), evalPkgsExprString(t, reopen); want != got {
+		t.Fatalf("header parent reopen\nnix=%s\ngo=%s", want, got)
+	}
 	missing := `builtins.readFileType "/no/such/goonix-readfiletype"`
 	_, nerr = lay.EvalExprAllowError(t, missing)
 	_, gerr = evalPkgsExprStringAllowError(t, missing)
