@@ -43,9 +43,10 @@ const (
 
 // StringContextElem is one entry in a Nix string context (see getContext / appendContext).
 type StringContextElem struct {
-	DrvPath   string // non-empty → !<drvPath>!output
-	Output    string // defaults to "out"
-	StorePath string // non-empty → opaque store path reference
+	DrvPath    string // non-empty → derivation reference
+	Output     string // built output name; empty with AllOutputs is every output
+	AllOutputs bool   // DrvDeep: "=basename.drv", getContext allOutputs=true
+	StorePath  string // non-empty and DrvPath empty → opaque store path reference
 }
 
 // Value is a runtime Nix value.
@@ -62,10 +63,10 @@ type Value struct {
 	// Ctx holds Nix string-context elements (derivation outputs, store path refs).
 	Ctx []StringContextElem
 
-	List []*Value
+	List  []*Value
 	Attrs *AttrSet
 
-	Lambda *LambdaValue
+	Lambda  *LambdaValue
 	Builtin *Builtin
 	Partial *PartialBuiltin
 
@@ -105,16 +106,16 @@ type LambdaValue struct {
 
 // DerivationValue holds evaluated derivation fields.
 type DerivationValue struct {
-	Name              string
-	System            string
-	Builder           string
-	Args              []string
-	Env               map[string]string
-	Outputs           map[string]struct{}
-	InputDerivations  map[string][]string
-	InputSources      []string
-	DrvPath           string
-	OutPaths          map[string]string
+	Name             string
+	System           string
+	Builder          string
+	Args             []string
+	Env              map[string]string
+	Outputs          map[string]struct{}
+	InputDerivations map[string][]string
+	InputSources     []string
+	DrvPath          string
+	OutPaths         map[string]string
 }
 
 // Thunk defers evaluation with memoisation and blackhole detection.

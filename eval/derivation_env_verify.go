@@ -6,6 +6,7 @@ package eval
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/connerohnesorge/goonix/store"
@@ -26,6 +27,15 @@ func (ev *Evaluator) verifyDerivationEnvContext(drv *DerivationValue, envCtx map
 		ctx := envCtx[key]
 		for _, elem := range ctx {
 			if elem.DrvPath == "" {
+				continue
+			}
+			if elem.AllOutputs {
+				if _, ok := inputSet[elem.DrvPath]; !ok {
+					return fmt.Errorf("derivation %q env[%q]: string context references %q but that drv is not in inputDrvs", drv.Name, key, elem.DrvPath)
+				}
+				if !strings.Contains(s, elem.DrvPath) && !strings.Contains(s, filepath.Base(elem.DrvPath)) {
+					return fmt.Errorf("derivation %q env[%q]=%q does not contain drv path %q", drv.Name, key, truncEnv(s), elem.DrvPath)
+				}
 				continue
 			}
 			out := elem.Output
@@ -119,7 +129,7 @@ func (ev *Evaluator) verifyStructuredDerivationEnvContext(drv *DerivationValue, 
 			if !ok {
 				return fmt.Errorf("derivation %q structured attrs: input drv %q output %q not in store cache", drv.Name, p, out)
 			}
-			if strings.Contains(jsonText, want) || structuredArgsContain(drv, want) {
+			if strings.Contains(jsonText, want) || strings.Contains(jsonText, p) || structuredArgsContain(drv, want) {
 				continue
 			}
 			return fmt.Errorf("derivation %q __json does not contain output path %q from input drv %q", drv.Name, want, p)

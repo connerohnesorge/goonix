@@ -7,9 +7,9 @@ import (
 	"reflect"
 	"testing"
 
-	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 	"github.com/connerohnesorge/goonix/internal/oracle"
 	"github.com/connerohnesorge/goonix/parser"
+	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 )
 
 func TestBootstrapXgccStrictInputDrvsMatchesNix(t *testing.T) {
@@ -75,7 +75,7 @@ func scanValueStringContext(ev *Evaluator, v *Value, col *derivationInputCollect
 	}
 	switch fv.Kind {
 	case VKString:
-		col.mergeValueContext(fv)
+		col.mergeValueContext(ev, fv)
 	case VKList:
 		for _, el := range fv.List {
 			if err := scanValueStringContext(ev, el, col); err != nil {

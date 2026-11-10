@@ -183,14 +183,14 @@ func (ev *Evaluator) valueToStructuredJSON(v *Value, pos parser.Pos, col *deriva
 		}
 		return json.Number(formatNixJSONFloat(fv.Float)), nil
 	case VKString:
-		col.mergeValueContext(fv)
+		col.mergeValueContext(ev, fv)
 		return fv.String, nil
 	case VKPath:
 		sv, err := ev.coerceToString(fv, CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true})
 		if err != nil {
 			return nil, err
 		}
-		col.mergeValueContext(sv)
+		col.mergeValueContext(ev, sv)
 		return sv.String, nil
 	case VKList:
 		out := make([]any, len(fv.List))

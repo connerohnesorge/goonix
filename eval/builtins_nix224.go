@@ -465,12 +465,10 @@ func builtinUnsafeDiscardOutputDependency(ev *Evaluator, pos parser.Pos, args []
 	}
 	out := make([]StringContextElem, 0, len(sv.Ctx))
 	for _, c := range sv.Ctx {
-		if c.Output != "" {
-			sp := c.StorePath
-			if sp == "" {
-				sp = sv.String
-			}
-			out = append(out, StringContextElem{StorePath: sp})
+		// Only derivation-deep context is rewritten. A built output
+		// (!out!drv) stays a built output; Nix does not drop that.
+		if c.AllOutputs && c.DrvPath != "" {
+			out = append(out, StringContextElem{StorePath: c.DrvPath})
 			continue
 		}
 		out = append(out, c)

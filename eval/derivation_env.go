@@ -44,11 +44,18 @@ func (c *derivationInputCollector) addSrc(path string) {
 	c.srcs[path] = struct{}{}
 }
 
-func (c *derivationInputCollector) mergeValueContext(v *Value) {
+func (c *derivationInputCollector) mergeValueContext(ev *Evaluator, v *Value) {
 	if v == nil {
 		return
 	}
 	for _, elem := range v.Ctx {
+		if elem.AllOutputs && elem.DrvPath != "" {
+			// DrvDeep: the builder can reach every path in the derivation's
+			// closure, so each of those paths is an input source, and every
+			// derivation in the closure contributes all of its outputs.
+			c.addDrvDeepClosure(ev, elem.DrvPath)
+			continue
+		}
 		if elem.DrvPath != "" {
 			out := elem.Output
 			if out == "" {
@@ -60,6 +67,39 @@ func (c *derivationInputCollector) mergeValueContext(v *Value) {
 			c.addSrc(elem.StorePath)
 		}
 	}
+}
+
+func (c *derivationInputCollector) addDrvDeepClosure(ev *Evaluator, drvPath string) {
+	seen := map[string]bool{}
+	var walk func(string)
+	walk = func(path string) {
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		c.addSrc(path)
+		if ev == nil {
+			return
+		}
+		drv, ok := ev.LookupStrictDerivation(path)
+		if !ok || drv == nil {
+			return
+		}
+		if len(drv.Outputs) == 0 {
+			c.addDrv(path, "out")
+		} else {
+			for out := range drv.Outputs {
+				c.addDrv(path, out)
+			}
+		}
+		for _, src := range drv.InputSources {
+			walk(src)
+		}
+		for dep := range drv.InputDerivations {
+			walk(dep)
+		}
+	}
+	walk(drvPath)
 }
 
 func (c *derivationInputCollector) merge(other *derivationInputCollector) {
@@ -113,7 +153,7 @@ func (ev *Evaluator) coerceDerivationEnvString(v *Value, pos parser.Pos, col *de
 	if err != nil {
 		return "", nil, err
 	}
-	col.mergeValueContext(sv)
+	col.mergeValueContext(ev, sv)
 	return sv.String, copyStringContext(sv.Ctx), nil
 }
 

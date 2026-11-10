@@ -1123,7 +1123,7 @@ func (ev *Evaluator) strictDerivationResultAttrs(drv *DerivationValue, outputNam
 	set := func(name string, v *Value) {
 		av.Attrs.Binds[ev.Intern.Intern(name)] = &AttrBinding{Value: v}
 	}
-	set("drvPath", Str(drv.DrvPath, parser.Pos{}))
+	set("drvPath", drvPathString(drv.DrvPath, pos))
 	for _, outName := range outputNames {
 		p := drv.OutPaths[outName]
 		ctx := []StringContextElem{{DrvPath: drv.DrvPath, Output: outName}}
@@ -1217,7 +1217,7 @@ func (ev *Evaluator) derivationValueToAttrs(drv *DerivationValue) *Value {
 	set("name", Str(drv.Name, parser.Pos{}))
 	set("system", Str(drv.System, parser.Pos{}))
 	set("builder", Str(drv.Builder, parser.Pos{}))
-	set("drvPath", Str(drv.DrvPath, parser.Pos{}))
+	set("drvPath", drvPathString(drv.DrvPath, parser.Pos{}))
 	if drv.OutPaths != nil {
 		for outName, p := range drv.OutPaths {
 			ctx := []StringContextElem{{DrvPath: drv.DrvPath, Output: outName}}
@@ -1265,7 +1265,9 @@ func builtinGetContext(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 			continue
 		}
 		entry := Attrs(false)
-		if elem.StorePath != "" && elem.DrvPath == "" {
+		if elem.AllOutputs {
+			entry.Attrs.Binds[ev.Intern.Intern("allOutputs")] = &AttrBinding{Value: Bool(true)}
+		} else if elem.StorePath != "" && elem.DrvPath == "" {
 			entry.Attrs.Binds[ev.Intern.Intern("path")] = &AttrBinding{Value: Bool(true)}
 		} else {
 			out := elem.Output
@@ -1321,12 +1323,23 @@ func builtinToFile(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 
 // nixContextElemString is Nix's NixStringContextElem::to_string for a derivation reference.
 // StorePath::to_string is the basename, so a built output is "!out!<hash>-name.drv".
+func drvPathString(drvPath string, pos parser.Pos) *Value {
+	return StrWithContext(drvPath, []StringContextElem{{
+		DrvPath:    drvPath,
+		AllOutputs: true,
+	}}, pos)
+}
+
 func nixContextElemString(elem StringContextElem) string {
+	base := filepath.Base(elem.DrvPath)
+	if elem.AllOutputs {
+		return "=" + base
+	}
 	out := elem.Output
 	if out == "" {
 		out = "out"
 	}
-	return "!" + out + "!" + filepath.Base(elem.DrvPath)
+	return "!" + out + "!" + base
 }
 
 func builtinPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {

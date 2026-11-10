@@ -50,11 +50,26 @@ func DrvPathFromATermBytes(cfg Config, aterm []byte) (string, error) {
 func drvPathFromATermDigest(cfg Config, atermDigest []byte, name string, d *gonixdrv.Derivation) (string, error) {
 	h := sha256.New()
 	h.Write([]byte("text:"))
+	// A DrvDeep context records the .drv as both an input derivation and an
+	// input source. Nix's reference set keeps that path once.
+	seen := make(map[string]struct{}, len(d.InputDerivations)+len(d.InputSources))
 	refs := make([]string, 0, len(d.InputDerivations)+len(d.InputSources))
-	for inputDrvPath := range d.InputDerivations {
-		refs = append(refs, inputDrvPath)
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		refs = append(refs, p)
 	}
-	refs = append(refs, d.InputSources...)
+	for inputDrvPath := range d.InputDerivations {
+		add(inputDrvPath)
+	}
+	for _, src := range d.InputSources {
+		add(src)
+	}
 	sort.Strings(refs)
 	for _, ref := range refs {
 		h.Write([]byte(ref))
