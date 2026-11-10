@@ -130,7 +130,10 @@ func parseFlakeRefString(ref string) (flakeRef, error) {
 		return parseGitArchiveRef(scheme, rest, ref)
 	case "http", "https":
 		return parseURLFlakeRef("tarball", ref)
-	case "git+http", "git+https", "tarball+http", "tarball+https", "file+http", "file+https":
+	case "git+http", "git+https", "git+ssh", "git+file",
+		"tarball+http", "tarball+https",
+		"file+http", "file+https",
+		"hg+http", "hg+https", "hg+ssh", "hg+file":
 		typ, raw, _ := strings.Cut(scheme, "+")
 		return parseURLFlakeRef(typ, raw+":"+rest)
 	case "flake":
@@ -201,7 +204,8 @@ func parseGitArchiveRef(scheme, rest, original string) (flakeRef, error) {
 // https URL. Nix records the transport URL without the type prefix and
 // keeps ref, rev, and narHash from the query.
 func parseURLFlakeRef(typ, raw string) (flakeRef, error) {
-	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") &&
+		!strings.HasPrefix(raw, "ssh://") && !strings.HasPrefix(raw, "file://") {
 		return flakeRef{}, fmt.Errorf("flake reference '%s' is not an absolute path", raw)
 	}
 	base, query, _ := strings.Cut(raw, "?")
@@ -326,8 +330,8 @@ func (f flakeRef) String() string {
 		return s + "?" + strings.Join(parts, "&")
 	case "path":
 		return "path:" + f.Path
-	case "git":
-		return flakeURLString("git+"+f.URL, f)
+	case "git", "hg":
+		return flakeURLString(f.Type+"+"+f.URL, f)
 	case "tarball", "file":
 		return flakeURLString(f.URL, f)
 	default:
@@ -399,7 +403,7 @@ func flakeRefAttrs(ev *Evaluator, f flakeRef, pos parser.Pos) *Value {
 		}
 	case "path":
 		put("path", f.Path)
-	case "git", "tarball", "file":
+	case "git", "hg", "tarball", "file":
 		put("url", f.URL)
 		if f.Rev != "" {
 			put("rev", f.Rev)
@@ -498,7 +502,7 @@ func builtinFlakeRefToString(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 		if err != nil {
 			return nil, err
 		}
-	case "git", "tarball", "file":
+	case "git", "hg", "tarball", "file":
 		f.URL, err = getAttrString(ev, set, "url")
 		if err != nil {
 			return nil, err

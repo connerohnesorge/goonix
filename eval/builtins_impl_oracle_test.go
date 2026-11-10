@@ -72,6 +72,12 @@ func TestBuiltinImplementationsMatchNix(t *testing.T) {
 		`builtins.toJSON (builtins.parseFlakeRef "gitlab:NixOS%2Fnixpkgs/nixpkgs")`,
 		`builtins.toJSON (builtins.parseFlakeRef "gitlab:group%2Fsub/repo/0123456789abcdef0123456789abcdef01234567")`,
 		`builtins.flakeRefToString (builtins.parseFlakeRef "gitlab:NixOS%2Fnixpkgs/nixpkgs")`,
+		`builtins.toJSON (builtins.parseFlakeRef "git+ssh://git@github.com/NixOS/nix.git")`,
+		`builtins.flakeRefToString (builtins.parseFlakeRef "git+ssh://git@github.com/NixOS/nix.git?ref=main")`,
+		`builtins.toJSON (builtins.parseFlakeRef "git+file:///tmp/repo")`,
+		`builtins.toJSON (builtins.parseFlakeRef "hg+https://example.com/repo")`,
+		`builtins.flakeRefToString (builtins.parseFlakeRef "hg+https://example.com/repo?ref=default")`,
+		`builtins.toJSON (builtins.parseFlakeRef "hg+file:///tmp/hg")`,
 		`builtins.toJSON (builtins.parseFlakeRef "path:/tmp/x")`,
 		`builtins.flakeRefToString { type = "path"; path = "/tmp/x"; }`,
 	}
