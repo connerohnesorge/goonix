@@ -31,7 +31,7 @@ Pinned Nix version: `internal/nixversion` (also re-exported from `internal/oracl
 | `store/local/` | 4b | On-disk store + `modernc.org/sqlite` metadata |
 | `eval/` | 2 / 2b | Lazy evaluator + builtins / NIX_PATH |
 | `substitute/`, `build/` | 6 / 5 | HTTP binary cache + builder (initial stubs) |
-| `cmd/goonix` | — | `parse`, `eval`, `instantiate` |
+| `cmd/goonix` | — | `parse`, `eval`, `instantiate` (with `-I`, `-A`, `--arg`, `--argstr`), `build`, `gc` |
 | `ladder/` | 7 / 13 | Integration tests vs committed goldens |
 
 ## Oracle pair
@@ -49,4 +49,4 @@ NovaNix parity facts (for docs): **22** matching packages on nixpkgs 24.11 / Nix
 
 ## Status (v0)
 
-Hello `.drvPath` golden is still in progress; see [STATUS.md](STATUS.md) for issues #2–#14 and test evidence. Open PR #15 for the phase checklist.
+`goonix instantiate testdata/nixpkgs -A hello --argstr system x86_64-linux --arg config '{}' --arg overlays '[]'` writes the same `.drv` closure as Nix 2.24.9, byte for byte. The same holds for `stdenv`, `bash`, and `coreutils`. `ladder.TestInstantiateClosureMatchesGolden` checks this against `testdata/golden/closure/*.sha256` without Nix installed. See [STATUS.md](STATUS.md) for issues #2–#14 and test evidence.

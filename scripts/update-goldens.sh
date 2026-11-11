@@ -25,13 +25,13 @@ NIX_FLAGS=(
   -I "nix=$ROOT/testdata/nix"
 )
 
-LIB_VER=$("$NIX" "${NIX_FLAGS[@]}" --eval --raw -E '(import <nixpkgs/lib>).version' | tr -d '"')
+LIB_VER=$("$NIX" "${NIX_FLAGS[@]}" --eval -E '(import <nixpkgs/lib>).version' | tr -d '"')
 if [[ "$LIB_VER" != 24.11* ]]; then
   echo "refusing to update goldens: lib.version=$LIB_VER (expected 24.11*)" >&2
   exit 1
 fi
 
-HELLO_DRV=$("$NIX" "${NIX_FLAGS[@]}" --eval --raw -E '
+HELLO_DRV=$("$NIX" "${NIX_FLAGS[@]}" --eval -E '
   with import <nixpkgs> { system = "x86_64-linux"; config = {}; overlays = []; };
   hello.drvPath
 ' | tr -d '"')
@@ -43,3 +43,16 @@ echo "Wrote testdata/golden/hello.drvPath = $HELLO_DRV"
 if [[ -n "$OLD" && "$OLD" != "$HELLO_DRV" ]]; then
   echo "Note: hello.drvPath changed from $OLD" >&2
 fi
+
+# Closure goldens for the issue #9 targets: sha256sum of every .drv that
+# nix-instantiate writes for the attribute, sorted by file name.
+mkdir -p "$ROOT/testdata/golden/closure"
+for attr in hello stdenv bash coreutils; do
+  TMP=$(mktemp -d)
+  env -u HOME NIX_PATH= "$NIX" --store "$TMP" "$NIXPKGS" -A "$attr" \
+    --argstr system x86_64-linux --arg config '{}' --arg overlays '[]' >/dev/null
+  (cd "$TMP/nix/store" && sha256sum -- *.drv) > "$ROOT/testdata/golden/closure/$attr.sha256"
+  chmod -R u+w "$TMP" && rm -rf "$TMP"
+  echo "Wrote testdata/golden/closure/$attr.sha256 ($(wc -l < "$ROOT/testdata/golden/closure/$attr.sha256") drvs)"
+done
+"$NIX" "${NIX_FLAGS[@]}" --eval -E '(import <nixpkgs> { system = "x86_64-linux"; config = {}; overlays = []; }).lib.version' | tr -d '"' > "$ROOT/testdata/golden/lib.version"

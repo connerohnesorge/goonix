@@ -60,8 +60,8 @@ func usage() {
 
 Usage:
   goonix parse <file.nix>
-  goonix eval [--json] [--pure] [-I path] <file.nix>
-  goonix instantiate [--store DIR] <file.nix>
+  goonix eval [--json] [--pure] [-I path]... [-A attr] [--arg name expr] [--argstr name str] <file.nix|dir>
+  goonix instantiate [--store DIR] [-I path]... [-A attr] [--arg name expr] [--argstr name str] <file.nix|dir>
   goonix build [--store DIR] [-I path] <file.nix>
   goonix derivation-show [--go-eval FILE [-I path]...] [--nix PATH]
   goonix drv-diff --nix-instantiate FILE | --nix-drv PATH --go-eval FILE [-I path]...
@@ -90,29 +90,26 @@ func cmdEval(args []string) {
 	fs := flag.NewFlagSet("eval", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "emit JSON")
 	pure := fs.Bool("pure", true, "pure evaluation mode")
-	searchPath := fs.String("I", "", "add search path entry")
 	extraXP := fs.String("extra-experimental-features", "", "space-separated experimental features (flakes enables fetch-tree)")
-	_ = fs.Parse(args)
+	ra, flags, err := splitRootArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	_ = fs.Parse(flags)
 	rest := fs.Args()
 	if len(rest) != 1 {
 		fmt.Fprintln(os.Stderr, "eval expects one file argument")
 		os.Exit(2)
 	}
 	ev := eval.NewEvaluator()
-	ev.SetCurFile(rest[0])
 	if !*pure {
 		ev = ev.WithEffects(eval.IOEffects{})
 	}
 	ev = ev.WithExperimental(strings.Fields(*extraXP)...)
-	if *searchPath != "" {
-		for _, part := range strings.Split(*searchPath, ":") {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				ev.NixPath.PrependEntries(part)
-			}
-		}
-	}
-	expr, err := parser.ParseFile(rest[0])
+	ra.apply(ev)
+	expr, curFile, err := ra.expr(rest[0])
+	ev.SetCurFile(curFile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -134,7 +131,12 @@ func cmdEval(args []string) {
 func cmdInstantiate(args []string) {
 	fs := flag.NewFlagSet("instantiate", flag.ExitOnError)
 	storeFlag := fs.String("store", "", "physical store root (contains store/ subdirectory)")
-	_ = fs.Parse(args)
+	ra, flags, err := splitRootArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	_ = fs.Parse(flags)
 	rest := fs.Args()
 	if len(rest) != 1 {
 		fmt.Fprintln(os.Stderr, "instantiate expects one file argument")
@@ -146,8 +148,9 @@ func cmdInstantiate(args []string) {
 		eff = eval.ChrootIOEffects{PhysRoot: *storeFlag}
 	}
 	ev := eval.NewEvaluator().WithEffects(eff)
-	ev.SetCurFile(rest[0])
-	expr, err := parser.ParseFile(rest[0])
+	ra.apply(ev)
+	expr, curFile, err := ra.expr(rest[0])
+	ev.SetCurFile(curFile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
