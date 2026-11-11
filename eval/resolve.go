@@ -69,7 +69,26 @@ func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, e
 		}
 	}
 	if name := ev.Intern.Lookup(sym); name != "" {
+		// true, false and null are base-environment variables: a let or
+		// function argument can shadow them, a with cannot.
+		switch name {
+		case "true":
+			return &AttrBinding{Value: Bool(true)}, true, nil
+		case "false":
+			return &AttrBinding{Value: Bool(false)}, true, nil
+		case "null":
+			return &AttrBinding{Value: Null()}, true, nil
+		}
 		if b, ok := ev.globalBuiltin(name); ok {
+			// __nixPath, __storeDir, __currentSystem and the like are
+			// values, not functions.
+			if b.Nullary {
+				v, err := b.Fn(ev, parser.Pos{}, nil)
+				if err != nil {
+					return nil, false, err
+				}
+				return &AttrBinding{Value: v}, true, nil
+			}
 			return &AttrBinding{Value: &Value{Kind: VKBuiltin, Builtin: b}}, true, nil
 		}
 	}

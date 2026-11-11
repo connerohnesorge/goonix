@@ -83,15 +83,15 @@ func (ev *Evaluator) coerceToString(v *Value, cc CoerceContext) (*Value, error) 
 		return ev.coerceAttrSetToString(fv, cc)
 	case VKNull, VKBool, VKInt, VKFloat, VKList:
 		if cc.Mode != CoerceString {
-			return nil, strictCoerceError(pos, fv)
+			return nil, ev.strictCoerceError(pos, fv)
 		}
 		return ev.coerceToStringScalarList(fv, cc)
 	default:
-		return nil, evalErr(pos, "cannot coerce %s to string", valueKindName(fv.Kind))
+		return nil, ev.coerceTypeError(pos, fv)
 	}
 }
 
-func strictCoerceError(pos parser.Pos, fv *Value) error {
+func (ev *Evaluator) strictCoerceError(pos parser.Pos, fv *Value) error {
 	switch fv.Kind {
 	case VKNull:
 		return evalErr(pos, "cannot coerce null to a string: null")
@@ -106,7 +106,7 @@ func strictCoerceError(pos parser.Pos, fv *Value) error {
 	case VKFloat:
 		return evalErr(pos, "cannot coerce a float to a string: %s", nixXMLFloat(fv.Float))
 	default:
-		return evalErr(pos, "cannot coerce a %s to a string", valueKindName(fv.Kind))
+		return ev.coerceTypeError(pos, fv)
 	}
 }
 
@@ -164,7 +164,7 @@ func (ev *Evaluator) coerceAttrSetToString(fv *Value, cc CoerceContext) (*Value,
 		}
 		return ev.coerceToString(tv, cc)
 	}
-	return nil, evalErr(cc.Pos, "cannot coerce %s to a string", valueKindName(VKAttrs))
+	return nil, ev.coerceTypeError(cc.Pos, fv)
 }
 
 func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths bool) (*Value, error) {
@@ -195,14 +195,7 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 	ctx = []StringContextElem{{StorePath: storePath}}
 	// As in Nix, copyToStore alone decides: every caller that asks for
 	// CopyPaths gets the path added to the store.
-	reason := "copy"
-	switch {
-	case ev.materializeStorePaths:
-		reason = "derivation-env"
-	case ev.inStringInterpolation:
-		reason = "interp"
-	}
-	ev.recordCopyPathTrace(p, pos, reason)
+	ev.copyPathTrace = append(ev.copyPathTrace, CopyPathTraceEvent{SourcePath: p, Pos: pos})
 	err = ev.Effects.RealiseStorePath(storePath, func() error {
 		return store.CopyPathToStore(p, ev.physicalStorePath(storePath))
 	})
@@ -210,17 +203,6 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 		return nil, err
 	}
 	return StrWithContext(storePath, ctx, pos), nil
-}
-
-func (ev *Evaluator) recordCopyPathTrace(sourcePath string, pos parser.Pos, reason string) {
-	if ev == nil {
-		return
-	}
-	ev.copyPathTrace = append(ev.copyPathTrace, CopyPathTraceEvent{
-		SourcePath: sourcePath,
-		Pos:        pos,
-		Reason:     reason,
-	})
 }
 
 func pathStringContext(p, storeDir string) []StringContextElem {
@@ -269,9 +251,6 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 		return Path(fa.Path + bs.String), nil
 	}
 	if fb.Kind == VKPath {
-		prevInterp := ev.inStringInterpolation
-		ev.inStringInterpolation = true
-		defer func() { ev.inStringInterpolation = prevInterp }()
 		cc := CoerceContext{Mode: CoerceStrict, Pos: pos, CopyPaths: true}
 		as, err := ev.coerceToString(fa, cc)
 		if err != nil {

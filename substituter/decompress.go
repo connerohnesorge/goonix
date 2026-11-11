@@ -5,7 +5,7 @@
 package substituter
 
 import (
-	"bytes"
+	"compress/bzip2"
 	"fmt"
 	"io"
 
@@ -13,25 +13,26 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
-func decompress(data []byte, compression string) ([]byte, error) {
+// decompressReader wraps r with the decompressor a narinfo Compression field
+// names, so a NAR streams from the network without being held in memory.
+func decompressReader(r io.Reader, compression string) (io.ReadCloser, error) {
 	switch compression {
 	case "", "none":
-		return data, nil
+		return io.NopCloser(r), nil
 	case "xz":
-		r, err := xz.NewReader(bytes.NewReader(data))
+		xr, err := xz.NewReader(r)
 		if err != nil {
 			return nil, err
 		}
-		return io.ReadAll(r)
+		return io.NopCloser(xr), nil
 	case "zstd":
-		dec, err := zstd.NewReader(bytes.NewReader(data))
+		dec, err := zstd.NewReader(r)
 		if err != nil {
 			return nil, err
 		}
-		defer dec.Close()
-		return io.ReadAll(dec)
+		return dec.IOReadCloser(), nil
 	case "bzip2":
-		return nil, fmt.Errorf("compression %q not supported (pure Go)", compression)
+		return io.NopCloser(bzip2.NewReader(r)), nil
 	default:
 		return nil, fmt.Errorf("unknown compression %q", compression)
 	}

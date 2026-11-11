@@ -5,6 +5,7 @@
 package local
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 
 	gonixnar "github.com/nix-community/go-nix/pkg/nar"
+	"github.com/nix-community/go-nix/pkg/nixbase32"
 	"github.com/nix-community/go-nix/pkg/nixhash"
 
 	"github.com/connerohnesorge/goonix/store"
@@ -55,7 +57,7 @@ func (s *Store) AddToStoreFlat(sourceFile, name string) (logicalPath string, err
 	if err != nil {
 		return "", err
 	}
-	var buf bytesBuffer
+	var buf bytes.Buffer
 	if err := gonixnar.DumpPath(&buf, sourceFile); err != nil {
 		return "", err
 	}
@@ -87,51 +89,89 @@ func (s *Store) AddToStoreRecursive(sourceDir, name string) (logicalPath string,
 	return logicalPath, s.registerPath(logicalPath, narHash, narSize, refs)
 }
 
-// ImportNAR unpacks verified NAR bytes into logicalPath and registers metadata.
+// ImportNAR streams the NAR in r into logicalPath. It hashes the NAR while
+// unpacking it into a temporary directory beside the store object, and only
+// moves it into place and registers it when the hash equals expectNarHash
+// (if given). Memory use does not grow with the NAR size.
 func (s *Store) ImportNAR(logicalPath string, r io.Reader, expectNarHash string) error {
-	data, err := io.ReadAll(r)
+	phys := PhysicalPath(s.Root, logicalPath)
+	if err := os.MkdirAll(filepath.Dir(phys), 0o755); err != nil {
+		return err
+	}
+	tmpDir, err := os.MkdirTemp(filepath.Dir(phys), ".import-")
 	if err != nil {
 		return err
 	}
-	got, narSize, err := HashNARStream(bytesNewReader(data))
-	if err != nil {
+	defer RemoveStoreTree(tmpDir)
+	h := sha256.New()
+	counted := &countingReader{r: io.TeeReader(r, h)}
+	tmp := filepath.Join(tmpDir, "nar")
+	if err := unpackNAR(counted, tmp); err != nil {
 		return err
 	}
+	// Hash any bytes the NAR reader left unread, so trailing data fails the
+	// hash check instead of being ignored.
+	if _, err := io.Copy(io.Discard, counted); err != nil {
+		return err
+	}
+	got := nixbase32.EncodeToString(h.Sum(nil))
 	if expectNarHash != "" && got != expectNarHash {
 		return fmt.Errorf("nar hash mismatch: got %s want %s", got, expectNarHash)
 	}
-	phys := PhysicalPath(s.Root, logicalPath)
-	if err := os.RemoveAll(phys); err != nil {
+	if err := RemoveStoreTree(phys); err != nil {
 		return err
 	}
-	if err := unpackNAR(bytesNewReader(data), phys); err != nil {
+	// Moving a directory updates its ".." entry, which needs write
+	// permission on the directory itself; restore 0555 afterwards.
+	fi, err := os.Lstat(tmp)
+	if err != nil {
 		return err
 	}
-	narHash := got
-	if expectNarHash != "" {
-		narHash = expectNarHash
+	if fi.IsDir() {
+		if err := os.Chmod(tmp, 0o755); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(tmp, phys); err != nil {
+		return err
+	}
+	if fi.IsDir() {
+		if err := os.Chmod(phys, 0o555); err != nil {
+			return err
+		}
 	}
 	refs, err := s.ScanPathReferences(logicalPath)
 	if err != nil {
 		return err
 	}
-	return s.registerPath(logicalPath, narHash, narSize, refs)
+	return s.registerPath(logicalPath, got, counted.n, refs)
 }
 
-func bytesNewReader(b []byte) *bytesReader { return &bytesReader{b: b} }
-
-type bytesReader struct {
-	b []byte
-	i int
+type countingReader struct {
+	r io.Reader
+	n int64
 }
 
-func (r *bytesReader) Read(p []byte) (int, error) {
-	if r.i >= len(r.b) {
-		return 0, io.EOF
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// RemoveStoreTree deletes a store object. Store directories are read-only
+// (0555), and unlinking an entry needs write permission on its directory,
+// so it makes the directories writable first. A missing path is not an error.
+func RemoveStoreTree(path string) error {
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		return nil
 	}
-	n := copy(p, r.b[r.i:])
-	r.i += n
-	return n, nil
+	_ = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			_ = os.Chmod(p, 0o755)
+		}
+		return nil
+	})
+	return os.RemoveAll(path)
 }
 
 func (s *Store) registerPath(logicalPath, narHash string, narSize int64, refs []string) error {
@@ -218,17 +258,6 @@ func copyFile(src, dst string) error {
 	_, err = io.Copy(out, in)
 	return err
 }
-
-type bytesBuffer struct {
-	b []byte
-}
-
-func (b *bytesBuffer) Write(p []byte) (int, error) {
-	b.b = append(b.b, p...)
-	return len(p), nil
-}
-
-func (b *bytesBuffer) Bytes() []byte { return b.b }
 
 func unpackNAR(r io.Reader, dest string) error {
 	nr, err := gonixnar.NewReader(r)

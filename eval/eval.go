@@ -66,9 +66,6 @@ type Evaluator struct {
 	strictDrvs       map[string]*gonixdrv.Derivation // every derivationStrict result, keyed by drvPath
 	moduloCache      *store.ModuloCache
 
-	materializeStorePaths bool // true while coercing derivation env strings (path → store)
-	inStringInterpolation bool // "${path}" / string+path string contexts
-
 	verifyStrictMemo bool // recompute derivationStrict on memo hit and assert identical (tests)
 
 	applyingCallable *Value // current partial application target (callPackageWith auto-merge)
@@ -82,7 +79,6 @@ type Evaluator struct {
 type CopyPathTraceEvent struct {
 	SourcePath string
 	Pos        parser.Pos
-	Reason     string // "interp" | "derivation-env"
 }
 
 type storeConfig struct {
@@ -99,7 +95,6 @@ func NewEvaluator() *Evaluator {
 		NixPath:     NewNixPathFromEnv(),
 		importCache: make(map[string]*Value),
 	}
-	prependEmbeddedNixPath(e.NixPath)
 	e.registerBuiltins()
 	if os.Getenv("GOONIX_TRACE_FORCE") != "" {
 		e.forceTrace = true
@@ -284,6 +279,7 @@ func (ev *Evaluator) evalExpr(expr parser.Expr, env *Env) (*Value, error) {
 		return &Value{
 			Kind: VKLambda,
 			Lambda: &LambdaValue{
+				Expr:      e,
 				SimpleArg: e.Arg,
 				Formals:   e.Formals,
 				ArgFirst:  e.ArgFirst,
@@ -304,15 +300,6 @@ func (ev *Evaluator) evalExpr(expr parser.Expr, env *Env) (*Value, error) {
 }
 
 func (ev *Evaluator) evalVar(v *parser.Var, env *Env) (*Value, error) {
-	if v.Name == "true" {
-		return Bool(true), nil
-	}
-	if v.Name == "false" {
-		return Bool(false), nil
-	}
-	if v.Name == "null" {
-		return Null(), nil
-	}
 	sym := ev.Intern.Intern(v.Name)
 	if bind, ok, err := ev.lookupEnv(env, sym); err != nil {
 		return nil, err
@@ -338,10 +325,7 @@ func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		prevInterp := ev.inStringInterpolation
-		ev.inStringInterpolation = true
 		sv, err := ev.coerceToString(v, cc)
-		ev.inStringInterpolation = prevInterp
 		if err != nil {
 			return nil, err
 		}
@@ -353,17 +337,13 @@ func (ev *Evaluator) evalString(s *parser.String, env *Env) (*Value, error) {
 
 func (ev *Evaluator) evalPath(p *parser.Path, env *Env) (*Value, error) {
 	text := p.Text
-	if strings.HasPrefix(text, "<") && strings.HasSuffix(text, ">") {
-		name := strings.TrimSuffix(strings.TrimPrefix(text, "<"), ">")
-		resolved, err := ev.NixPath.FindFile(name)
-		if err != nil {
-			return nil, evalErr(p.P, "%v", err)
-		}
-		return Path(resolved), nil
-	}
 	// Any relative path literal, with or without a leading ./ (such as
 	// apparmor/includes.nix), is relative to the file it appears in.
-	if !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "~/") && ev.curFile != "" {
+	// Nix canonicalises path literals: /a/../b is /b and /. is /.
+	switch {
+	case strings.HasPrefix(text, "/"):
+		text = filepath.Clean(text)
+	case !strings.HasPrefix(text, "~/") && ev.curFile != "":
 		text = filepath.Join(filepath.Dir(ev.curFile), text)
 	}
 	return Path(text), nil
@@ -618,7 +598,6 @@ func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
 		return nil, err
 	}
 	if !ev.isCallableValue(ff, c.P) {
-		ev.logTypeMismatchWant(c.P, ff, "function")
 		return nil, evalErr(c.P, "attempt to call non-function")
 	}
 	args := make([]*Value, len(c.Args))
@@ -781,7 +760,6 @@ func (ev *Evaluator) evalSelect(s *parser.Select, env *Env, hasDefault bool, def
 			if hasDefault {
 				return ev.evalExpr(defaultExpr, env)
 			}
-			ev.logTypeMismatchWant(s.P, fb, "attribute set")
 			return nil, evalErr(s.P, "value is not an attribute set")
 		}
 		if fb.Kind == VKAttrs {
@@ -1000,130 +978,8 @@ func (ev *Evaluator) evalBinary(b *parser.BinaryOp, env *Env) (*Value, error) {
 			eq = !eq
 		}
 		return Bool(eq), nil
-	case "+", "-", "*", "/":
-		return ev.evalArithmetic(b, env)
-	case "<", "<=", ">", ">=":
-		return ev.evalCompare(b, env)
 	}
 	return nil, evalErr(b.P, "unknown operator %q", b.Op)
-}
-
-func (ev *Evaluator) evalArithmetic(b *parser.BinaryOp, env *Env) (*Value, error) {
-	l, err := ev.evalExpr(b.Left, env)
-	if err != nil {
-		return nil, err
-	}
-	r, err := ev.evalExpr(b.Right, env)
-	if err != nil {
-		return nil, err
-	}
-	fl, err := ev.mustWHNF(l, b.P)
-	if err != nil {
-		return nil, err
-	}
-	fr, err := ev.mustWHNF(r, b.P)
-	if err != nil {
-		return nil, err
-	}
-	if b.Op == "+" && (fl.Kind == VKString || fr.Kind == VKString || fl.Kind == VKPath || fr.Kind == VKPath) {
-		return ev.concatCoercedStrings(fl, fr, b.P)
-	}
-	if fl.Kind == VKInt && fr.Kind == VKInt {
-		switch b.Op {
-		case "+":
-			return Int(fl.Int + fr.Int), nil
-		case "-":
-			return Int(fl.Int - fr.Int), nil
-		case "*":
-			return Int(fl.Int * fr.Int), nil
-		case "/":
-			if fr.Int == 0 {
-				return nil, evalErr(b.P, "division by zero")
-			}
-			return Int(fl.Int / fr.Int), nil
-		}
-	}
-	if (fl.Kind == VKInt || fl.Kind == VKFloat) && (fr.Kind == VKInt || fr.Kind == VKFloat) {
-		lf := float64(fl.Int)
-		if fl.Kind == VKFloat {
-			lf = fl.Float
-		}
-		rf := float64(fr.Int)
-		if fr.Kind == VKFloat {
-			rf = fr.Float
-		}
-		var out float64
-		switch b.Op {
-		case "+":
-			out = lf + rf
-		case "-":
-			out = lf - rf
-		case "*":
-			out = lf * rf
-		case "/":
-			if rf == 0 {
-				return nil, evalErr(b.P, "division by zero")
-			}
-			out = lf / rf
-		}
-		return Float(out), nil
-	}
-	return nil, evalErr(b.P, "invalid arithmetic operands")
-}
-
-func (ev *Evaluator) evalCompare(b *parser.BinaryOp, env *Env) (*Value, error) {
-	l, err := ev.evalExpr(b.Left, env)
-	if err != nil {
-		return nil, err
-	}
-	r, err := ev.evalExpr(b.Right, env)
-	if err != nil {
-		return nil, err
-	}
-	fl, err := ev.forceValue(l)
-	if err != nil {
-		return nil, err
-	}
-	fr, err := ev.forceValue(r)
-	if err != nil {
-		return nil, err
-	}
-	ok := false
-	if fl.Kind == VKInt && fr.Kind == VKInt {
-		switch b.Op {
-		case "<":
-			ok = fl.Int < fr.Int
-		case "<=":
-			ok = fl.Int <= fr.Int
-		case ">":
-			ok = fl.Int > fr.Int
-		case ">=":
-			ok = fl.Int >= fr.Int
-		}
-		return Bool(ok), nil
-	}
-	if fl.Kind == VKFloat || fr.Kind == VKFloat || fl.Kind == VKInt || fr.Kind == VKInt {
-		lf := float64(fl.Int)
-		if fl.Kind == VKFloat {
-			lf = fl.Float
-		}
-		rf := float64(fr.Int)
-		if fr.Kind == VKFloat {
-			rf = fr.Float
-		}
-		switch b.Op {
-		case "<":
-			ok = lf < rf
-		case "<=":
-			ok = lf <= rf
-		case ">":
-			ok = lf > rf
-		case ">=":
-			ok = lf >= rf
-		}
-		return Bool(ok), nil
-	}
-	return nil, evalErr(b.P, "invalid comparison operands")
 }
 
 // evalConcatStrings is Nix's ExprConcatStrings::eval. Unless ForceString is
@@ -1256,12 +1112,6 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		// thunk that failed, so the error shows what demanded the value.
 		if ee, ok := err.(*EvalError); ok && ev.forceTrace && !strings.Contains(ee.Msg, "\nforce stack") {
 			ee.Msg += "\nforce stack (innermost last):\n  " + strings.Join(ev.forceFrames, "\n  ")
-		}
-		if t.errCtx != "" {
-			if ee, ok := err.(*EvalError); ok {
-				return nil, &EvalError{Pos: ee.Pos, Msg: t.errCtx + " " + ee.Msg}
-			}
-			return nil, fmt.Errorf("%s: %w", t.errCtx, err)
 		}
 		return nil, err
 	}
@@ -1521,9 +1371,6 @@ func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {
 func (ev *Evaluator) describeThunk(t *Thunk) string {
 	if t == nil {
 		return "<nil>"
-	}
-	if t.errCtx != "" {
-		return t.errCtx
 	}
 	if t.lazy != nil {
 		return fmt.Sprintf("lazy@%s:%d", t.pos.File, t.pos.Line)

@@ -274,6 +274,10 @@ func lex(src []byte, path string) (*lexResult, error) {
 					}
 					break
 				}
+				// IND_STR's '[^'$]: a ' before $ is its own token, as in Nix.
+				if src[i] == '\'' && i+1 < n && src[i+1] == '$' {
+					break
+				}
 				i++
 			}
 			if i > start {

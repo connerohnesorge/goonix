@@ -35,7 +35,10 @@ func OpenStoreWithConfig(physicalRoot string, cfg store.Config) (*Store, error) 
 		return nil, err
 	}
 	dbPath := filepath.Join(physicalRoot, "db.sqlite")
-	db, err := sql.Open("sqlite", dbPath)
+	// Another goonix process may hold a write transaction: wait for it
+	// instead of failing with "database is locked". WAL lets readers run
+	// alongside one writer.
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, err
 	}

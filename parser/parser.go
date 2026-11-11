@@ -19,6 +19,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // ParseString parses a Nix expression from source text.
@@ -475,7 +476,34 @@ func (p *Parser) parseBinOp(prec int) (Expr, error) {
 			}
 			continue
 		}
-		left = &BinaryOp{P: left.Pos(), Op: op, Left: left, Right: right}
+		lessThan := func(a, b Expr) Expr {
+			return &Call{P: left.Pos(), Fun: &Var{P: left.Pos(), Name: "__lessThan"}, Args: []Expr{a, b}}
+		}
+		// Like Nix, comparisons call __lessThan, so they can be shadowed:
+		// a > b is b < a, a <= b is !(b < a), a >= b is !(a < b).
+		switch op {
+		case "<":
+			left = lessThan(left, right)
+		case ">":
+			left = lessThan(right, left)
+		case "<=":
+			left = &UnaryOp{P: left.Pos(), Op: "!", Expr: lessThan(right, left)}
+		case ">=":
+			left = &UnaryOp{P: left.Pos(), Op: "!", Expr: lessThan(left, right)}
+		default:
+			left = &BinaryOp{P: left.Pos(), Op: op, Left: left, Right: right}
+		}
+		// == != and < > <= >= are %nonassoc in Nix's grammar: a second
+		// operator of the same group right after is a syntax error.
+		if opPrec == precEq || opPrec == precRel {
+			next, nextPrec, err := p.peekBinOp()
+			if err != nil {
+				return nil, err
+			}
+			if next != "" && nextPrec == opPrec {
+				return nil, p.errorf("syntax error, unexpected '%s'", next)
+			}
+		}
 	}
 }
 
@@ -606,7 +634,16 @@ func (p *Parser) parseAtom() (Expr, error) {
 		return &URI{P: t.Pos, Text: p.text(t)}, nil
 	case tokenPath:
 		t := p.advance()
-		return &Path{P: t.Pos, Text: p.text(t)}, nil
+		text := p.text(t)
+		// Like Nix, <name> is __findFile __nixPath "name", so a let or
+		// scopedImport can change how it resolves.
+		if strings.HasPrefix(text, "<") && strings.HasSuffix(text, ">") {
+			return &Call{P: t.Pos, Fun: &Var{P: t.Pos, Name: "__findFile"}, Args: []Expr{
+				&Var{P: t.Pos, Name: "__nixPath"},
+				&String{P: t.Pos, Parts: []StringPart{{Pos: t.Pos, Text: text[1 : len(text)-1]}}},
+			}}, nil
+		}
+		return &Path{P: t.Pos, Text: text}, nil
 	case tokenFloat:
 		t := p.cur()
 		text := p.text(t)
@@ -913,9 +950,8 @@ func stringExpr(pos Pos, parts []StringPart) Expr {
 			exprs = append(exprs, &String{P: part.Pos, Parts: []StringPart{{Pos: part.Pos, Text: part.Text}}})
 		}
 	}
-	if len(exprs) == 1 {
-		return exprs[0]
-	}
+	// A quoted "${x}" stays a one-part concatenation, as in Nix: it coerces
+	// x to a string.
 	return &ConcatStrings{P: pos, Parts: exprs, ForceString: true}
 }
 

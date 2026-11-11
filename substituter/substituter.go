@@ -49,7 +49,11 @@ func NewClient(cfg Config) *Client {
 		cfg.CacheURL = defaultCache
 	}
 	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 2 * time.Minute}
+		// Bound the wait for a response, not the whole transfer: a total
+		// timeout would also cut off large NARs that are still streaming.
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.ResponseHeaderTimeout = 2 * time.Minute
+		cfg.HTTPClient = &http.Client{Transport: tr}
 	}
 	if len(cfg.TrustedKeys) == 0 {
 		pk, err := signature.ParsePublicKey(cacheNixOSPublicKey)
@@ -107,15 +111,16 @@ func (c *Client) trySubstitute(st *local.Store, storePath string, seen map[strin
 			return false, fmt.Errorf("reference %s not substituted", refPath)
 		}
 	}
-	data, err := c.downloadNar(ni)
+	nar, err := c.openNar(ni)
 	if err != nil {
 		if isNetworkUnavailable(err) {
 			return false, nil
 		}
 		return false, err
 	}
+	defer nar.Close()
 	narHash := ni.NarHash.Format(nixhash.NixBase32, false)
-	if err := st.ImportNAR(storePath, bytes.NewReader(data), narHash); err != nil {
+	if err := st.ImportNAR(storePath, nar, narHash); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -175,12 +180,6 @@ func (c *Client) FetchNarInfo(storePath string) (*narinfo.NarInfo, error) {
 		return nil, err
 	}
 	ni.StorePath = storePath
-	for i, ref := range ni.References {
-		if strings.HasPrefix(ref, storepath.StoreDir+"/") {
-			continue
-		}
-		ni.References[i] = ref
-	}
 	return ni, nil
 }
 
@@ -223,7 +222,8 @@ func (c *Client) verifyNarInfo(ni *narinfo.NarInfo) error {
 	return nil
 }
 
-func (c *Client) downloadNar(ni *narinfo.NarInfo) ([]byte, error) {
+// openNar starts the NAR download and returns it decompressed, as a stream.
+func (c *Client) openNar(ni *narinfo.NarInfo) (io.ReadCloser, error) {
 	u, err := c.narURL(ni.URL)
 	if err != nil {
 		return nil, err
@@ -232,16 +232,24 @@ func (c *Client) downloadNar(ni *narinfo.NarInfo) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return nil, fmt.Errorf("nar HTTP %s", resp.Status)
 	}
-	compressed, err := io.ReadAll(resp.Body)
+	dec, err := decompressReader(resp.Body, ni.Compression)
 	if err != nil {
+		resp.Body.Close()
 		return nil, err
 	}
-	return decompress(compressed, ni.Compression)
+	return readCloser{dec, func() error { dec.Close(); return resp.Body.Close() }}, nil
 }
+
+type readCloser struct {
+	io.Reader
+	close func() error
+}
+
+func (r readCloser) Close() error { return r.close() }
 
 func (c *Client) narURL(rel string) (string, error) {
 	base, err := url.Parse(c.cfg.CacheURL)

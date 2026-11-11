@@ -21,7 +21,6 @@ func (ev *Evaluator) mustWHNF(v *Value, pos parser.Pos) (*Value, error) {
 		return nil, err
 	}
 	if fv != nil && fv.Kind == VKDeferred {
-		ev.logTypeMismatchWant(pos, fv, "WHNF head (not thunk)")
 		return nil, evalErr(pos, "infinite recursion encountered")
 	}
 	return fv, nil
@@ -34,7 +33,6 @@ func (ev *Evaluator) forceAttrs(v *Value, pos parser.Pos) (*Value, error) {
 		return nil, err
 	}
 	if fv == nil || fv.Kind != VKAttrs {
-		ev.logTypeMismatchWant(pos, fv, "attribute set")
 		return nil, evalErr(pos, "// expects attribute sets")
 	}
 	return fv, nil

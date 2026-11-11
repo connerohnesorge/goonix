@@ -148,3 +148,34 @@ func modRoot(t *testing.T) string {
 		dir = parent
 	}
 }
+
+// build takes the same -A and --argstr as instantiate.
+func TestGoonixBuildAttrAndArgstr(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	root := t.TempDir()
+	nixFile := filepath.Join(root, "t.nix")
+	src := `{ x }: { d = derivation {
+  name = "cli-arg-${x}";
+  system = "x86_64-linux";
+  builder = "/bin/sh";
+  args = [ "-c" "echo hi > $out" ];
+}; }`
+	if err := os.WriteFile(nixFile, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildGoonix(t, root)
+	args := []string{"build", "--store", filepath.Join(root, "store-root")}
+	if err := exec.Command("unshare", "-rm", "true").Run(); err != nil {
+		args = append(args, "--allow-relocated-store")
+	}
+	args = append(args, nixFile, "-A", "d", "--argstr", "x", "yes")
+	out, err := exec.Command(bin, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("goonix build: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "-cli-arg-yes") {
+		t.Fatalf("unexpected output: %s", out)
+	}
+}

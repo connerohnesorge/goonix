@@ -164,14 +164,10 @@ func builtinImport(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if len(args) < 1 || len(args) > 2 {
 		return nil, evalErr(pos, "expected 1 or 2 arguments, got %d", len(args))
 	}
-	path, err := ev.forceString(args[0])
+	path, err := ev.importPathArg(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
-	if (strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../")) && ev.curFile != "" {
-		path = filepath.Join(filepath.Dir(ev.curFile), path)
-	}
-	path = resolveImportPath(path)
 	moduleVal, err := ev.importModule(path)
 	if err != nil {
 		return nil, err
@@ -210,6 +206,25 @@ func (ev *Evaluator) bindCorepkgsEnv(env *Env) {
 			env.bind(ev.Intern.Intern(name), &Value{Kind: VKBuiltin, Builtin: b})
 		}
 	}
+}
+
+// importPathArg forces the argument of import or scopedImport. Like Nix's
+// coerceToPath, a string must already be an absolute path: a relative path
+// literal was made absolute when it was evaluated, but a string such as
+// "./b.nix" is an error rather than a guess about the current file.
+func (ev *Evaluator) importPathArg(v *Value, pos parser.Pos) (string, error) {
+	fv, err := ev.forceValue(v)
+	if err != nil {
+		return "", err
+	}
+	path, err := ev.forceString(fv)
+	if err != nil {
+		return "", err
+	}
+	if fv.Kind == VKString && !filepath.IsAbs(path) {
+		return "", evalErr(pos, "string '%s' doesn't represent an absolute path", path)
+	}
+	return resolveImportPath(path), nil
 }
 
 func resolveImportPath(path string) string {
@@ -1464,6 +1479,8 @@ func builtinFilterSource(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	return ev.filterSourceToStore(pos, args[0], src, name)
 }
 
+// builtinNixPath is builtins.nixPath: the search path as a list of
+// { prefix; path; } sets, the form builtins.findFile takes.
 func builtinNixPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if len(args) != 0 {
 		return nil, evalErr(pos, "nixPath expects no arguments")
@@ -1471,22 +1488,65 @@ func builtinNixPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	entries := ev.NixPath.Entries()
 	elems := make([]*Value, len(entries))
 	for i, e := range entries {
-		elems[i] = Str(e, pos)
+		set := Attrs(false)
+		set.Attrs.Binds[ev.Intern.Intern("prefix")] = &AttrBinding{Value: Str(e[0], pos)}
+		set.Attrs.Binds[ev.Intern.Intern("path")] = &AttrBinding{Value: Str(e[1], pos)}
+		elems[i] = set
 	}
 	return List(elems...), nil
 }
 
+// builtinFindFile is builtins.findFile searchPath name, which <name>
+// desugars to. searchPath is a list of { prefix ? ""; path; } sets.
 func builtinFindFile(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-	if err := arity(pos, args, 1); err != nil {
+	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	name, err := ev.forceString(args[0])
+	list, err := ev.forceValue(args[0])
 	if err != nil {
 		return nil, err
 	}
-	p, err := ev.NixPath.FindFile(name)
+	if list.Kind != VKList {
+		return nil, evalErr(pos, "expected a list but found %s", nixShowType(list))
+	}
+	entries := make([]nixPathEntry, 0, len(list.List))
+	for _, el := range list.List {
+		set, err := ev.forceAttrs(el, pos)
+		if err != nil {
+			return nil, err
+		}
+		var e nixPathEntry
+		if b := set.Attrs.Binds[ev.Intern.Intern("prefix")]; b != nil {
+			v, err := ev.attrBindingValue(b)
+			if err != nil {
+				return nil, err
+			}
+			if e.prefix, err = ev.forceString(v); err != nil {
+				return nil, err
+			}
+		}
+		b := set.Attrs.Binds[ev.Intern.Intern("path")]
+		if b == nil {
+			return nil, evalErr(pos, "attribute 'path' missing")
+		}
+		v, err := ev.attrBindingValue(b)
+		if err != nil {
+			return nil, err
+		}
+		pv, err := ev.coerceToString(v, CoerceContext{Mode: CoerceStrict, Pos: pos})
+		if err != nil {
+			return nil, err
+		}
+		e.path = pv.String
+		entries = append(entries, e)
+	}
+	name, err := ev.forceString(args[1])
 	if err != nil {
 		return nil, err
+	}
+	p, err := findInSearchPath(entries, name)
+	if err != nil {
+		return nil, evalErr(pos, "%v", err)
 	}
 	return Path(p), nil
 }
@@ -1692,7 +1752,6 @@ func forceList(ev *Evaluator, pos parser.Pos, v *Value) ([]*Value, error) {
 		return nil, err
 	}
 	if fv.Kind != VKList {
-		ev.logTypeMismatchWant(pos, fv, "list")
 		return nil, evalErr(pos, "expected a list")
 	}
 	return fv.List, nil
@@ -1990,32 +2049,60 @@ func builtinLessThan(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	a, err := ev.forceValue(args[0])
+	lt, err := ev.compareValues(args[0], args[1], pos)
 	if err != nil {
 		return nil, err
 	}
-	b, err := ev.forceValue(args[1])
+	return Bool(lt), nil
+}
+
+// compareValues is Nix's CompareValues, behind builtins.lessThan and so
+// behind < > <= >=: numbers (int and float mixed), strings and paths by
+// bytes, lists lexicographically. Anything else cannot be compared.
+func (ev *Evaluator) compareValues(a, b *Value, pos parser.Pos) (bool, error) {
+	fa, err := ev.forceValue(a)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	if a.Kind == VKInt && b.Kind == VKInt {
-		return Bool(a.Int < b.Int), nil
+	fb, err := ev.forceValue(b)
+	if err != nil {
+		return false, err
 	}
-	if a.Kind == VKFloat || b.Kind == VKFloat || a.Kind == VKInt || b.Kind == VKInt {
-		var af, bf float64
-		if a.Kind == VKInt {
-			af = float64(a.Int)
-		} else {
-			af = a.Float
+	switch {
+	case fa.Kind == VKFloat && fb.Kind == VKInt:
+		return fa.Float < float64(fb.Int), nil
+	case fa.Kind == VKInt && fb.Kind == VKFloat:
+		return float64(fa.Int) < fb.Float, nil
+	case fa.Kind != fb.Kind:
+		return false, evalErr(pos, "cannot compare %s with %s", nixShowType(fa), nixShowType(fb))
+	}
+	switch fa.Kind {
+	case VKInt:
+		return fa.Int < fb.Int, nil
+	case VKFloat:
+		return fa.Float < fb.Float, nil
+	case VKString:
+		return fa.String < fb.String, nil
+	case VKPath:
+		return fa.Path < fb.Path, nil
+	case VKList:
+		for i := 0; ; i++ {
+			if i == len(fb.List) {
+				return false, nil
+			}
+			if i == len(fa.List) {
+				return true, nil
+			}
+			eq, err := ev.equalValues(fa.List[i], fb.List[i])
+			if err != nil {
+				return false, err
+			}
+			if !eq {
+				return ev.compareValues(fa.List[i], fb.List[i], pos)
+			}
 		}
-		if b.Kind == VKInt {
-			bf = float64(b.Int)
-		} else {
-			bf = b.Float
-		}
-		return Bool(af < bf), nil
 	}
-	return Bool(false), nil
+	return false, evalErr(pos, "cannot compare %s with %s; values of that type are incomparable", nixShowType(fa), nixShowType(fb))
 }
 
 func builtinAdd(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {

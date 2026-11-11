@@ -97,6 +97,7 @@ type AttrBinding struct {
 
 // LambdaValue is a user-defined function closure.
 type LambdaValue struct {
+	Expr      *parser.Lambda // source node, for its position in messages
 	SimpleArg string
 	Formals   *parser.Formals
 	ArgFirst  bool
@@ -130,8 +131,6 @@ type Thunk struct {
 
 	memo   *Value
 	locked bool // true while this thunk is being forced (blackhole)
-	// errCtx is prepended when this thunk's force fails (builtins.addErrorContext).
-	errCtx string
 }
 
 func (v *Value) force(e *Evaluator) (*Value, error) {
@@ -203,12 +202,21 @@ func joinStrings(ss []string, sep string) string {
 }
 
 // Null returns the null value.
-func Null() *Value {
-	return &Value{Kind: VKNull}
-}
+// Values are never changed after creation, so null, true and false can be
+// shared instead of allocated on every use.
+var (
+	nullValue  = &Value{Kind: VKNull}
+	trueValue  = &Value{Kind: VKBool, Bool: true}
+	falseValue = &Value{Kind: VKBool, Bool: false}
+)
+
+func Null() *Value { return nullValue }
 
 func Bool(b bool) *Value {
-	return &Value{Kind: VKBool, Bool: b}
+	if b {
+		return trueValue
+	}
+	return falseValue
 }
 
 func Int(i int64) *Value {

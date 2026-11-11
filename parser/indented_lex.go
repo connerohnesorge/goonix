@@ -44,9 +44,8 @@ func decodeIndStringEscape(src []byte, i int) (string, int) {
 	case '\'':
 		return "''", i + 3
 	case '$':
-		if i+3 < len(src) && src[i+3] == '{' {
-			return "${", i + 4
-		}
+		// Nix's lexer turns ''$ into "$" alone; a following { is ordinary
+		// text. The string is the same either way, but the parts differ.
 		return "$", i + 3
 	case '\\':
 		if i+3 >= len(src) {

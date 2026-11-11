@@ -65,6 +65,18 @@ func TestNixSemantics(t *testing.T) {
 		{name: "functionArgs-plain-lambda", expr: `builtins.functionArgs (name: conf: 1)`, want: `{}`},
 		{name: "functionArgs-formals", expr: `builtins.functionArgs ({ a, b ? 1 }: 1)`, want: `{"a":false,"b":true}`},
 		{name: "functionArgs-functor", expr: `builtins.functionArgs { __functor = s: x: 1; }`, wantErr: "'functionArgs' requires a function"},
+		// true, false and null are variables a let can shadow; with cannot.
+		{name: "shadow-constants", expr: `[ (let true = 1; in true) (let null = 2; in null) (with { true = 4; }; true) ]`, want: `[1,2,true]`},
+		// == and < chains are syntax errors.
+		{name: "chained-equality", expr: `1 == 1 == true`, wantErr: "syntax error"},
+		{name: "chained-less-than", expr: `1 < 2 < 3`, wantErr: "syntax error"},
+		{name: "mixed-comparison-levels", expr: `1 < 2 == true`, want: `true`},
+		// import of a relative string is an error, not a guess.
+		{name: "import-relative-string", expr: `import ("./" + "b.nix")`, wantErr: "string './b.nix' doesn't represent an absolute path"},
+		// Coercion errors end with the value, unevaluated parts as «thunk».
+		{name: "coerce-list-error", expr: `"a" + [ "q" (1 + 1) ]`, wantErr: `cannot coerce a list to a string: [ "q" «thunk» ]`},
+		{name: "coerce-set-error", expr: `{ a = 1; b = [ 2 ]; } + 1`, wantErr: `cannot coerce a set to a string: { a = 1; b = «thunk»; }`},
+		{name: "coerce-primop-error", expr: `"${builtins.map}"`, wantErr: `cannot coerce the built-in function 'map' to a string: «primop map»`},
 		// toJSON does not HTML-escape.
 		{name: "toJSON-no-html-escape", expr: `{ a = "x > y < z & w"; }`, want: `{"a":"x > y < z & w"}`},
 	}
