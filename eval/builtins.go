@@ -2615,6 +2615,9 @@ func builtinGenericClosure(ev *Evaluator, pos parser.Pos, args []*Value) (*Value
 	return List(res...), nil
 }
 
+// builtinFunctionArgs is Nix's prim_functionArgs: the formals of a lambda
+// (name -> has default), {} for a plain x: lambda or a builtin, and an error
+// for anything else. Functors are lib.functionArgs's job, not the builtin's.
 func builtinFunctionArgs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
@@ -2623,56 +2626,17 @@ func builtinFunctionArgs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	if err != nil {
 		return nil, err
 	}
-	if f.Kind == VKAttrs {
-		faSym := ev.Intern.Intern("__functionArgs")
-		if b := f.Attrs.Binds[faSym]; b != nil {
-			var meta *Value
-			if b.Thunk != nil {
-				meta, err = ev.forceThunk(b.Thunk)
-			} else {
-				meta = b.Value
-			}
-			if err != nil {
-				return nil, err
-			}
-			if meta != nil && meta.Kind == VKAttrs {
-				return meta, nil
-			}
-		}
-		if ev.hasFunctor(f) {
-			sym := ev.Intern.Intern("__functor")
-			b := f.Attrs.Binds[sym]
-			var functor *Value
-			if b.Thunk != nil {
-				functor, err = ev.forceThunk(b.Thunk)
-			} else {
-				functor = b.Value
-			}
-			if err != nil {
-				return nil, err
-			}
-			fn, err := ev.applyCallable(functor, f, pos)
-			if err != nil {
-				return nil, err
-			}
-			return builtinFunctionArgs(ev, pos, []*Value{fn})
-		}
-	}
 	out := Attrs(false)
 	switch f.Kind {
 	case VKLambda:
 		if f.Lambda.Formals != nil {
 			for _, p := range f.Lambda.Formals.Params {
-				optional := p.Default != nil
-				out.Attrs.Binds[ev.Intern.Intern(p.Name)] = &AttrBinding{Value: Bool(optional)}
+				out.Attrs.Binds[ev.Intern.Intern(p.Name)] = &AttrBinding{Value: Bool(p.Default != nil)}
 			}
-		} else if f.Lambda.SimpleArg != "" {
-			out.Attrs.Binds[ev.Intern.Intern(f.Lambda.SimpleArg)] = &AttrBinding{Value: Bool(false)}
 		}
 	case VKBuiltin, VKPartialBuiltin:
-		// no formal argument metadata
 	default:
-		return nil, evalErr(pos, "expected a function")
+		return nil, evalErr(pos, "'functionArgs' requires a function")
 	}
 	return out, nil
 }

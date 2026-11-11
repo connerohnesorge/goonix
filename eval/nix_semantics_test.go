@@ -61,6 +61,10 @@ func TestNixSemantics(t *testing.T) {
 		// addErrorContext evaluates its message only on error.
 		{name: "addErrorContext-lazy-message", expr: `builtins.addErrorContext (throw "message forced") 1`, want: `1`},
 		{name: "addErrorContext-on-error", expr: `builtins.addErrorContext "while testing" (throw "boom")`, wantErr: "while testing"},
+		// functionArgs only reports formals, and rejects functors.
+		{name: "functionArgs-plain-lambda", expr: `builtins.functionArgs (name: conf: 1)`, want: `{}`},
+		{name: "functionArgs-formals", expr: `builtins.functionArgs ({ a, b ? 1 }: 1)`, want: `{"a":false,"b":true}`},
+		{name: "functionArgs-functor", expr: `builtins.functionArgs { __functor = s: x: 1; }`, wantErr: "'functionArgs' requires a function"},
 		// toJSON does not HTML-escape.
 		{name: "toJSON-no-html-escape", expr: `{ a = "x > y < z & w"; }`, want: `{"a":"x > y < z & w"}`},
 	}

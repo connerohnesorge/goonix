@@ -56,3 +56,14 @@ for attr in hello stdenv bash coreutils; do
   echo "Wrote testdata/golden/closure/$attr.sha256 ($(wc -l < "$ROOT/testdata/golden/closure/$attr.sha256") drvs)"
 done
 "$NIX" "${NIX_FLAGS[@]}" --eval -E '(import <nixpkgs> { system = "x86_64-linux"; config = {}; overlays = []; }).lib.version' | tr -d '"' > "$ROOT/testdata/golden/lib.version"
+
+# drvPath goldens for testdata/parity/cases.txt.
+: > "$ROOT/testdata/golden/parity.txt"
+grep -vE '^#|^$' "$ROOT/testdata/parity/cases.txt" | while read -r label expr; do
+  TMP=$(mktemp -d)
+  printf 'let pkgs = import <nixpkgs> { system = "x86_64-linux"; config = { }; overlays = [ ]; }; in %s\n' "$expr" > "$TMP/case.nix"
+  drv=$(env -u HOME NIX_PATH= "$NIX" --store "$TMP/store" -I "nixpkgs=$NIXPKGS" "$TMP/case.nix" | tail -1)
+  printf '%s %s\n' "$label" "$drv" >> "$ROOT/testdata/golden/parity.txt"
+  chmod -R u+w "$TMP" && rm -rf "$TMP"
+done
+echo "Wrote testdata/golden/parity.txt"
