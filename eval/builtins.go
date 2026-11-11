@@ -766,6 +766,10 @@ func builtinReadDir(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 			return nil, evalErr(pos, "reading directory %s: No such file or directory", p)
 		}
 		if errors.Is(err, syscall.ENOTDIR) {
+			// Nix resolves symlinks before reading, so it names the target.
+			if real, rerr := filepath.EvalSymlinks(p); rerr == nil {
+				p = real
+			}
 			return nil, evalErr(pos, "reading directory %s: Not a directory", p)
 		}
 		return nil, err

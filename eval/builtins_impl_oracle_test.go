@@ -118,6 +118,10 @@ func TestNix224ErrorTextMatch(t *testing.T) {
 	if err := os.WriteFile(flat, []byte("hello\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	flatLink := flat + "-link"
+	if err := os.Symlink(flat, flatLink); err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		expr   string
 		goHas  string
@@ -159,9 +163,15 @@ func TestNix224ErrorTextMatch(t *testing.T) {
 			nixHas: "opening file '/no/such/goonix-readfile': No such file or directory",
 		},
 		{
-			expr:   `builtins.readDir "/etc/hosts"`,
-			goHas:  "reading directory /etc/hosts: Not a directory",
-			nixHas: "reading directory /etc/hosts: Not a directory",
+			expr:   `builtins.readDir "` + flat + `"`,
+			goHas:  "reading directory " + flat + ": Not a directory",
+			nixHas: "reading directory " + flat + ": Not a directory",
+		},
+		{
+			// Nix resolves the symlink and names the target.
+			expr:   `builtins.readDir "` + flatLink + `"`,
+			goHas:  "reading directory " + flat + ": Not a directory",
+			nixHas: "reading directory " + flat + ": Not a directory",
 		},
 		{
 			expr:   `builtins.readDir "/no/such/goonix-readdir-missing"`,

@@ -127,6 +127,11 @@ func sandboxSetup() error {
 	if err := unix.Mount("", root, "", unix.MS_PRIVATE|unix.MS_REC, ""); err != nil {
 		return err
 	}
+	// The store tmpfs goes first: on NixOS /bin/sh and its loader live in
+	// /nix/store, and their binds below must land on top of it.
+	if err := unix.Mount("tmpfs", filepath.Join(root, "nix/store"), "tmpfs", 0, "mode=1777"); err != nil {
+		return err
+	}
 	shReal, err := filepath.EvalSymlinks("/bin/sh")
 	if err != nil {
 		return err
@@ -157,9 +162,6 @@ func sandboxSetup() error {
 		if err := bringUpLoopback(); err != nil {
 			return err
 		}
-	}
-	if err := unix.Mount("tmpfs", filepath.Join(root, "nix/store"), "tmpfs", 0, "mode=1777"); err != nil {
-		return err
 	}
 	for _, phys := range spec.Closure {
 		if err := mountClosurePath(root, phys); err != nil {
@@ -264,7 +266,7 @@ func mountClosurePath(root, phys string) error {
 	if err := unix.Mount(phys, dest, "", unix.MS_BIND, ""); err != nil {
 		return err
 	}
-	return unix.Mount("", dest, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, "")
+	return remountRO(dest)
 }
 
 func bindFileRO(src, dst string) error {
@@ -279,7 +281,32 @@ func bindFileRO(src, dst string) error {
 	if err := unix.Mount(src, dst, "", unix.MS_BIND, ""); err != nil {
 		return err
 	}
-	return unix.Mount("", dst, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, "")
+	return remountRO(dst)
+}
+
+// remountRO makes the bind mount at dst read-only. It keeps the flags the
+// mount already has: in a user namespace the kernel refuses a remount that
+// would clear locked flags such as nosuid and nodev (NixOS mounts /nix/store
+// with both).
+func remountRO(dst string) error {
+	var st unix.Statfs_t
+	if err := unix.Statfs(dst, &st); err != nil {
+		return err
+	}
+	flags := uintptr(unix.MS_BIND | unix.MS_REMOUNT | unix.MS_RDONLY)
+	for _, m := range []struct{ st, ms uintptr }{
+		{unix.ST_NOSUID, unix.MS_NOSUID},
+		{unix.ST_NODEV, unix.MS_NODEV},
+		{unix.ST_NOEXEC, unix.MS_NOEXEC},
+		{unix.ST_NOATIME, unix.MS_NOATIME},
+		{unix.ST_NODIRATIME, unix.MS_NODIRATIME},
+		{unix.ST_RELATIME, unix.MS_RELATIME},
+	} {
+		if uintptr(st.Flags)&m.st != 0 {
+			flags |= m.ms
+		}
+	}
+	return unix.Mount("", dst, "", flags, "")
 }
 
 func bindDynamicLibs(bin, root string) error {
