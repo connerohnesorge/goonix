@@ -19,14 +19,59 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/pprof"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/connerohnesorge/goonix/eval"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store"
 )
 
+// startProfile writes a CPU profile to $GOONIX_CPUPROFILE. With
+// $GOONIX_PROFILE_SECONDS it stops after that many seconds, writes a heap
+// profile to $GOONIX_HEAPPROFILE if set, and exits, so a run that never
+// finishes still leaves profiles.
+func startProfile() func() {
+	path := os.Getenv("GOONIX_CPUPROFILE")
+	if path == "" {
+		return func() {}
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	stop := func() { pprof.StopCPUProfile(); f.Close() }
+	if secs, err := strconv.Atoi(os.Getenv("GOONIX_PROFILE_SECONDS")); err == nil && secs > 0 {
+		go func() {
+			time.Sleep(time.Duration(secs) * time.Second)
+			stop()
+			eval.RequestStatsDump()
+			if hp := os.Getenv("GOONIX_HEAPPROFILE"); hp != "" {
+				if hf, err := os.Create(hp); err == nil {
+					_ = pprof.WriteHeapProfile(hf)
+					hf.Close()
+				}
+			}
+			if os.Getenv("GOONIX_EVAL_STATS") != "" {
+				// Give the evaluator time to print its counters and exit.
+				time.Sleep(10 * time.Second)
+			}
+			fmt.Fprintln(os.Stderr, "goonix: profile time limit reached")
+			os.Exit(3)
+		}()
+	}
+	return stop
+}
+
 func main() {
+	defer startProfile()()
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -103,7 +148,9 @@ func cmdEval(args []string) {
 		os.Exit(2)
 	}
 	ev := eval.NewEvaluator()
-	if !*pure {
+	if *pure {
+		ev = ev.WithEffects(eval.ReadOnlyEffects{Effects: ev.Effects})
+	} else {
 		ev = ev.WithEffects(eval.IOEffects{})
 	}
 	ev = ev.WithExperimental(strings.Fields(*extraXP)...)

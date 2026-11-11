@@ -206,3 +206,13 @@ func (ev *Evaluator) physicalStorePath(logical string) string {
 	}
 	return logical
 }
+
+// ReadOnlyEffects wraps another Effects and never writes the store: store
+// paths are still computed, as with Nix's --readonly-mode. goonix eval uses
+// it, since it has no --store and a normal user cannot write /nix/store.
+type ReadOnlyEffects struct {
+	Effects
+}
+
+// RealiseStorePath does nothing; the caller already has the store path.
+func (ReadOnlyEffects) RealiseStorePath(string, func() error) error { return nil }

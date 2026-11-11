@@ -58,12 +58,9 @@ func builtinZipAttrsWith(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 				var vals []*Value
 				for _, s := range inSets {
 					if b, ok := s.Attrs.Binds[sym]; ok && b != nil {
+						// The list f receives holds the values unevaluated.
 						if b.Thunk != nil {
-							v, err := ev.forceThunk(b.Thunk)
-							if err != nil {
-								return nil, err
-							}
-							vals = append(vals, v)
+							vals = append(vals, Deferred(b.Thunk))
 						} else if b.Value != nil {
 							vals = append(vals, b.Value)
 						}

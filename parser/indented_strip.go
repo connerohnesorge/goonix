@@ -124,10 +124,14 @@ func stripIndentation(pos Pos, parts []indStringPart) Expr {
 	if len(out) == 0 {
 		return stringLitExpr(pos, "")
 	}
+	// Nix returns a lone literal string as is; anything else, including a
+	// lone ${x}, is coerced to a string.
 	if len(out) == 1 {
-		return out[0]
+		if _, ok := out[0].(*String); ok {
+			return out[0]
+		}
 	}
-	return &ConcatStrings{P: pos, Parts: out}
+	return &ConcatStrings{P: pos, Parts: out, ForceString: true}
 }
 
 func lastIndexByte(s string, c byte) int {

@@ -447,7 +447,13 @@ func (p *Parser) parseBinOp(prec int) (Expr, error) {
 			continue
 		}
 		p.advance()
-		right, err := p.parseBinOp(opPrec + 1)
+		// Nix's grammar declares ->, // and ++ %right: a -> b -> c is
+		// a -> (b -> c). The other binary operators are left-associative.
+		nextPrec := opPrec + 1
+		if op == "->" || op == "//" || op == "++" {
+			nextPrec = opPrec
+		}
+		right, err := p.parseBinOp(nextPrec)
 		if err != nil {
 			return nil, err
 		}
@@ -910,7 +916,7 @@ func stringExpr(pos Pos, parts []StringPart) Expr {
 	if len(exprs) == 1 {
 		return exprs[0]
 	}
-	return &ConcatStrings{P: pos, Parts: exprs}
+	return &ConcatStrings{P: pos, Parts: exprs, ForceString: true}
 }
 
 func (a AttrName) pos() Pos {

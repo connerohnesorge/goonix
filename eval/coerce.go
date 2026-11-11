@@ -242,6 +242,9 @@ func hasNixStringContext(ctx []StringContextElem) bool {
 	return false
 }
 
+// concatCoercedStrings is one step of a string or path +. Like Nix's
+// ExprConcatStrings (coerceMore = false), only strings, paths and sets with
+// __toString or outPath coerce; integers, null and lists are errors.
 func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, error) {
 	fa, err := ev.forceValue(a)
 	if err != nil {
@@ -255,7 +258,7 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 		return Path(fa.Path + fb.Path), nil
 	}
 	if fa.Kind == VKPath {
-		cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false}
+		cc := CoerceContext{Mode: CoerceStrict, Pos: pos, CopyPaths: false}
 		bs, err := ev.coerceToString(fb, cc)
 		if err != nil {
 			return nil, err
@@ -269,7 +272,7 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 		prevInterp := ev.inStringInterpolation
 		ev.inStringInterpolation = true
 		defer func() { ev.inStringInterpolation = prevInterp }()
-		cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true}
+		cc := CoerceContext{Mode: CoerceStrict, Pos: pos, CopyPaths: true}
 		as, err := ev.coerceToString(fa, cc)
 		if err != nil {
 			return nil, err
@@ -280,7 +283,7 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 		}
 		return StrWithContext(as.String+bs.String, mergeStringContexts(as.Ctx, bs.Ctx), pos), nil
 	}
-	cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false}
+	cc := CoerceContext{Mode: CoerceStrict, Pos: pos, CopyPaths: false}
 	as, err := ev.coerceToString(fa, cc)
 	if err != nil {
 		return nil, err

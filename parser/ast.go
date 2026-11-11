@@ -222,6 +222,10 @@ func (e *BinaryOp) Pos() Pos { return e.P }
 type ConcatStrings struct {
 	P     Pos
 	Parts []Expr
+	// ForceString is set for string interpolation and indented strings,
+	// which always produce a string. a + b leaves it unset, and the first
+	// operand's type then decides between addition and concatenation.
+	ForceString bool
 }
 
 func (*ConcatStrings) exprNode()   {}

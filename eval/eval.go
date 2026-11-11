@@ -655,6 +655,9 @@ func (ev *Evaluator) evalOrFallback(base parser.Expr, rest []parser.Expr, env *E
 }
 
 func (ev *Evaluator) applyLambda(l *LambdaValue, args []*Value, pos parser.Pos) (*Value, error) {
+	if statsOn && l.Body != nil {
+		countLambda(l.Body.Pos())
+	}
 	if l == nil {
 		return nil, evalErr(pos, "invalid lambda")
 	}
@@ -1123,6 +1126,10 @@ func (ev *Evaluator) evalCompare(b *parser.BinaryOp, env *Env) (*Value, error) {
 	return nil, evalErr(b.P, "invalid comparison operands")
 }
 
+// evalConcatStrings is Nix's ExprConcatStrings::eval. Unless ForceString is
+// set, the first operand's type decides: an integer or float starts a sum
+// (an int sum becomes float once a float appears) and anything else starts a
+// string or path concatenation.
 func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Value, error) {
 	if len(c.Parts) == 0 {
 		return Str("", c.P), nil
@@ -1139,24 +1146,36 @@ func (ev *Evaluator) evalConcatStrings(c *parser.ConcatStrings, env *Env) (*Valu
 		}
 		vals[i] = fv
 	}
-	anyString := false
-	allInt := true
-	for _, fv := range vals {
-		if fv.Kind == VKString || fv.Kind == VKPath {
-			anyString = true
-			allInt = false
-		} else if fv.Kind != VKInt {
-			allInt = false
+	if !c.ForceString && (vals[0].Kind == VKInt || vals[0].Kind == VKFloat) {
+		isFloat := vals[0].Kind == VKFloat
+		n, f := vals[0].Int, vals[0].Float
+		for i, fv := range vals[1:] {
+			pos := c.Parts[i+1].Pos()
+			switch {
+			case fv.Kind == VKInt && !isFloat:
+				n += fv.Int
+			case fv.Kind == VKFloat && !isFloat:
+				isFloat, f = true, float64(n)+fv.Float
+			case fv.Kind == VKInt:
+				f += float64(fv.Int)
+			case fv.Kind == VKFloat:
+				f += fv.Float
+			case isFloat:
+				return nil, evalErr(pos, "cannot add %s to a float", nixShowType(fv))
+			default:
+				return nil, evalErr(pos, "cannot add %s to an integer", nixShowType(fv))
+			}
 		}
-	}
-	if !anyString && allInt && len(vals) >= 2 {
-		var sum int64
-		for _, fv := range vals {
-			sum += fv.Int
+		if isFloat {
+			return Float(f), nil
 		}
-		return Int(sum), nil
+		return Int(n), nil
 	}
 	acc := vals[0]
+	if c.ForceString && len(vals) == 1 {
+		cc := CoerceContext{Mode: CoerceStrict, Pos: c.P, CopyPaths: true}
+		return ev.coerceToString(acc, cc)
+	}
 	var err error
 	for i := 1; i < len(vals); i++ {
 		acc, err = ev.concatCoercedStrings(acc, vals[i], c.P)
@@ -1218,6 +1237,9 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		}
 		return nil, evalErr(t.pos, "%s", msg)
 	}
+	if statsOn {
+		countThunk(t.pos)
+	}
 	t.locked = true
 	defer func() {
 		t.locked = false
@@ -1230,6 +1252,11 @@ func (ev *Evaluator) forceThunk(t *Thunk) (*Value, error) {
 		v, err = ev.evalExpr(t.expr, t.env)
 	}
 	if err != nil {
+		// GOONIX_TRACE_FORCE: attach the force stack once, at the innermost
+		// thunk that failed, so the error shows what demanded the value.
+		if ee, ok := err.(*EvalError); ok && ev.forceTrace && !strings.Contains(ee.Msg, "\nforce stack") {
+			ee.Msg += "\nforce stack (innermost last):\n  " + strings.Join(ev.forceFrames, "\n  ")
+		}
 		if t.errCtx != "" {
 			if ee, ok := err.(*EvalError); ok {
 				return nil, &EvalError{Pos: ee.Pos, Msg: t.errCtx + " " + ee.Msg}
@@ -1402,6 +1429,13 @@ func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {
 	if fa.Kind == VKNull || fb.Kind == VKNull {
 		return fa.Kind == VKNull && fb.Kind == VKNull, nil
 	}
+	// Nix compares an integer and a float numerically.
+	if fa.Kind == VKInt && fb.Kind == VKFloat {
+		return float64(fa.Int) == fb.Float, nil
+	}
+	if fa.Kind == VKFloat && fb.Kind == VKInt {
+		return fa.Float == float64(fb.Int), nil
+	}
 	if fa.Kind != fb.Kind {
 		return false, nil
 	}
@@ -1431,15 +1465,31 @@ func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {
 		if fb.Kind != VKAttrs {
 			return false, nil
 		}
-		_, okA := ev.derivationAttrSetDrvPath(fa)
-		_, okB := ev.derivationAttrSetDrvPath(fb)
-		if okA && okB {
-			dpA, _ := ev.derivationAttrSetDrvPath(fa)
-			dpB, _ := ev.derivationAttrSetDrvPath(fb)
-			return dpA == dpB, nil
+		// Nix: if both sets have type = "derivation", compare their
+		// outPaths when both have one; otherwise compare attribute by
+		// attribute.
+		drvA, err := ev.isDerivationType(fa)
+		if err != nil {
+			return false, err
 		}
-		if okA != okB {
-			return false, nil
+		drvB, err := ev.isDerivationType(fb)
+		if err != nil {
+			return false, err
+		}
+		if drvA && drvB {
+			outSym := ev.Intern.Intern("outPath")
+			ia, ja := fa.Attrs.Binds[outSym], fb.Attrs.Binds[outSym]
+			if ia != nil && ja != nil {
+				va, err := ev.attrBindingValue(ia)
+				if err != nil {
+					return false, err
+				}
+				vb, err := ev.attrBindingValue(ja)
+				if err != nil {
+					return false, err
+				}
+				return ev.equalValues(va, vb)
+			}
 		}
 		if len(fa.Attrs.Binds) != len(fb.Attrs.Binds) {
 			return false, nil
@@ -1493,6 +1543,24 @@ func (ev *Evaluator) describeThunk(t *Thunk) string {
 		}
 	}
 	return fmt.Sprintf("thunk@%s:%d:%d", t.pos.File, t.pos.Line, t.pos.Col)
+}
+
+// isDerivationType is Nix's isDerivation: the set has a type attribute that
+// evaluates to the string "derivation". Errors forcing type propagate.
+func (ev *Evaluator) isDerivationType(v *Value) (bool, error) {
+	b := v.Attrs.Binds[ev.Intern.Intern("type")]
+	if b == nil {
+		return false, nil
+	}
+	tv, err := ev.attrBindingValue(b)
+	if err != nil {
+		return false, err
+	}
+	tv, err = ev.forceValue(tv)
+	if err != nil {
+		return false, err
+	}
+	return tv.Kind == VKString && tv.String == "derivation", nil
 }
 
 func (ev *Evaluator) derivationAttrSetDrvPath(v *Value) (string, bool) {

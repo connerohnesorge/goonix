@@ -75,3 +75,33 @@ func (ev *Evaluator) logTypeMismatchWant(pos parser.Pos, v *Value, want string) 
 	fmt.Fprintf(os.Stderr, "goonix type mismatch at %s:%d:%d: want %s; got %s\n",
 		pos.File, pos.Line, pos.Col, want, ev.describeValueForDebug(v))
 }
+
+// nixShowType is Nix's showType: the type as it appears in error messages.
+func nixShowType(v *Value) string {
+	switch v.Kind {
+	case VKNull:
+		return "null"
+	case VKBool:
+		return "a Boolean"
+	case VKInt:
+		return "an integer"
+	case VKFloat:
+		return "a float"
+	case VKString:
+		return "a string"
+	case VKPath:
+		return "a path"
+	case VKList:
+		return "a list"
+	case VKAttrs:
+		return "a set"
+	case VKBuiltin:
+		return "a built-in function"
+	case VKPartialBuiltin:
+		return "a partially applied built-in function"
+	case VKLambda:
+		return "a function"
+	default:
+		return valueKindName(v.Kind)
+	}
+}

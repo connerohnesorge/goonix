@@ -1918,15 +1918,10 @@ func builtinMapAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 			eval: ev,
 			pos:  pos,
 			lazy: func(ev *Evaluator) (*Value, error) {
-				var val *Value
-				var err error
+				// Nix passes the attribute's value to f unevaluated.
+				val := inBind.Value
 				if inBind.Thunk != nil {
-					val, err = ev.forceThunk(inBind.Thunk)
-				} else {
-					val = inBind.Value
-				}
-				if err != nil {
-					return nil, err
+					val = Deferred(inBind.Thunk)
 				}
 				r, err := ev.applyCall2(f, nameVal, val, pos)
 				if err != nil {
@@ -2398,13 +2393,28 @@ func builtinDiv(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.Kind == VKInt && b.Kind == VKInt {
-		if b.Int == 0 {
-			return nil, evalErr(pos, "division by zero")
-		}
-		return Int(a.Int / b.Int), nil
+	// Nix's prim_div: either operand a float makes a float division.
+	bf, ok := asFloat(b)
+	if !ok {
+		return nil, evalErr(pos, "expected a float but found %s: %s", nixShowType(b), b.DisplayString(ev, ev.Intern))
 	}
-	return nil, evalErr(pos, "div expects integers")
+	if bf == 0 {
+		return nil, evalErr(pos, "division by zero")
+	}
+	if a.Kind == VKFloat || b.Kind == VKFloat {
+		af, ok := asFloat(a)
+		if !ok {
+			return nil, evalErr(pos, "expected a float but found %s: %s", nixShowType(a), a.DisplayString(ev, ev.Intern))
+		}
+		return Float(af / bf), nil
+	}
+	if a.Kind != VKInt {
+		return nil, evalErr(pos, "expected an integer but found %s: %s", nixShowType(a), a.DisplayString(ev, ev.Intern))
+	}
+	if a.Int == math.MinInt64 && b.Int == -1 {
+		return nil, evalErr(pos, "overflow in integer division")
+	}
+	return Int(a.Int / b.Int), nil
 }
 
 func (ev *Evaluator) forceStringOrPath(v *Value) (string, error) {
@@ -2667,47 +2677,24 @@ func builtinFunctionArgs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	return out, nil
 }
 
+// builtinAddErrorContext is Nix's prim_addErrorContext: force the value, and
+// only if that fails evaluate the message and prepend it to the error.
+// Forcing the message up front would build every context string the module
+// system passes (one per option definition) even when nothing fails.
 func builtinAddErrorContext(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	ctx, err := ev.forceString(args[0])
-	if err != nil {
-		return nil, err
-	}
-	v := args[1]
-	if v == nil {
-		return Null(), nil
-	}
-	if ctx == "" {
+	v, err := ev.forceValue(args[1])
+	if err == nil {
 		return v, nil
 	}
-	return ev.wrapErrorContext(ctx, v, pos), nil
-}
-
-func (ev *Evaluator) wrapErrorContext(ctx string, v *Value, pos parser.Pos) *Value {
-	if v == nil {
-		return Null()
+	msg, merr := ev.coerceToString(args[0], CoerceContext{Mode: CoerceString, Pos: pos})
+	if merr != nil || msg.String == "" {
+		return nil, err
 	}
-	if ctx == "" {
-		return v
+	if ee, ok := err.(*EvalError); ok {
+		return nil, &EvalError{Pos: ee.Pos, Msg: msg.String + " " + ee.Msg}
 	}
-	if v.Kind == VKDeferred && v.Deferred != nil {
-		t := v.Deferred
-		if t.errCtx != "" {
-			ctx = ctx + " " + t.errCtx
-		}
-		nt := *t
-		nt.errCtx = ctx
-		return Deferred(&nt)
-	}
-	t := &Thunk{
-		eval:   ev,
-		pos:    pos,
-		errCtx: ctx,
-		lazy: func(ev *Evaluator) (*Value, error) {
-			return ev.forceValue(v)
-		},
-	}
-	return Deferred(t)
+	return nil, fmt.Errorf("%s: %w", msg.String, err)
 }
