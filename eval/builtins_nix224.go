@@ -8,6 +8,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
 
 	"crypto/md5"
 	"crypto/sha1"
@@ -344,14 +345,10 @@ func builtinScopedImport(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	if err != nil {
 		return nil, err
 	}
-	path, err := ev.forceString(args[1])
+	path, err := ev.importPathArg(args[1], pos)
 	if err != nil {
 		return nil, err
 	}
-	if (strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../")) && ev.curFile != "" {
-		path = filepath.Join(filepath.Dir(ev.curFile), path)
-	}
-	path = resolveImportPath(path)
 	return ev.importModuleInScope(path, scope)
 }
 
@@ -513,74 +510,116 @@ func fetchURLBytes(rawURL string) ([]byte, error) {
 	}
 }
 
+// unpackTarball unpacks a gzip, zstd or plain tar archive into dest, which
+// must be a fresh directory the caller owns: each format attempt starts from
+// an empty dest. It returns the newest entry mtime.
 func unpackTarball(data []byte, dest string) (int64, error) {
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return 0, err
-	}
-	var maxMtime int64
-	try := func(r io.Reader) error {
-		tr := tar.NewReader(r)
-		for {
-			hdr, err := tr.Next()
-			if err == io.EOF {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			if mt := hdr.ModTime.Unix(); mt > maxMtime {
-				maxMtime = mt
-			}
-			target := filepath.Join(dest, hdr.Name)
-			switch hdr.Typeflag {
-			case tar.TypeDir:
-				if err := os.MkdirAll(target, 0o755); err != nil {
-					return err
-				}
-			case tar.TypeReg:
-				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-					return err
-				}
-				f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
-				if err != nil {
-					return err
-				}
-				if _, err := io.Copy(f, tr); err != nil {
-					f.Close()
-					return err
-				}
-				f.Close()
-			case tar.TypeSymlink:
-				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-					return err
-				}
-				_ = os.Remove(target)
-				if err := os.Symlink(hdr.Linkname, target); err != nil {
-					return err
-				}
-			}
+	attempt := func(r io.Reader) (int64, error) {
+		if err := os.RemoveAll(dest); err != nil {
+			return 0, err
 		}
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			return 0, err
+		}
+		return untar(r, dest)
 	}
-	gr, err := gzip.NewReader(bytes.NewReader(data))
-	if err == nil {
+	if gr, err := gzip.NewReader(bytes.NewReader(data)); err == nil {
 		defer gr.Close()
-		if err := try(gr); err == nil {
-			return maxMtime, nil
+		if mt, err := attempt(gr); err == nil {
+			return mt, nil
+		} else if errors.Is(err, errUnsafeTarEntry) {
+			return 0, err
 		}
-		maxMtime = 0
 	}
 	if len(data) >= 4 && data[0] == 0x28 && data[1] == 0xb5 && data[2] == 0x2f && data[3] == 0xfd {
-		zr, zerr := zstd.NewReader(bytes.NewReader(data))
-		if zerr == nil {
+		if zr, err := zstd.NewReader(bytes.NewReader(data)); err == nil {
 			defer zr.Close()
-			if err := try(zr); err == nil {
-				return maxMtime, nil
+			if mt, err := attempt(zr); err == nil {
+				return mt, nil
+			} else if errors.Is(err, errUnsafeTarEntry) {
+				return 0, err
 			}
-			maxMtime = 0
 		}
 	}
-	if err := try(bytes.NewReader(data)); err != nil {
-		return 0, err
+	return attempt(bytes.NewReader(data))
+}
+
+var errUnsafeTarEntry = errors.New("tarball entry escapes the unpack directory")
+
+// untar writes the entries of r under dest. An entry name or hard link
+// target that is not local to dest is an error. Symlinks are created last,
+// so no entry is ever written through a symlink from the archive.
+func untar(r io.Reader, dest string) (int64, error) {
+	var maxMtime int64
+	type link struct{ name, target string }
+	var hardlinks, symlinks []link
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, err
+		}
+		if mt := hdr.ModTime.Unix(); mt > maxMtime {
+			maxMtime = mt
+		}
+		if hdr.Name == "" {
+			continue
+		}
+		if !filepath.IsLocal(hdr.Name) {
+			return 0, fmt.Errorf("%w: %q", errUnsafeTarEntry, hdr.Name)
+		}
+		target := filepath.Join(dest, hdr.Name)
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return 0, err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return 0, err
+			}
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode)&0o777)
+			if err != nil {
+				return 0, err
+			}
+			_, err = io.Copy(f, tr)
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil {
+				return 0, err
+			}
+		case tar.TypeLink:
+			if !filepath.IsLocal(hdr.Linkname) {
+				return 0, fmt.Errorf("%w: hard link %q -> %q", errUnsafeTarEntry, hdr.Name, hdr.Linkname)
+			}
+			hardlinks = append(hardlinks, link{hdr.Name, hdr.Linkname})
+		case tar.TypeSymlink:
+			symlinks = append(symlinks, link{hdr.Name, hdr.Linkname})
+		}
+	}
+	for _, l := range hardlinks {
+		target := filepath.Join(dest, l.name)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return 0, err
+		}
+		_ = os.Remove(target)
+		if err := os.Link(filepath.Join(dest, l.target), target); err != nil {
+			return 0, err
+		}
+	}
+	for _, l := range symlinks {
+		target := filepath.Join(dest, l.name)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return 0, err
+		}
+		_ = os.Remove(target)
+		if err := os.Symlink(l.target, target); err != nil {
+			return 0, err
+		}
 	}
 	return maxMtime, nil
 }

@@ -41,16 +41,11 @@ func (ev *Evaluator) applyCallable(f *Value, arg *Value, pos parser.Pos) (*Value
 		return nil, err
 	}
 	if !ev.isCallableValue(fv, pos) {
-		ev.logTypeMismatchWant(pos, fv, "function")
 		return nil, evalErr(pos, "attempt to call non-function")
 	}
 	switch fv.Kind {
 	case VKLambda:
-		prev := ev.applyingCallable
-		ev.applyingCallable = fv
-		out, err := ev.applyLambda(fv.Lambda, []*Value{arg}, pos)
-		ev.applyingCallable = prev
-		return out, err
+		return ev.applyLambda(fv.Lambda, []*Value{arg}, pos)
 	case VKBuiltin:
 		return ev.applyBuiltinStep(fv.Builtin, nil, arg, pos)
 	case VKPartialBuiltin:

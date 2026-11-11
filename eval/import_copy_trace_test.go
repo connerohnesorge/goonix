@@ -28,7 +28,7 @@ func TestImportNixpkgsNoStoreCopy(t *testing.T) {
 				t.Logf("... and %d more copies", len(ev.copyPathTrace)-20)
 				break
 			}
-			t.Logf("copy[%d] reason=%s src=%q at %s:%d:%d", i, e.Reason, e.SourcePath, e.Pos.File, e.Pos.Line, e.Pos.Col)
+			t.Logf("copy[%d] src=%q at %s:%d:%d", i, e.SourcePath, e.Pos.File, e.Pos.Line, e.Pos.Col)
 		}
 		t.Fatalf("expected no CopyPathToStore during nixpkgs import, got %d", len(ev.copyPathTrace))
 	}

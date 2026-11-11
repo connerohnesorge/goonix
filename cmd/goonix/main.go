@@ -19,14 +19,59 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/pprof"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/connerohnesorge/goonix/eval"
 	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store"
 )
 
+// startProfile writes a CPU profile to $GOONIX_CPUPROFILE. With
+// $GOONIX_PROFILE_SECONDS it stops after that many seconds, writes a heap
+// profile to $GOONIX_HEAPPROFILE if set, and exits, so a run that never
+// finishes still leaves profiles.
+func startProfile() func() {
+	path := os.Getenv("GOONIX_CPUPROFILE")
+	if path == "" {
+		return func() {}
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	stop := func() { pprof.StopCPUProfile(); f.Close() }
+	if secs, err := strconv.Atoi(os.Getenv("GOONIX_PROFILE_SECONDS")); err == nil && secs > 0 {
+		go func() {
+			time.Sleep(time.Duration(secs) * time.Second)
+			stop()
+			eval.RequestStatsDump()
+			if hp := os.Getenv("GOONIX_HEAPPROFILE"); hp != "" {
+				if hf, err := os.Create(hp); err == nil {
+					_ = pprof.WriteHeapProfile(hf)
+					hf.Close()
+				}
+			}
+			if os.Getenv("GOONIX_EVAL_STATS") != "" {
+				// Give the evaluator time to print its counters and exit.
+				time.Sleep(10 * time.Second)
+			}
+			fmt.Fprintln(os.Stderr, "goonix: profile time limit reached")
+			os.Exit(3)
+		}()
+	}
+	return stop
+}
+
 func main() {
+	defer startProfile()()
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -62,7 +107,7 @@ Usage:
   goonix parse <file.nix>
   goonix eval [--json] [--pure] [-I path]... [-A attr] [--arg name expr] [--argstr name str] <file.nix|dir>
   goonix instantiate [--store DIR] [-I path]... [-A attr] [--arg name expr] [--argstr name str] <file.nix|dir>
-  goonix build [--store DIR] [-I path] <file.nix>
+  goonix build [--store DIR] [-I path]... [-A attr] [--arg name expr] [--argstr name str] <file.nix|dir>
   goonix derivation-show [--go-eval FILE [-I path]...] [--nix PATH]
   goonix drv-diff --nix-instantiate FILE | --nix-drv PATH --go-eval FILE [-I path]...
   goonix gc --store DIR
@@ -103,7 +148,9 @@ func cmdEval(args []string) {
 		os.Exit(2)
 	}
 	ev := eval.NewEvaluator()
-	if !*pure {
+	if *pure {
+		ev = ev.WithEffects(eval.ReadOnlyEffects{Effects: ev.Effects})
+	} else {
 		ev = ev.WithEffects(eval.IOEffects{})
 	}
 	ev = ev.WithExperimental(strings.Fields(*extraXP)...)
@@ -165,6 +212,18 @@ func cmdInstantiate(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	if fv.Kind != eval.VKAttrs {
+		fmt.Fprintln(os.Stderr, "error: expression does not evaluate to a derivation (or a set or list of those)")
+		os.Exit(1)
+	}
+	// nix-instantiate prints drvPath!output when the default output is not out.
+	suffix := ""
+	if out, ok, err := ev.AttrString(fv, "outputName"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	} else if ok && out != "out" {
+		suffix = "!" + out
+	}
 	cfg := store.Config{}
 	if drvPath, err := eval.ForceStrictDrvPath(ev, fv); err == nil {
 		drv, ok := ev.LookupStrictDerivation(drvPath)
@@ -176,7 +235,7 @@ func cmdInstantiate(args []string) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Println(strings.TrimSpace(drv.DrvPath))
+		fmt.Println(strings.TrimSpace(drv.DrvPath) + suffix)
 		return
 	}
 	drv, err := ev.AttrsToDerivation(fv)
@@ -188,5 +247,5 @@ func cmdInstantiate(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Println(strings.TrimSpace(drv.DrvPath))
+	fmt.Println(strings.TrimSpace(drv.DrvPath) + suffix)
 }

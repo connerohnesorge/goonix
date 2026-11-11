@@ -142,7 +142,7 @@ func (ev *Evaluator) fillStructuredDerivationFromAttrs(attrs *Value, drv *Deriva
 		structured[key] = jv
 	}
 
-	raw, err := json.Marshal(structured)
+	raw, err := marshalNixJSON(structured)
 	if err != nil {
 		return err
 	}

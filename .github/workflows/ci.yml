@@ -76,10 +76,6 @@ jobs:
           # cmd tests and oracle tests whose names do not contain Oracle.
           allow = {
               "TestOrFallbackNullUsesRight",
-              "TestPkgConfigFetchurlGoATermDebug",
-              "TestPkgConfigFetchurlNixATermDebug",
-              "TestWrapperMissingInputsDebug",
-              "TestBrokenWrapperNameInspect",
           }
           bad = []
           path = sys.argv[1]

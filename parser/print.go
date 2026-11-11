@@ -17,7 +17,10 @@ package parser
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -33,13 +36,21 @@ func printExpr(b *bytes.Buffer, expr Expr) {
 	case *Integer:
 		b.WriteString(e.Text)
 	case *Float:
-		b.WriteString(e.Text)
+		// Nix shows a float with C++ stream defaults: 6 significant digits,
+		// so 1.0 is 1 and 3.141592654 is 3.14159.
+		if f, err := strconv.ParseFloat(e.Text, 64); err == nil {
+			b.WriteString(strconv.FormatFloat(f, 'g', 6, 64))
+		} else {
+			b.WriteString(e.Text)
+		}
 	case *Var:
 		b.WriteString(e.Name)
 	case *CurPos:
 		b.WriteString("__curPos")
 	case *String:
-		if len(e.Parts) == 1 && e.Parts[0].Interp == nil {
+		if len(e.Parts) == 0 {
+			b.WriteString(`""`)
+		} else if len(e.Parts) == 1 && e.Parts[0].Interp == nil {
 			printLiteralString(b, escapeString(e.Parts[0].Text))
 		} else {
 			b.WriteString("(")
@@ -70,7 +81,7 @@ func printExpr(b *bytes.Buffer, expr Expr) {
 		}
 		b.WriteString("''")
 	case *Path:
-		b.WriteString(e.Text)
+		b.WriteString(absPathLiteral(e))
 	case *URI:
 		b.WriteString(e.Text)
 	case *List:
@@ -89,9 +100,27 @@ func printExpr(b *bytes.Buffer, expr Expr) {
 		printBindings(b, e)
 		b.WriteString("}")
 	case *Call:
+		// Nix's grammar appends to an existing call, even through
+		// parentheses: (f a) b is one call with two arguments.
+		fun, args := e.Fun, e.Args
+		for {
+			inner := fun
+			for {
+				p, ok := inner.(*Parens)
+				if !ok {
+					break
+				}
+				inner = p.Expr
+			}
+			c, ok := inner.(*Call)
+			if !ok {
+				break
+			}
+			fun, args = c.Fun, append(append([]Expr{}, c.Args...), args...)
+		}
 		b.WriteString("(")
-		printExpr(b, e.Fun)
-		for _, arg := range e.Args {
+		printExpr(b, fun)
+		for _, arg := range args {
 			b.WriteByte(' ')
 			printExpr(b, arg)
 		}
@@ -121,7 +150,7 @@ func printExpr(b *bytes.Buffer, expr Expr) {
 			printExpr(b, e.Expr)
 			b.WriteString(")")
 		} else {
-			b.WriteString("(0 sub ")
+			b.WriteString("(__sub 0 ")
 			printExpr(b, e.Expr)
 			b.WriteString(")")
 		}
@@ -167,18 +196,15 @@ func printExpr(b *bytes.Buffer, expr Expr) {
 		b.WriteString(")")
 	case *Lambda:
 		b.WriteString("(")
+		// Nix prints formals first and then "@ name", whichever order the
+		// source used.
 		if e.Formals != nil {
 			printFormals(b, e.Formals)
-			if e.Arg != "" && !e.ArgFirst {
+			if e.Arg != "" {
 				b.WriteString(" @ ")
 			}
 		}
-		if e.Arg != "" {
-			b.WriteString(e.Arg)
-			if e.Formals != nil && e.ArgFirst {
-				b.WriteString(" @ ")
-			}
-		}
+		b.WriteString(e.Arg)
 		b.WriteString(": ")
 		printExpr(b, e.Body)
 		b.WriteString(")")
@@ -189,9 +215,49 @@ func printExpr(b *bytes.Buffer, expr Expr) {
 	}
 }
 
+// printBindings is Nix's ExprAttrs::showBindings: all plain inherits as one
+// sorted inherit, then each inherit (e) with its names sorted (skipped when
+// it has none), then plain attributes sorted by name, then dynamic ones in
+// source order.
 func printBindings(b *bytes.Buffer, set *AttrSet) {
 	if set == nil {
 		return
+	}
+	var plainInherit []string
+	for _, inh := range set.Inherit {
+		if inh.From != nil {
+			continue
+		}
+		for _, n := range inh.Names {
+			plainInherit = append(plainInherit, n.Name)
+		}
+	}
+	sort.Strings(plainInherit)
+	if len(plainInherit) > 0 {
+		b.WriteString("inherit")
+		for _, n := range plainInherit {
+			b.WriteByte(' ')
+			printAttrName(b, AttrName{Name: n})
+		}
+		b.WriteString("; ")
+	}
+	for _, inh := range set.Inherit {
+		if inh.From == nil || len(inh.Names) == 0 {
+			continue
+		}
+		names := make([]string, 0, len(inh.Names))
+		for _, n := range inh.Names {
+			names = append(names, n.Name)
+		}
+		sort.Strings(names)
+		b.WriteString("inherit (")
+		printExpr(b, inh.From)
+		b.WriteString(")")
+		for _, n := range names {
+			b.WriteByte(' ')
+			printAttrName(b, AttrName{Name: n})
+		}
+		b.WriteString("; ")
 	}
 	type bindSort struct {
 		name string
@@ -201,28 +267,9 @@ func printBindings(b *bytes.Buffer, set *AttrSet) {
 	for _, bind := range set.Binds {
 		plain = append(plain, bindSort{name: attrPathStaticName(bind.Path), b: bind})
 	}
-	sort.Slice(plain, func(i, j int) bool {
+	sort.SliceStable(plain, func(i, j int) bool {
 		return plain[i].name < plain[j].name
 	})
-	for _, inh := range set.Inherit {
-		if inh.From == nil {
-			b.WriteString("inherit")
-			for _, n := range inh.Names {
-				b.WriteByte(' ')
-				printAttrName(b, n)
-			}
-			b.WriteString("; ")
-		} else {
-			b.WriteString("inherit (")
-			printExpr(b, inh.From)
-			b.WriteString(")")
-			for _, n := range inh.Names {
-				b.WriteByte(' ')
-				printAttrName(b, n)
-			}
-			b.WriteString("; ")
-		}
-	}
 	for _, item := range plain {
 		printAttrPath(b, item.b.Path)
 		b.WriteString(" = ")
@@ -289,16 +336,39 @@ func printAttrName(b *bytes.Buffer, seg AttrName) {
 		b.WriteString("\"${")
 		printExpr(b, seg.Expr)
 		b.WriteString("}\"")
-	} else {
+	} else if IsPlainIdent(seg.Name) {
 		b.WriteString(seg.Name)
+	} else {
+		printLiteralString(b, escapeString(seg.Name))
 	}
 }
 
+// IsPlainIdent reports whether Nix prints the attribute name without quotes:
+// an identifier that is not a reserved keyword.
+func IsPlainIdent(name string) bool {
+	switch name {
+	case "":
+		return false
+	case "or":
+		return true
+	case "if", "then", "else", "assert", "with", "let", "in", "rec", "inherit":
+		return false
+	}
+	for i, c := range name {
+		ok := c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+			i > 0 && (c >= '0' && c <= '9' || c == '\'' || c == '-')
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// escapeString escapes s the way Nix's printString does.
+var stringEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`, "${", `\${`)
+
 func escapeString(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, "$", `\$`)
-	return s
+	return stringEscaper.Replace(s)
 }
 
 func escapeIndented(s string) string {
@@ -312,4 +382,24 @@ func printLiteralString(b *bytes.Buffer, content string) {
 	b.WriteByte('"')
 	b.WriteString(content)
 	b.WriteByte('"')
+}
+
+// absPathLiteral is the path Nix's parser stores for a path literal: a
+// relative path is made absolute against the file's directory (the current
+// directory for expressions that are not from a file), and ~/ is $HOME.
+func absPathLiteral(e *Path) string {
+	text := e.Text
+	switch {
+	case strings.HasPrefix(text, "<"):
+		return text
+	case strings.HasPrefix(text, "/"):
+		return filepath.Clean(text)
+	case strings.HasPrefix(text, "~/"):
+		return filepath.Join(os.Getenv("HOME"), text[2:])
+	}
+	dir := filepath.Dir(e.P.File)
+	if e.P.File == "" || e.P.File == "(string)" {
+		dir, _ = os.Getwd()
+	}
+	return filepath.Join(dir, text)
 }

@@ -106,7 +106,15 @@ func (s *Store) AddPermRoot(logicalPath, gcRoot string) error {
 // CollectGarbage deletes valid paths that are not reachable from a GC root.
 // Roots are direct symlinks under gcroots and profiles, plus indirect auto roots.
 // A path stays when a kept path references it.
+//
+// It holds gc.lock exclusively, so it waits for running builds (which hold
+// it shared, see LockForBuild) and never deletes paths they use.
 func (s *Store) CollectGarbage() (deleted []string, err error) {
+	unlock, err := s.lockGC(true)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	roots, err := s.findGCRoots()
 	if err != nil {
 		return nil, err
@@ -155,6 +163,12 @@ func (s *Store) CollectGarbage() (deleted []string, err error) {
 	}
 	sort.Strings(deleted)
 	return deleted, nil
+}
+
+// LockForBuild holds gc.lock shared until the returned function is called.
+// Builds take it so that garbage collection waits for them to finish.
+func (s *Store) LockForBuild() (unlock func(), err error) {
+	return s.lockGC(false)
 }
 
 func (s *Store) findGCRoots() (map[string]struct{}, error) {
@@ -247,7 +261,7 @@ func (s *Store) inStore(path string) bool {
 
 func (s *Store) deleteValidPath(logical string) error {
 	phys := PhysicalPath(s.Root, logical)
-	if err := os.RemoveAll(phys); err != nil && !os.IsNotExist(err) {
+	if err := RemoveStoreTree(phys); err != nil {
 		return err
 	}
 	tx, err := s.DB.Begin()

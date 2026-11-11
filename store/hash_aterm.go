@@ -250,8 +250,11 @@ func writeNixString(w io.Writer, s string) error {
 	return err
 }
 
+// atermEscaper is built once; building a Replacer per string was a hot
+// spot when writing large .drv files.
+var atermEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
+
 func writeEscapedString(w io.Writer, s string) error {
-	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
-	_, err := io.WriteString(w, r.Replace(s))
+	_, err := io.WriteString(w, atermEscaper.Replace(s))
 	return err
 }

@@ -62,7 +62,7 @@ let
   types = {
     openKernel.check = x: builtins.isAttrs x.families;
   };
-  setTypes = type: mapAttrs (name: value: assert type.check value; ({ inherit name; } // value));
+  setTypes = type: builtins.mapAttrs (name: value: assert type.check value; ({ inherit name; } // value));
 in builtins.length (builtins.attrValues (
   (rec {
     kernels =
@@ -94,7 +94,7 @@ let
   types = {
     openKernel.check = x: builtins.isAttrs x.families;
   };
-  setTypes = type: mapAttrs (name: value: assert type.check value; ({ inherit name; } // value));
+  setTypes = type: builtins.mapAttrs (name: value: assert type.check value; ({ inherit name; } // value));
 in rec {
   kernels =
     let inherit (kernelFamilies) darwin;
@@ -138,7 +138,7 @@ func TestRecMergeAliasWithMapAttrsSetTypes(t *testing.T) {
 	src := `
 let
   kernelFamilies = { darwin = { }; };
-  setTypes = t: mapAttrs (n: v: v);
+  setTypes = t: builtins.mapAttrs (n: v: v);
 in rec {
   kernels =
     let inherit (kernelFamilies) darwin;

@@ -36,7 +36,7 @@ func TestParseOperators(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := Print(expr)
-	want := "(1 + (mul 2 3))"
+	want := "(1 + (__mul 2 3))"
 	if got != want {
 		t.Fatalf("Print = %q, want %q", got, want)
 	}

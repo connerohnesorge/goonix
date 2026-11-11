@@ -78,79 +78,63 @@ func (np *NixPath) WithSearchPath(paths ...string) *NixPath {
 	return out
 }
 
-// Entries returns string descriptions for builtins.nixPath.
-func (np *NixPath) Entries() []string {
-	out := make([]string, len(np.entries))
+// Entries returns the search path as (prefix, path) pairs, as builtins.nixPath
+// shows them.
+func (np *NixPath) Entries() [][2]string {
+	out := make([][2]string, len(np.entries))
 	for i, e := range np.entries {
-		if e.prefix != "" {
-			out[i] = e.prefix + "=" + e.path
-		} else {
-			out[i] = e.path
-		}
+		out[i] = [2]string{e.prefix, e.path}
 	}
 	return out
 }
 
-// FindFile resolves a logical name to an absolute filesystem path.
+// FindFile resolves <name> against the search path, as Nix's
+// EvalState::findFile does.
 func (np *NixPath) FindFile(name string) (string, error) {
-	sub := name
-	wantPrefix := ""
-	if idx := strings.Index(name, "/"); idx >= 0 {
-		wantPrefix = name[:idx]
-		sub = name[idx+1:]
-	}
-	for _, e := range np.entries {
-		if wantPrefix != "" && e.prefix == wantPrefix {
-			c := filepath.Join(e.path, sub)
-			if st, err := os.Stat(c); err == nil && !st.IsDir() {
-				return c, nil
-			}
-			c = c + ".nix"
-			if st, err := os.Stat(c); err == nil && !st.IsDir() {
-				return c, nil
-			}
-		}
-		candidates := []string{
-			filepath.Join(e.path, name),
-			filepath.Join(e.path, name+".nix"),
-		}
-		if e.prefix != "" && e.prefix == name {
-			if st, err := os.Stat(e.path); err == nil && st.IsDir() {
-				return e.path, nil
-			}
-		}
-		for _, c := range candidates {
-			if st, err := os.Stat(c); err == nil {
-				if st.IsDir() {
-					return c, nil
-				}
-				return c, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("file %q not found in NIX_PATH", name)
+	return findInSearchPath(np.entries, name)
 }
 
-// ResolveAnglePath resolves <name> to a path string.
-func (np *NixPath) ResolveAnglePath(lit string) (string, error) {
-	if !strings.HasPrefix(lit, "<") || !strings.HasSuffix(lit, ">") {
-		return lit, nil
+// findInSearchPath tries each entry in order. An entry with a prefix matches
+// name itself or name below prefix/; an entry without a prefix is a
+// directory that name is looked up in. The first existing candidate wins.
+// Like Nix, a nix/... name that no entry provides falls back to the built-in
+// corepkgs files (<nix/fetchurl.nix>).
+func findInSearchPath(entries []nixPathEntry, name string) (string, error) {
+	for _, e := range entries {
+		var c string
+		switch {
+		case e.prefix == "":
+			c = filepath.Join(e.path, name)
+		case name == e.prefix:
+			c = e.path
+		case strings.HasPrefix(name, e.prefix+"/"):
+			c = filepath.Join(e.path, name[len(e.prefix)+1:])
+		default:
+			continue
+		}
+		if _, err := os.Stat(c); err == nil {
+			return c, nil
+		}
 	}
-	name := strings.TrimSuffix(strings.TrimPrefix(lit, "<"), ">")
-	return np.FindFile(name)
+	if rest, ok := strings.CutPrefix(name, "nix/"); ok {
+		if dir := corepkgsDir(); dir != "" {
+			c := filepath.Join(dir, rest)
+			if _, err := os.Stat(c); err == nil {
+				return c, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("file '%s' was not found in the Nix search path (add it using $NIX_PATH or -I)", name)
 }
 
-var embeddedNixOnce sync.Once
-var embeddedNixDir string
+var corepkgsOnce sync.Once
+var corepkgsPath string
 
-func prependEmbeddedNixPath(np *NixPath) {
-	if np == nil {
-		return
-	}
-	embeddedNixOnce.Do(func() {
-		embeddedNixDir, _ = nixfiles.MaterializedDir()
+// corepkgsDir is where the embedded <nix/...> files (fetchurl.nix and
+// friends) are written on first use.
+func corepkgsDir() string {
+	corepkgsOnce.Do(func() {
+		corepkgsPath, _ = nixfiles.MaterializedDir()
 	})
-	if embeddedNixDir != "" {
-		np.PrependEntries("nix=" + embeddedNixDir)
-	}
+	return corepkgsPath
 }

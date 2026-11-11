@@ -16,6 +16,7 @@ package parser
 
 import (
 	"fmt"
+	"sort"
 	"unicode/utf8"
 )
 
@@ -43,16 +44,13 @@ func newLexResult(path string, src []byte) *lexResult {
 }
 
 func (r *lexResult) pos(offset int) Pos {
-	line := 1
-	col := 1
-	for i := len(r.lines) - 1; i >= 0; i-- {
-		if r.lines[i] <= offset {
-			line = i + 1
-			col = offset - r.lines[i] + 1
-			break
-		}
+	// r.lines holds ascending line-start offsets; find the last one at or
+	// before offset.
+	i := sort.Search(len(r.lines), func(i int) bool { return r.lines[i] > offset }) - 1
+	if i < 0 {
+		return Pos{File: r.file, Line: 1, Col: 1}
 	}
-	return Pos{File: r.file, Line: line, Col: col}
+	return Pos{File: r.file, Line: int32(i + 1), Col: int32(offset - r.lines[i] + 1)}
 }
 
 func (r *lexResult) slice(start, end int) string {
@@ -169,20 +167,33 @@ func lex(src []byte, path string) (*lexResult, error) {
 				}
 				continue
 			}
+			// Nix's STRING rule: ([^$"\\]|\$[^{"\\]|\\ANY|\$\\ANY)*. A $ that
+			// is not followed by { consumes the next character, so $${ is text.
+		scan:
 			for i < n {
 				if src[i] == '"' {
-					break
-				}
-				if src[i] == '$' && i+1 < n && src[i+1] == '{' {
 					break
 				}
 				if src[i] == '\\' && i+1 < n {
 					i += 2
 					continue
 				}
-				if src[i] == '\n' {
-					i++
-					continue
+				if src[i] == '$' && i+1 < n {
+					switch src[i+1] {
+					case '{':
+						break scan
+					case '\\':
+						if i+2 < n {
+							i += 3
+							continue
+						}
+					case '"':
+						i++
+						continue
+					default:
+						i += 2
+						continue
+					}
 				}
 				i++
 			}
@@ -254,7 +265,17 @@ func lex(src []byte, path string) (*lexResult, error) {
 				if i+1 < n && src[i] == '$' && src[i+1] == '{' {
 					break
 				}
+				// Nix's IND_STR rule \$[^{']: a $ consumes the next character
+				// unless that is { or ', so $${ is text.
 				if src[i] == '$' {
+					if i+1 < n && src[i+1] != '\'' {
+						i += 2
+						continue
+					}
+					break
+				}
+				// IND_STR's '[^'$]: a ' before $ is its own token, as in Nix.
+				if src[i] == '\'' && i+1 < n && src[i+1] == '$' {
 					break
 				}
 				i++

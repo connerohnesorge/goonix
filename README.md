@@ -49,4 +49,4 @@ NovaNix parity facts (for docs): **22** matching packages on nixpkgs 24.11 / Nix
 
 ## Status (v0)
 
-`goonix instantiate testdata/nixpkgs -A hello --argstr system x86_64-linux --arg config '{}' --arg overlays '[]'` writes the same `.drv` closure as Nix 2.24.9, byte for byte. The same holds for `stdenv`, `bash`, and `coreutils`. `ladder.TestInstantiateClosureMatchesGolden` checks this against `testdata/golden/closure/*.sha256` without Nix installed. See [STATUS.md](STATUS.md) for issues #2–#14 and test evidence.
+`goonix instantiate testdata/nixpkgs -A hello --argstr system x86_64-linux --arg config '{}' --arg overlays '[]'` writes the same `.drv` closure as Nix 2.24.9, byte for byte. The same holds for `stdenv`, `bash`, and `coreutils`. `ladder.TestInstantiateClosureMatchesGolden` checks this against `testdata/golden/closure/*.sha256` without Nix installed. `ladder.TestParityCasesMatchGolden` checks all 18 of NovaNix's nixpkgs drvPath cases (testdata/parity/cases.txt), from hello through clang, qtbase, systemd, neovim, and a NixOS initrd and toplevel, against Nix 2.24.9's drvPaths. See [STATUS.md](STATUS.md) for issues #2–#14 and test evidence.

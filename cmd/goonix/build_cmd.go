@@ -11,7 +11,6 @@ import (
 
 	"github.com/connerohnesorge/goonix/builder"
 	"github.com/connerohnesorge/goonix/eval"
-	"github.com/connerohnesorge/goonix/parser"
 	"github.com/connerohnesorge/goonix/store"
 	"github.com/connerohnesorge/goonix/store/local"
 	"github.com/connerohnesorge/goonix/substituter"
@@ -20,13 +19,17 @@ import (
 func cmdBuild(args []string) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	storeFlag := fs.String("store", "", "physical store root (contains store/ subdirectory)")
-	searchPath := fs.String("I", "", "add search path entry")
 	extraXP := fs.String("extra-experimental-features", "", "space-separated experimental features (flakes enables fetch-tree)")
 	allowRelocated := fs.Bool("allow-relocated-store", false, "allow physical store path rewriting when /nix/store bind mount is unavailable (testing only)")
-	_ = fs.Parse(args)
+	ra, flags, err := splitRootArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	_ = fs.Parse(flags)
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fmt.Fprintln(os.Stderr, "build expects one .nix file")
+		fmt.Fprintln(os.Stderr, "build expects one .nix file or directory")
 		os.Exit(2)
 	}
 	physRoot := *storeFlag
@@ -41,16 +44,9 @@ func cmdBuild(args []string) {
 	defer st.Close()
 
 	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{Root: st.Config().LogicalStoreDir()}).WithExperimental(strings.Fields(*extraXP)...)
-	ev.SetCurFile(rest[0])
-	if *searchPath != "" {
-		for _, part := range strings.Split(*searchPath, ":") {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				ev.NixPath.PrependEntries(part)
-			}
-		}
-	}
-	expr, err := parser.ParseFile(rest[0])
+	ra.apply(ev)
+	expr, curFile, err := ra.expr(rest[0])
+	ev.SetCurFile(curFile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

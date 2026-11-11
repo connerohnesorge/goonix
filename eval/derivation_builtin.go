@@ -59,7 +59,6 @@ func (ev *Evaluator) derivationOutputNames(drvAttrs *Value, pos parser.Pos) ([]s
 
 func (ev *Evaluator) lazyStrictDerivation(drvAttrs *Value, pos parser.Pos) *Value {
 	strictThunk := &Thunk{
-		eval: ev,
 		pos:  pos,
 		lazy: func(e *Evaluator) (*Value, error) {
 			return builtinDerivationStrict(e, pos, []*Value{drvAttrs})
@@ -71,7 +70,6 @@ func (ev *Evaluator) lazyStrictDerivation(drvAttrs *Value, pos parser.Pos) *Valu
 func (ev *Evaluator) lazySelectStrictAttr(strict *Value, attr string, pos parser.Pos) *Value {
 	sym := ev.Intern.Intern(attr)
 	t := &Thunk{
-		eval: ev,
 		pos:  pos,
 		lazy: func(e *Evaluator) (*Value, error) {
 			sv, err := e.forceValue(strict)
@@ -98,7 +96,6 @@ func (ev *Evaluator) derivationOutputOverlayLazy(strict *Value, outputName strin
 	overlay.Attrs.Binds[ev.Intern.Intern("drvPath")] = &AttrBinding{Value: ev.lazySelectStrictAttr(strict, "drvPath", pos)}
 	if outputName == "out" {
 		t := &Thunk{
-			eval: ev,
 			pos:  pos,
 			lazy: func(e *Evaluator) (*Value, error) {
 				sv, err := e.forceValue(strict)
@@ -139,7 +136,6 @@ func (ev *Evaluator) buildNixDerivation(drvAttrs *Value, pos parser.Pos) (*Value
 		oname := oname
 		strictCapture := strict
 		t := &Thunk{
-			eval: ev,
 			pos:  pos,
 			lazy: func(e *Evaluator) (*Value, error) {
 				ov := e.derivationOutputOverlayLazy(strictCapture, oname, pos)

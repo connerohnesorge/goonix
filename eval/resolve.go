@@ -15,6 +15,8 @@
 package eval
 
 import (
+	"strings"
+
 	"github.com/connerohnesorge/goonix/data"
 	"github.com/connerohnesorge/goonix/parser"
 )
@@ -22,37 +24,79 @@ import (
 // Env is a lexical environment frame.
 type Env struct {
 	Parent *Env
-	// Static bindings from let/rec/lambda (eager name -> value or thunk).
-	Vars map[data.Symbol]*AttrBinding
-	// Dynamic layer from `with` (attrs value, looked up after Vars).
+	// Static bindings from let/rec/lambda. Most frames hold a few names (a
+	// function argument, a small let), kept inline in vars; a frame that
+	// grows past envMapAt names moves them to big.
+	vars []envVar
+	big  map[data.Symbol]*AttrBinding
+	// Dynamic layer from `with` (attrs value, looked up after the vars).
 	With *Value
-	// Applying is the callable currently being applied (callPackageWith auto-merge).
-	Applying *Value
 }
+
+type envVar struct {
+	sym data.Symbol
+	b   AttrBinding
+}
+
+const envMapAt = 8
 
 // NewEnv returns an empty environment.
 func NewEnv() *Env {
-	return &Env{Vars: make(map[data.Symbol]*AttrBinding)}
+	return &Env{}
 }
 
 func (e *Env) extend() *Env {
-	return &Env{
-		Parent: e,
-		Vars:   make(map[data.Symbol]*AttrBinding),
-	}
+	return &Env{Parent: e}
 }
 
 func (e *Env) bind(sym data.Symbol, v *Value) {
-	e.Vars[sym] = &AttrBinding{Value: v}
+	e.set(sym, AttrBinding{Value: v})
 }
 
 func (e *Env) bindThunk(sym data.Symbol, t *Thunk) {
-	e.Vars[sym] = &AttrBinding{Thunk: t}
+	e.set(sym, AttrBinding{Thunk: t})
+}
+
+func (e *Env) set(sym data.Symbol, b AttrBinding) {
+	if e.big != nil {
+		e.big[sym] = &b
+		return
+	}
+	for i := range e.vars {
+		if e.vars[i].sym == sym {
+			e.vars[i].b = b
+			return
+		}
+	}
+	if len(e.vars) < envMapAt {
+		e.vars = append(e.vars, envVar{sym, b})
+		return
+	}
+	e.big = make(map[data.Symbol]*AttrBinding, 2*envMapAt)
+	for i := range e.vars {
+		e.big[e.vars[i].sym] = &e.vars[i].b
+	}
+	e.vars = nil
+	e.big[sym] = &b
+}
+
+// local returns the binding of sym in this frame only.
+func (e *Env) local(sym data.Symbol) (*AttrBinding, bool) {
+	if e.big != nil {
+		b, ok := e.big[sym]
+		return b, ok
+	}
+	for i := range e.vars {
+		if e.vars[i].sym == sym {
+			return &e.vars[i].b, true
+		}
+	}
+	return nil, false
 }
 
 func (e *Env) lookup(sym data.Symbol) (*AttrBinding, bool) {
 	for cur := e; cur != nil; cur = cur.Parent {
-		if b, ok := cur.Vars[sym]; ok {
+		if b, ok := cur.local(sym); ok {
 			return b, true
 		}
 	}
@@ -62,12 +106,31 @@ func (e *Env) lookup(sym data.Symbol) (*AttrBinding, bool) {
 func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, error) {
 	// Nix ExprVar: lexical scopes, then static builtins, then innermost-first `with`.
 	for cur := env; cur != nil; cur = cur.Parent {
-		if b, ok := cur.Vars[sym]; ok {
+		if b, ok := cur.local(sym); ok {
 			return b, true, nil
 		}
 	}
 	if name := ev.Intern.Lookup(sym); name != "" {
-		if b, ok := ev.Builtins[name]; ok {
+		// true, false and null are base-environment variables: a let or
+		// function argument can shadow them, a with cannot.
+		switch name {
+		case "true":
+			return &AttrBinding{Value: Bool(true)}, true, nil
+		case "false":
+			return &AttrBinding{Value: Bool(false)}, true, nil
+		case "null":
+			return &AttrBinding{Value: Null()}, true, nil
+		}
+		if b, ok := ev.globalBuiltin(name); ok {
+			// __nixPath, __storeDir, __currentSystem and the like are
+			// values, not functions.
+			if b.Nullary {
+				v, err := b.Fn(ev, parser.Pos{}, nil)
+				if err != nil {
+					return nil, false, err
+				}
+				return &AttrBinding{Value: v}, true, nil
+			}
 			return &AttrBinding{Value: &Value{Kind: VKBuiltin, Builtin: b}}, true, nil
 		}
 	}
@@ -384,4 +447,31 @@ func resolveAttrSet(a *parser.AttrSet, env *resolveEnv, isLet bool) (*parser.Att
 	}
 	out.Inherit = a.Inherit
 	return out, nil
+}
+
+// globalNames are the builtins Nix 2.24.9 puts in the base environment under
+// their own name. Every other builtin x is global only as __x. builtins,
+// true, false and null are bound elsewhere.
+var globalNames = map[string]bool{
+	"abort": true, "baseNameOf": true, "break": true, "derivation": true,
+	"derivationStrict": true, "dirOf": true, "fetchGit": true,
+	"fetchMercurial": true, "fetchTarball": true, "fetchTree": true,
+	"fromTOML": true, "import": true, "isNull": true, "map": true,
+	"placeholder": true, "removeAttrs": true, "scopedImport": true,
+	"throw": true, "toString": true,
+}
+
+// globalBuiltin resolves a free variable against the base environment the
+// way Nix does, so that `with pkgs; fetchurl` finds pkgs.fetchurl rather
+// than builtins.fetchurl.
+func (ev *Evaluator) globalBuiltin(name string) (*Builtin, bool) {
+	if globalNames[name] {
+		b, ok := ev.Builtins[name]
+		return b, ok
+	}
+	if base, ok := strings.CutPrefix(name, "__"); ok && !globalNames[base] && base != "builtins" {
+		b, ok := ev.Builtins[base]
+		return b, ok
+	}
+	return nil, false
 }

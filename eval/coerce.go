@@ -56,9 +56,6 @@ func mergeStringContexts(a, b []StringContextElem) []StringContextElem {
 // coerceToString implements Nix EvalState::coerceToString for string contexts.
 func (ev *Evaluator) coerceToString(v *Value, cc CoerceContext) (*Value, error) {
 	pos := cc.Pos
-	if v != nil && pos.File == "" && v.Pos.File != "" {
-		pos = v.Pos
-	}
 	fv, err := ev.mustWHNF(v, pos)
 	if err != nil {
 		return nil, err
@@ -83,15 +80,15 @@ func (ev *Evaluator) coerceToString(v *Value, cc CoerceContext) (*Value, error) 
 		return ev.coerceAttrSetToString(fv, cc)
 	case VKNull, VKBool, VKInt, VKFloat, VKList:
 		if cc.Mode != CoerceString {
-			return nil, strictCoerceError(pos, fv)
+			return nil, ev.strictCoerceError(pos, fv)
 		}
 		return ev.coerceToStringScalarList(fv, cc)
 	default:
-		return nil, evalErr(pos, "cannot coerce %s to string", valueKindName(fv.Kind))
+		return nil, ev.coerceTypeError(pos, fv)
 	}
 }
 
-func strictCoerceError(pos parser.Pos, fv *Value) error {
+func (ev *Evaluator) strictCoerceError(pos parser.Pos, fv *Value) error {
 	switch fv.Kind {
 	case VKNull:
 		return evalErr(pos, "cannot coerce null to a string: null")
@@ -106,7 +103,7 @@ func strictCoerceError(pos parser.Pos, fv *Value) error {
 	case VKFloat:
 		return evalErr(pos, "cannot coerce a float to a string: %s", nixXMLFloat(fv.Float))
 	default:
-		return evalErr(pos, "cannot coerce a %s to a string", valueKindName(fv.Kind))
+		return ev.coerceTypeError(pos, fv)
 	}
 }
 
@@ -164,7 +161,7 @@ func (ev *Evaluator) coerceAttrSetToString(fv *Value, cc CoerceContext) (*Value,
 		}
 		return ev.coerceToString(tv, cc)
 	}
-	return nil, evalErr(cc.Pos, "cannot coerce %s to a string", valueKindName(VKAttrs))
+	return nil, ev.coerceTypeError(cc.Pos, fv)
 }
 
 func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths bool) (*Value, error) {
@@ -180,9 +177,6 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 	if !copyPaths {
 		return StrWithContext(p, ctx, pos), nil
 	}
-	if !(ev.materializeStorePaths || ev.inStringInterpolation) {
-		return StrWithContext(p, ctx, pos), nil
-	}
 	if _, err := ev.Effects.Stat(p); err != nil {
 		return StrWithContext(p, ctx, pos), nil
 	}
@@ -196,31 +190,16 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 		return nil, evalErr(pos, "%s", err.Error())
 	}
 	ctx = []StringContextElem{{StorePath: storePath}}
-	if ev.materializeStorePaths || ev.inStringInterpolation {
-		reason := "interp"
-		if ev.materializeStorePaths {
-			reason = "derivation-env"
-		}
-		ev.recordCopyPathTrace(p, pos, reason)
-		err = ev.Effects.RealiseStorePath(storePath, func() error {
-			return store.CopyPathToStore(p, ev.physicalStorePath(storePath))
-		})
-		if err != nil {
-			return nil, err
-		}
+	// As in Nix, copyToStore alone decides: every caller that asks for
+	// CopyPaths gets the path added to the store.
+	ev.copyPathTrace = append(ev.copyPathTrace, CopyPathTraceEvent{SourcePath: p, Pos: pos})
+	err = ev.Effects.RealiseStorePath(storePath, func() error {
+		return store.CopyPathToStore(p, ev.physicalStorePath(storePath))
+	})
+	if err != nil {
+		return nil, err
 	}
 	return StrWithContext(storePath, ctx, pos), nil
-}
-
-func (ev *Evaluator) recordCopyPathTrace(sourcePath string, pos parser.Pos, reason string) {
-	if ev == nil {
-		return
-	}
-	ev.copyPathTrace = append(ev.copyPathTrace, CopyPathTraceEvent{
-		SourcePath: sourcePath,
-		Pos:        pos,
-		Reason:     reason,
-	})
 }
 
 func pathStringContext(p, storeDir string) []StringContextElem {
@@ -242,6 +221,9 @@ func hasNixStringContext(ctx []StringContextElem) bool {
 	return false
 }
 
+// concatCoercedStrings is one step of a string or path +. Like Nix's
+// ExprConcatStrings (coerceMore = false), only strings, paths and sets with
+// __toString or outPath coerce; integers, null and lists are errors.
 func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, error) {
 	fa, err := ev.forceValue(a)
 	if err != nil {
@@ -255,7 +237,7 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 		return Path(fa.Path + fb.Path), nil
 	}
 	if fa.Kind == VKPath {
-		cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false}
+		cc := CoerceContext{Mode: CoerceStrict, Pos: pos, CopyPaths: false}
 		bs, err := ev.coerceToString(fb, cc)
 		if err != nil {
 			return nil, err
@@ -266,10 +248,7 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 		return Path(fa.Path + bs.String), nil
 	}
 	if fb.Kind == VKPath {
-		prevInterp := ev.inStringInterpolation
-		ev.inStringInterpolation = true
-		defer func() { ev.inStringInterpolation = prevInterp }()
-		cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: true}
+		cc := CoerceContext{Mode: CoerceStrict, Pos: pos, CopyPaths: true}
 		as, err := ev.coerceToString(fa, cc)
 		if err != nil {
 			return nil, err
@@ -280,7 +259,7 @@ func (ev *Evaluator) concatCoercedStrings(a, b *Value, pos parser.Pos) (*Value, 
 		}
 		return StrWithContext(as.String+bs.String, mergeStringContexts(as.Ctx, bs.Ctx), pos), nil
 	}
-	cc := CoerceContext{Mode: CoerceString, Pos: pos, CopyPaths: false}
+	cc := CoerceContext{Mode: CoerceStrict, Pos: pos, CopyPaths: false}
 	as, err := ev.coerceToString(fa, cc)
 	if err != nil {
 		return nil, err

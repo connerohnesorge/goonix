@@ -71,6 +71,12 @@ type buildPlan struct {
 
 // BuildRealisation builds rootDrv and everything it depends on.
 func (b *Builder) BuildRealisation(rootDrv string) error {
+	// Hold off garbage collection until this build is done.
+	unlock, err := b.Store.LockForBuild()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if b.Load == nil {
 		b.Load = func(p string) (*gonixdrv.Derivation, error) {
 			f, err := os.Open(local.PhysicalPath(b.Store.Root, p))
@@ -199,22 +205,22 @@ func (b *Builder) buildFixedOutput(drvPath string, d *gonixdrv.Derivation, outPa
 	switch mode {
 	case "flat", "":
 		if err := local.VerifyFlatOutput(phys, want, algo); err != nil {
-			os.RemoveAll(phys)
+			_ = local.RemoveStoreTree(phys)
 			return fixedOutputHashError(drvPath, algo, want, err)
 		}
 	case "nar", "recursive":
 		if err := local.VerifyRecursiveOutput(phys, want); err != nil {
-			os.RemoveAll(phys)
+			_ = local.RemoveStoreTree(phys)
 			return fixedOutputHashError(drvPath, algo, want, err)
 		}
 	case "text":
 		if err := verifyTextOutput(outPath, phys, want, algo); err != nil {
-			os.RemoveAll(phys)
+			_ = local.RemoveStoreTree(phys)
 			return fixedOutputHashError(drvPath, algo, want, err)
 		}
 	case "git":
 		if err := local.VerifyGitOutput(phys, want, algo); err != nil {
-			os.RemoveAll(phys)
+			_ = local.RemoveStoreTree(phys)
 			return fixedOutputHashError(drvPath, algo, want, err)
 		}
 	default:
@@ -702,7 +708,7 @@ func outputPhysList(physOuts map[string]string) []string {
 
 func removePhysOutputs(physOuts map[string]string) {
 	for _, p := range physOuts {
-		_ = os.RemoveAll(p)
+		_ = local.RemoveStoreTree(p)
 	}
 }
 

@@ -1,0 +1,21 @@
+# NovaNix drvPath cases (github.com/Novavero-AI/nova-nix .github/parity/drvpath-cases.txt
+# at 727088456b9c57cbb22af93c59622613c767eaf7), minus the import ./file ones.
+# A label, then an expression where pkgs is the pinned nixpkgs for x86_64-linux.
+hello            pkgs.hello
+stdenvNoCC       pkgs.stdenvNoCC
+i686-hello       pkgs.pkgsi686Linux.hello
+musl-hello       pkgs.pkgsMusl.hello
+clang            pkgs.clang
+aarch64-hello    pkgs.pkgsCross.aarch64-multiplatform.hello
+mingwW64-hello   pkgs.pkgsCross.mingwW64.hello
+curl             pkgs.curl
+systemd          pkgs.systemd
+sbsigntool       pkgs.sbsigntool
+ripgrep          pkgs.ripgrep
+fzf              pkgs.fzf
+python-requests  pkgs.python3Packages.requests
+libxo            pkgs.libxo
+qtbase           pkgs.qt6.qtbase
+neovim           pkgs.neovim
+nixos-initrd     (import <nixpkgs/nixos> { system = "x86_64-linux"; configuration = { fileSystems."/".device = "/dev/sda1"; boot.loader.grub.device = "/dev/sda"; system.stateVersion = "24.11"; }; }).config.system.build.initialRamdisk
+nixos-toplevel   (import <nixpkgs/nixos> { system = "x86_64-linux"; configuration = { fileSystems."/".device = "/dev/sda1"; boot.loader.grub.device = "/dev/sda"; system.stateVersion = "24.11"; }; }).config.system.build.toplevel

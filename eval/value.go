@@ -23,7 +23,7 @@ import (
 )
 
 // ValueKind classifies runtime values during evaluation.
-type ValueKind int
+type ValueKind uint8
 
 const (
 	VKNull ValueKind = iota + 1
@@ -37,7 +37,6 @@ const (
 	VKLambda
 	VKBuiltin
 	VKPartialBuiltin
-	VKDerivation
 	VKDeferred // unevaluated let binding / lazy reference
 )
 
@@ -58,7 +57,6 @@ type Value struct {
 	Float  float64
 	String string
 	Path   string
-	Pos    parser.Pos
 
 	// Ctx holds Nix string-context elements (derivation outputs, store path refs).
 	Ctx []StringContextElem
@@ -70,8 +68,6 @@ type Value struct {
 	Builtin *Builtin
 	Partial *PartialBuiltin
 
-	// Derivation metadata (type = "derivation").
-	Derivation *DerivationValue
 
 	// Deferred is a lazy let binding referenced before full evaluation.
 	Deferred *Thunk
@@ -82,21 +78,20 @@ type AttrSet struct {
 	Recursive bool
 	Blackhole bool // in-progress fixpoint placeholder
 	Binds     map[data.Symbol]*AttrBinding
-	// MergeLHS holds left-hand bindings from `lhs // rhs` for `with` lookup before RHS overlay.
-	MergeLHS *AttrSet
-	// UpdateRHS holds right-hand bindings from `lhs // rhs` for `with` lookup (Nix fixpoint merge).
-	UpdateRHS *AttrSet
 }
 
 // AttrBinding is one attribute, optionally deferred.
 type AttrBinding struct {
 	Value *Value
 	Thunk *Thunk
-	Pos   parser.Pos
+	// Pos is where the attribute was defined (unsafeGetAttrPos), or nil.
+	// It usually points at the thunk's own position, so it costs nothing.
+	Pos *parser.Pos
 }
 
 // LambdaValue is a user-defined function closure.
 type LambdaValue struct {
+	Expr      *parser.Lambda // source node, for its position in messages
 	SimpleArg string
 	Formals   *parser.Formals
 	ArgFirst  bool
@@ -120,7 +115,6 @@ type DerivationValue struct {
 
 // Thunk defers evaluation with memoisation and blackhole detection.
 type Thunk struct {
-	eval *Evaluator
 	expr parser.Expr
 	env  *Env
 	pos  parser.Pos
@@ -129,9 +123,8 @@ type Thunk struct {
 	lazy func(*Evaluator) (*Value, error)
 
 	memo   *Value
-	locked bool // true while this thunk is being forced (blackhole)
-	// errCtx is prepended when this thunk's force fails (builtins.addErrorContext).
-	errCtx string
+	self   *Value // the VKDeferred wrapper Deferred hands out
+	locked bool   // true while this thunk is being forced (blackhole)
 }
 
 func (v *Value) force(e *Evaluator) (*Value, error) {
@@ -179,13 +172,6 @@ func (v *Value) DisplayString(e *Evaluator, intern *data.Interner) string {
 		return "<builtin>"
 	case VKDeferred:
 		return "<deferred>"
-	case VKDerivation:
-		if v.Derivation != nil && v.Derivation.OutPaths != nil {
-			if p, ok := v.Derivation.OutPaths["out"]; ok {
-				return p
-			}
-		}
-		return "<derivation>"
 	default:
 		return fmt.Sprintf("<%d>", v.Kind)
 	}
@@ -203,12 +189,21 @@ func joinStrings(ss []string, sep string) string {
 }
 
 // Null returns the null value.
-func Null() *Value {
-	return &Value{Kind: VKNull}
-}
+// Values are never changed after creation, so null, true and false can be
+// shared instead of allocated on every use.
+var (
+	nullValue  = &Value{Kind: VKNull}
+	trueValue  = &Value{Kind: VKBool, Bool: true}
+	falseValue = &Value{Kind: VKBool, Bool: false}
+)
+
+func Null() *Value { return nullValue }
 
 func Bool(b bool) *Value {
-	return &Value{Kind: VKBool, Bool: b}
+	if b {
+		return trueValue
+	}
+	return falseValue
 }
 
 func Int(i int64) *Value {
@@ -220,11 +215,11 @@ func Float(f float64) *Value {
 }
 
 func Str(s string, pos parser.Pos) *Value {
-	return &Value{Kind: VKString, String: s, Pos: pos}
+	return &Value{Kind: VKString, String: s}
 }
 
 func StrWithContext(s string, ctx []StringContextElem, pos parser.Pos) *Value {
-	return &Value{Kind: VKString, String: s, Pos: pos, Ctx: ctx}
+	return &Value{Kind: VKString, String: s, Ctx: ctx}
 }
 
 func Path(p string) *Value {
@@ -236,8 +231,16 @@ func List(elems ...*Value) *Value {
 }
 
 // Deferred wraps a lazy binding without forcing it.
+// Deferred is the value of thunk t: its result once it has been forced,
+// otherwise one wrapper per thunk, so attribute lookups do not allocate.
 func Deferred(t *Thunk) *Value {
-	return &Value{Kind: VKDeferred, Deferred: t}
+	if t.memo != nil && !t.locked {
+		return t.memo
+	}
+	if t.self == nil {
+		t.self = &Value{Kind: VKDeferred, Deferred: t}
+	}
+	return t.self
 }
 
 func Attrs(recursive bool) *Value {
@@ -260,9 +263,6 @@ func blackholeAttrs() *Value {
 	}
 }
 
-func posToData(p parser.Pos) data.Pos {
-	return data.Pos{File: p.File, Line: p.Line, Column: p.Col}
-}
 
 // ToData converts a forced eval Value into data.Value (shallow for containers).
 func ToData(v *Value, intern *data.Interner) *data.Value {
@@ -279,7 +279,7 @@ func ToData(v *Value, intern *data.Interner) *data.Value {
 	case VKFloat:
 		return data.FloatV(v.Float)
 	case VKString:
-		return data.StringV(v.String, posToData(v.Pos))
+		return data.StringV(v.String, data.Pos{})
 	case VKPath:
 		return data.PathV(v.Path)
 	case VKList:
@@ -331,7 +331,7 @@ func FromData(d *data.Value) *Value {
 	case data.KindFloat:
 		return Float(d.Float)
 	case data.KindString:
-		return Str(d.String, parser.Pos{File: d.Pos.File, Line: d.Pos.Line, Col: d.Pos.Column})
+		return Str(d.String, parser.Pos{})
 	case data.KindPath:
 		return Path(d.Path)
 	case data.KindList:

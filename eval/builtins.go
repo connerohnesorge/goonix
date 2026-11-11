@@ -145,11 +145,17 @@ func (ev *Evaluator) registerBuiltins() {
 
 // BuiltinAttrSet returns an attribute set of all registered builtins.
 func (ev *Evaluator) BuiltinAttrSet() *Value {
+	// One set per evaluator: every import binds builtins, and the set
+	// never changes after it is built.
+	if ev.builtinsSet != nil {
+		return ev.builtinsSet
+	}
 	av := Attrs(false)
 	for name, b := range ev.Builtins {
 		sym := ev.Intern.Intern(name)
 		av.Attrs.Binds[sym] = &AttrBinding{Value: &Value{Kind: VKBuiltin, Builtin: b}}
 	}
+	ev.builtinsSet = av
 	return av
 }
 
@@ -164,14 +170,10 @@ func builtinImport(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if len(args) < 1 || len(args) > 2 {
 		return nil, evalErr(pos, "expected 1 or 2 arguments, got %d", len(args))
 	}
-	path, err := ev.forceString(args[0])
+	path, err := ev.importPathArg(args[0], pos)
 	if err != nil {
 		return nil, err
 	}
-	if (strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../")) && ev.curFile != "" {
-		path = filepath.Join(filepath.Dir(ev.curFile), path)
-	}
-	path = resolveImportPath(path)
 	moduleVal, err := ev.importModule(path)
 	if err != nil {
 		return nil, err
@@ -210,6 +212,25 @@ func (ev *Evaluator) bindCorepkgsEnv(env *Env) {
 			env.bind(ev.Intern.Intern(name), &Value{Kind: VKBuiltin, Builtin: b})
 		}
 	}
+}
+
+// importPathArg forces the argument of import or scopedImport. Like Nix's
+// coerceToPath, a string must already be an absolute path: a relative path
+// literal was made absolute when it was evaluated, but a string such as
+// "./b.nix" is an error rather than a guess about the current file.
+func (ev *Evaluator) importPathArg(v *Value, pos parser.Pos) (string, error) {
+	fv, err := ev.forceValue(v)
+	if err != nil {
+		return "", err
+	}
+	path, err := ev.forceString(fv)
+	if err != nil {
+		return "", err
+	}
+	if fv.Kind == VKString && !filepath.IsAbs(path) {
+		return "", evalErr(pos, "string '%s' doesn't represent an absolute path", path)
+	}
+	return resolveImportPath(path), nil
 }
 
 func resolveImportPath(path string) string {
@@ -392,7 +413,7 @@ func builtinAttrNames(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		names = append(names, ev.Intern.Lookup(sym))
 	}
 	// sort for stability
-	stringsSort(names)
+	stdsort.Strings(names)
 	elems := make([]*Value, len(names))
 	for i, n := range names {
 		elems[i] = Str(n, pos)
@@ -428,16 +449,6 @@ func builtinCatAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 		}
 	}
 	return List(out...), nil
-}
-
-func stringsSort(ss []string) {
-	for i := 0; i < len(ss); i++ {
-		for j := i + 1; j < len(ss); j++ {
-			if ss[j] < ss[i] {
-				ss[i], ss[j] = ss[j], ss[i]
-			}
-		}
-	}
 }
 
 func builtinGetAttr(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -968,7 +979,7 @@ func builtinToJSON(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err != nil {
 		return nil, err
 	}
-	b, err := json.Marshal(raw)
+	b, err := marshalNixJSON(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -1464,6 +1475,8 @@ func builtinFilterSource(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	return ev.filterSourceToStore(pos, args[0], src, name)
 }
 
+// builtinNixPath is builtins.nixPath: the search path as a list of
+// { prefix; path; } sets, the form builtins.findFile takes.
 func builtinNixPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if len(args) != 0 {
 		return nil, evalErr(pos, "nixPath expects no arguments")
@@ -1471,22 +1484,65 @@ func builtinNixPath(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	entries := ev.NixPath.Entries()
 	elems := make([]*Value, len(entries))
 	for i, e := range entries {
-		elems[i] = Str(e, pos)
+		set := Attrs(false)
+		set.Attrs.Binds[ev.Intern.Intern("prefix")] = &AttrBinding{Value: Str(e[0], pos)}
+		set.Attrs.Binds[ev.Intern.Intern("path")] = &AttrBinding{Value: Str(e[1], pos)}
+		elems[i] = set
 	}
 	return List(elems...), nil
 }
 
+// builtinFindFile is builtins.findFile searchPath name, which <name>
+// desugars to. searchPath is a list of { prefix ? ""; path; } sets.
 func builtinFindFile(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
-	if err := arity(pos, args, 1); err != nil {
+	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	name, err := ev.forceString(args[0])
+	list, err := ev.forceValue(args[0])
 	if err != nil {
 		return nil, err
 	}
-	p, err := ev.NixPath.FindFile(name)
+	if list.Kind != VKList {
+		return nil, evalErr(pos, "expected a list but found %s", nixShowType(list))
+	}
+	entries := make([]nixPathEntry, 0, len(list.List))
+	for _, el := range list.List {
+		set, err := ev.forceAttrs(el, pos)
+		if err != nil {
+			return nil, err
+		}
+		var e nixPathEntry
+		if b := set.Attrs.Binds[ev.Intern.Intern("prefix")]; b != nil {
+			v, err := ev.attrBindingValue(b)
+			if err != nil {
+				return nil, err
+			}
+			if e.prefix, err = ev.forceString(v); err != nil {
+				return nil, err
+			}
+		}
+		b := set.Attrs.Binds[ev.Intern.Intern("path")]
+		if b == nil {
+			return nil, evalErr(pos, "attribute 'path' missing")
+		}
+		v, err := ev.attrBindingValue(b)
+		if err != nil {
+			return nil, err
+		}
+		pv, err := ev.coerceToString(v, CoerceContext{Mode: CoerceStrict, Pos: pos})
+		if err != nil {
+			return nil, err
+		}
+		e.path = pv.String
+		entries = append(entries, e)
+	}
+	name, err := ev.forceString(args[1])
 	if err != nil {
 		return nil, err
+	}
+	p, err := findInSearchPath(entries, name)
+	if err != nil {
+		return nil, evalErr(pos, "%v", err)
 	}
 	return Path(p), nil
 }
@@ -1692,7 +1748,6 @@ func forceList(ev *Evaluator, pos parser.Pos, v *Value) ([]*Value, error) {
 		return nil, err
 	}
 	if fv.Kind != VKList {
-		ev.logTypeMismatchWant(pos, fv, "list")
 		return nil, evalErr(pos, "expected a list")
 	}
 	return fv.List, nil
@@ -1913,22 +1968,15 @@ func builtinMapAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	for sym, bind := range set.Attrs.Binds {
 		name := ev.Intern.Lookup(sym)
 		inBind := bind
-		nameVal := Str(name, pos)
 		t := &Thunk{
-			eval: ev,
 			pos:  pos,
 			lazy: func(ev *Evaluator) (*Value, error) {
-				var val *Value
-				var err error
+				// Nix passes the attribute's value to f unevaluated.
+				val := inBind.Value
 				if inBind.Thunk != nil {
-					val, err = ev.forceThunk(inBind.Thunk)
-				} else {
-					val = inBind.Value
+					val = Deferred(inBind.Thunk)
 				}
-				if err != nil {
-					return nil, err
-				}
-				r, err := ev.applyCall2(f, nameVal, val, pos)
+				r, err := ev.applyCall2(f, Str(name, pos), val, pos)
 				if err != nil {
 					return nil, err
 				}
@@ -1952,7 +2000,7 @@ func builtinAttrValues(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 	for sym := range set.Attrs.Binds {
 		names = append(names, ev.Intern.Lookup(sym))
 	}
-	stringsSort(names)
+	stdsort.Strings(names)
 	out := make([]*Value, 0, len(names))
 	for _, name := range names {
 		sym := ev.Intern.Intern(name)
@@ -1995,32 +2043,60 @@ func builtinLessThan(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	a, err := ev.forceValue(args[0])
+	lt, err := ev.compareValues(args[0], args[1], pos)
 	if err != nil {
 		return nil, err
 	}
-	b, err := ev.forceValue(args[1])
+	return Bool(lt), nil
+}
+
+// compareValues is Nix's CompareValues, behind builtins.lessThan and so
+// behind < > <= >=: numbers (int and float mixed), strings and paths by
+// bytes, lists lexicographically. Anything else cannot be compared.
+func (ev *Evaluator) compareValues(a, b *Value, pos parser.Pos) (bool, error) {
+	fa, err := ev.forceValue(a)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	if a.Kind == VKInt && b.Kind == VKInt {
-		return Bool(a.Int < b.Int), nil
+	fb, err := ev.forceValue(b)
+	if err != nil {
+		return false, err
 	}
-	if a.Kind == VKFloat || b.Kind == VKFloat || a.Kind == VKInt || b.Kind == VKInt {
-		var af, bf float64
-		if a.Kind == VKInt {
-			af = float64(a.Int)
-		} else {
-			af = a.Float
+	switch {
+	case fa.Kind == VKFloat && fb.Kind == VKInt:
+		return fa.Float < float64(fb.Int), nil
+	case fa.Kind == VKInt && fb.Kind == VKFloat:
+		return float64(fa.Int) < fb.Float, nil
+	case fa.Kind != fb.Kind:
+		return false, evalErr(pos, "cannot compare %s with %s", nixShowType(fa), nixShowType(fb))
+	}
+	switch fa.Kind {
+	case VKInt:
+		return fa.Int < fb.Int, nil
+	case VKFloat:
+		return fa.Float < fb.Float, nil
+	case VKString:
+		return fa.String < fb.String, nil
+	case VKPath:
+		return fa.Path < fb.Path, nil
+	case VKList:
+		for i := 0; ; i++ {
+			if i == len(fb.List) {
+				return false, nil
+			}
+			if i == len(fa.List) {
+				return true, nil
+			}
+			eq, err := ev.equalValues(fa.List[i], fb.List[i])
+			if err != nil {
+				return false, err
+			}
+			if !eq {
+				return ev.compareValues(fa.List[i], fb.List[i], pos)
+			}
 		}
-		if b.Kind == VKInt {
-			bf = float64(b.Int)
-		} else {
-			bf = b.Float
-		}
-		return Bool(af < bf), nil
 	}
-	return Bool(false), nil
+	return false, evalErr(pos, "cannot compare %s with %s; values of that type are incomparable", nixShowType(fa), nixShowType(fb))
 }
 
 func builtinAdd(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -2084,7 +2160,7 @@ func builtinIsAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err != nil {
 		return nil, err
 	}
-	return Bool(fv.Kind == VKAttrs || fv.Kind == VKDerivation), nil
+	return Bool(fv.Kind == VKAttrs), nil
 }
 
 func builtinIsFunction(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -2167,7 +2243,7 @@ func builtinTypeOf(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 		t = "path"
 	case VKList:
 		t = "list"
-	case VKAttrs, VKDerivation:
+	case VKAttrs:
 		t = "set"
 	case VKLambda:
 		t = "lambda"
@@ -2398,13 +2474,28 @@ func builtinDiv(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.Kind == VKInt && b.Kind == VKInt {
-		if b.Int == 0 {
-			return nil, evalErr(pos, "division by zero")
-		}
-		return Int(a.Int / b.Int), nil
+	// Nix's prim_div: either operand a float makes a float division.
+	bf, ok := asFloat(b)
+	if !ok {
+		return nil, evalErr(pos, "expected a float but found %s: %s", nixShowType(b), b.DisplayString(ev, ev.Intern))
 	}
-	return nil, evalErr(pos, "div expects integers")
+	if bf == 0 {
+		return nil, evalErr(pos, "division by zero")
+	}
+	if a.Kind == VKFloat || b.Kind == VKFloat {
+		af, ok := asFloat(a)
+		if !ok {
+			return nil, evalErr(pos, "expected a float but found %s: %s", nixShowType(a), a.DisplayString(ev, ev.Intern))
+		}
+		return Float(af / bf), nil
+	}
+	if a.Kind != VKInt {
+		return nil, evalErr(pos, "expected an integer but found %s: %s", nixShowType(a), a.DisplayString(ev, ev.Intern))
+	}
+	if a.Int == math.MinInt64 && b.Int == -1 {
+		return nil, evalErr(pos, "overflow in integer division")
+	}
+	return Int(a.Int / b.Int), nil
 }
 
 func (ev *Evaluator) forceStringOrPath(v *Value) (string, error) {
@@ -2482,7 +2573,7 @@ func builtinUnsafeGetAttrPos(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 	if !ok || b == nil {
 		return Null(), nil
 	}
-	if b.Pos.File == "" && b.Pos.Line == 0 && b.Pos.Col == 0 {
+	if b.Pos == nil || (b.Pos.File == "" && b.Pos.Line == 0 && b.Pos.Col == 0) {
 		return Null(), nil
 	}
 	out := Attrs(false)
@@ -2605,6 +2696,9 @@ func builtinGenericClosure(ev *Evaluator, pos parser.Pos, args []*Value) (*Value
 	return List(res...), nil
 }
 
+// builtinFunctionArgs is Nix's prim_functionArgs: the formals of a lambda
+// (name -> has default), {} for a plain x: lambda or a builtin, and an error
+// for anything else. Functors are lib.functionArgs's job, not the builtin's.
 func builtinFunctionArgs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 1); err != nil {
 		return nil, err
@@ -2613,101 +2707,39 @@ func builtinFunctionArgs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 	if err != nil {
 		return nil, err
 	}
-	if f.Kind == VKAttrs {
-		faSym := ev.Intern.Intern("__functionArgs")
-		if b := f.Attrs.Binds[faSym]; b != nil {
-			var meta *Value
-			if b.Thunk != nil {
-				meta, err = ev.forceThunk(b.Thunk)
-			} else {
-				meta = b.Value
-			}
-			if err != nil {
-				return nil, err
-			}
-			if meta != nil && meta.Kind == VKAttrs {
-				return meta, nil
-			}
-		}
-		if ev.hasFunctor(f) {
-			sym := ev.Intern.Intern("__functor")
-			b := f.Attrs.Binds[sym]
-			var functor *Value
-			if b.Thunk != nil {
-				functor, err = ev.forceThunk(b.Thunk)
-			} else {
-				functor = b.Value
-			}
-			if err != nil {
-				return nil, err
-			}
-			fn, err := ev.applyCallable(functor, f, pos)
-			if err != nil {
-				return nil, err
-			}
-			return builtinFunctionArgs(ev, pos, []*Value{fn})
-		}
-	}
 	out := Attrs(false)
 	switch f.Kind {
 	case VKLambda:
 		if f.Lambda.Formals != nil {
 			for _, p := range f.Lambda.Formals.Params {
-				optional := p.Default != nil
-				out.Attrs.Binds[ev.Intern.Intern(p.Name)] = &AttrBinding{Value: Bool(optional)}
+				out.Attrs.Binds[ev.Intern.Intern(p.Name)] = &AttrBinding{Value: Bool(p.Default != nil)}
 			}
-		} else if f.Lambda.SimpleArg != "" {
-			out.Attrs.Binds[ev.Intern.Intern(f.Lambda.SimpleArg)] = &AttrBinding{Value: Bool(false)}
 		}
 	case VKBuiltin, VKPartialBuiltin:
-		// no formal argument metadata
 	default:
-		return nil, evalErr(pos, "expected a function")
+		return nil, evalErr(pos, "'functionArgs' requires a function")
 	}
 	return out, nil
 }
 
+// builtinAddErrorContext is Nix's prim_addErrorContext: force the value, and
+// only if that fails evaluate the message and prepend it to the error.
+// Forcing the message up front would build every context string the module
+// system passes (one per option definition) even when nothing fails.
 func builtinAddErrorContext(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
 	if err := arity(pos, args, 2); err != nil {
 		return nil, err
 	}
-	ctx, err := ev.forceString(args[0])
-	if err != nil {
-		return nil, err
-	}
-	v := args[1]
-	if v == nil {
-		return Null(), nil
-	}
-	if ctx == "" {
+	v, err := ev.forceValue(args[1])
+	if err == nil {
 		return v, nil
 	}
-	return ev.wrapErrorContext(ctx, v, pos), nil
-}
-
-func (ev *Evaluator) wrapErrorContext(ctx string, v *Value, pos parser.Pos) *Value {
-	if v == nil {
-		return Null()
+	msg, merr := ev.coerceToString(args[0], CoerceContext{Mode: CoerceString, Pos: pos})
+	if merr != nil || msg.String == "" {
+		return nil, err
 	}
-	if ctx == "" {
-		return v
+	if ee, ok := err.(*EvalError); ok {
+		return nil, &EvalError{Pos: ee.Pos, Msg: msg.String + " " + ee.Msg}
 	}
-	if v.Kind == VKDeferred && v.Deferred != nil {
-		t := v.Deferred
-		if t.errCtx != "" {
-			ctx = ctx + " " + t.errCtx
-		}
-		nt := *t
-		nt.errCtx = ctx
-		return Deferred(&nt)
-	}
-	t := &Thunk{
-		eval:   ev,
-		pos:    pos,
-		errCtx: ctx,
-		lazy: func(ev *Evaluator) (*Value, error) {
-			return ev.forceValue(v)
-		},
-	}
-	return Deferred(t)
+	return nil, fmt.Errorf("%s: %w", msg.String, err)
 }
