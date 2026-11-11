@@ -968,7 +968,7 @@ func builtinToJSON(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 	if err != nil {
 		return nil, err
 	}
-	b, err := json.Marshal(raw)
+	b, err := marshalNixJSON(raw)
 	if err != nil {
 		return nil, err
 	}

@@ -180,9 +180,6 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 	if !copyPaths {
 		return StrWithContext(p, ctx, pos), nil
 	}
-	if !(ev.materializeStorePaths || ev.inStringInterpolation) {
-		return StrWithContext(p, ctx, pos), nil
-	}
 	if _, err := ev.Effects.Stat(p); err != nil {
 		return StrWithContext(p, ctx, pos), nil
 	}
@@ -196,18 +193,21 @@ func (ev *Evaluator) coercePathToString(fv *Value, pos parser.Pos, copyPaths boo
 		return nil, evalErr(pos, "%s", err.Error())
 	}
 	ctx = []StringContextElem{{StorePath: storePath}}
-	if ev.materializeStorePaths || ev.inStringInterpolation {
-		reason := "interp"
-		if ev.materializeStorePaths {
-			reason = "derivation-env"
-		}
-		ev.recordCopyPathTrace(p, pos, reason)
-		err = ev.Effects.RealiseStorePath(storePath, func() error {
-			return store.CopyPathToStore(p, ev.physicalStorePath(storePath))
-		})
-		if err != nil {
-			return nil, err
-		}
+	// As in Nix, copyToStore alone decides: every caller that asks for
+	// CopyPaths gets the path added to the store.
+	reason := "copy"
+	switch {
+	case ev.materializeStorePaths:
+		reason = "derivation-env"
+	case ev.inStringInterpolation:
+		reason = "interp"
+	}
+	ev.recordCopyPathTrace(p, pos, reason)
+	err = ev.Effects.RealiseStorePath(storePath, func() error {
+		return store.CopyPathToStore(p, ev.physicalStorePath(storePath))
+	})
+	if err != nil {
+		return nil, err
 	}
 	return StrWithContext(storePath, ctx, pos), nil
 }

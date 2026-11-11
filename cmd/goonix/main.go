@@ -165,6 +165,18 @@ func cmdInstantiate(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	if fv.Kind != eval.VKAttrs {
+		fmt.Fprintln(os.Stderr, "error: expression does not evaluate to a derivation (or a set or list of those)")
+		os.Exit(1)
+	}
+	// nix-instantiate prints drvPath!output when the default output is not out.
+	suffix := ""
+	if out, ok, err := ev.AttrString(fv, "outputName"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	} else if ok && out != "out" {
+		suffix = "!" + out
+	}
 	cfg := store.Config{}
 	if drvPath, err := eval.ForceStrictDrvPath(ev, fv); err == nil {
 		drv, ok := ev.LookupStrictDerivation(drvPath)
@@ -176,7 +188,7 @@ func cmdInstantiate(args []string) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Println(strings.TrimSpace(drv.DrvPath))
+		fmt.Println(strings.TrimSpace(drv.DrvPath) + suffix)
 		return
 	}
 	drv, err := ev.AttrsToDerivation(fv)
@@ -188,5 +200,5 @@ func cmdInstantiate(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Println(strings.TrimSpace(drv.DrvPath))
+	fmt.Println(strings.TrimSpace(drv.DrvPath) + suffix)
 }

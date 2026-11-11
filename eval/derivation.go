@@ -452,3 +452,16 @@ func ForceDerivationAttrs(ev *Evaluator, v *Value) (string, error) {
 	}
 	return ev.forceString(dv)
 }
+
+// AttrString returns the string attribute name of the attribute set v, or
+// ok=false when v is not a set or has no such attribute.
+func (ev *Evaluator) AttrString(v *Value, name string) (s string, ok bool, err error) {
+	if v == nil || v.Kind != VKAttrs {
+		return "", false, nil
+	}
+	if _, has := v.Attrs.Binds[ev.Intern.Intern(name)]; !has {
+		return "", false, nil
+	}
+	s, err = getAttrString(ev, v, name)
+	return s, err == nil, err
+}

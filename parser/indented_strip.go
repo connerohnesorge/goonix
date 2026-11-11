@@ -57,9 +57,6 @@ func stripIndentation(pos Pos, parts []indStringPart) Expr {
 			}
 		}
 	}
-	if minIndent == 1_000_000 {
-		minIndent = 0
-	}
 
 	var out []Expr
 	atStartOfLine = true
@@ -128,29 +125,9 @@ func stripIndentation(pos Pos, parts []indStringPart) Expr {
 		return stringLitExpr(pos, "")
 	}
 	if len(out) == 1 {
-		if s, ok := out[0].(*String); ok && stringExprOnlyWhitespace(s) {
-			return stringLitExpr(pos, "")
-		}
-	}
-	if len(out) == 1 {
 		return out[0]
 	}
 	return &ConcatStrings{P: pos, Parts: out}
-}
-
-func stringExprOnlyWhitespace(s *String) bool {
-	for _, p := range s.Parts {
-		if p.Interp != nil {
-			return false
-		}
-		for i := 0; i < len(p.Text); i++ {
-			c := p.Text[i]
-			if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func lastIndexByte(s string, c byte) int {
