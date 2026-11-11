@@ -1,0 +1,25 @@
+{
+  "derivations": {
+    "250v5qlqzw6x3hdgp708qiwds3m50mxc-t.drv": {
+      "args": ["-c", "true"],
+      "builder": "/bin/sh",
+      "env": {
+        "builder": "/bin/sh",
+        "name": "t",
+        "out": "/nix/store/w49h2z6ns22j8sb40f2ihnsiymmwxp7m-t",
+        "system": "x86_64-linux"
+      },
+      "inputs": {
+        "drvs": {},
+        "srcs": []
+      },
+      "name": "t",
+      "outputs": {
+        "out": { "path": "w49h2z6ns22j8sb40f2ihnsiymmwxp7m-t" }
+      },
+      "system": "x86_64-linux",
+      "version": 4
+    }
+  },
+  "version": 4
+}

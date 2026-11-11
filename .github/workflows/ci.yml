@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'cursor/**']
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Fetch nixpkgs pin
+        run: |
+          mkdir -p testdata
+          curl -fsSL -o /tmp/nixpkgs.tar.gz https://github.com/NixOS/nixpkgs/archive/50ab793786d9de88ee30ec4e4c24fb4236fc2674.tar.gz
+          mkdir -p testdata/nixpkgs
+          tar -xzf /tmp/nixpkgs.tar.gz -C testdata/nixpkgs --strip-components=1
+          echo 50ab793786d9de88ee30ec4e4c24fb4236fc2674 > testdata/pinned-nixpkgs-rev
+      - name: CGO check
+        run: bash scripts/check-cgo.sh
+      - name: Build
+        env:
+          CGO_ENABLED: '0'
+        run: go build ./...
+      - name: Test
+        env:
+          CGO_ENABLED: '0'
+        run: go test ./... -short -timeout 15m
+      - name: Vet
+        run: go vet ./...
+
+  ladder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Install Nix 2.24.9
+        uses: cachix/install-nix-action@v30
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.24.9/install
+      - name: Verify Nix version
+        run: nix-instantiate --version | grep -F '2.24.9'
+      - name: Allow Nix sandbox user namespaces (Ubuntu 24.04 AppArmor)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Fetch nixpkgs pin
+        run: |
+          mkdir -p testdata
+          curl -fsSL -o /tmp/nixpkgs.tar.gz https://github.com/NixOS/nixpkgs/archive/50ab793786d9de88ee30ec4e4c24fb4236fc2674.tar.gz
+          mkdir -p testdata/nixpkgs
+          tar -xzf /tmp/nixpkgs.tar.gz -C testdata/nixpkgs --strip-components=1
+          echo 50ab793786d9de88ee30ec4e4c24fb4236fc2674 > testdata/pinned-nixpkgs-rev
+      - name: CGO check
+        run: bash scripts/check-cgo.sh
+      - name: Ladder and oracle tests
+        env:
+          CGO_ENABLED: '0'
+          # An oracle that would skip because Nix is not 2.24.9 fails this job.
+          # fail_oracle_skip also fails any other skip, including store and cmd.
+          GOONIX_REQUIRE_NIX_224: '1'
+        run: |
+          set -o pipefail
+          fail_oracle_skip() {
+            python3 - "$1" <<'PY'
+          import json, sys
+          # These skips are intentional and are not Nix comparisons. Every
+          # other skip in the ladder logs fails the job, including store and
+          # cmd tests and oracle tests whose names do not contain Oracle.
+          allow = {
+              "TestOrFallbackNullUsesRight",
+              "TestPkgConfigFetchurlGoATermDebug",
+              "TestPkgConfigFetchurlNixATermDebug",
+              "TestWrapperMissingInputsDebug",
+              "TestBrokenWrapperNameInspect",
+          }
+          bad = []
+          path = sys.argv[1]
+          for line in open(path, errors="replace"):
+              line = line.strip()
+              if not line.startswith("{"):
+                  continue
+              try:
+                  ev = json.loads(line)
+              except Exception:
+                  continue
+              if ev.get("Action") != "skip":
+                  continue
+              name = ev.get("Test") or ""
+              leaf = name.split("/")[-1]
+              if leaf in allow:
+                  continue
+              bad.append((ev.get("Package") or "") + " " + name)
+          if bad:
+              print("test skipped on the Nix 2.24.9 ladder:")
+              print("\n".join(bad))
+              sys.exit(1)
+          PY
+          }
+          go test -json ./internal/oracle/... ./ladder/... ./eval/... -count=1 -timeout 20m | tee /tmp/goonix-eval.json
+          fail_oracle_skip /tmp/goonix-eval.json
+          go test -json ./store/... ./store/local/... ./cmd/... -count=1 -timeout 15m | tee /tmp/goonix-store-cmd.json
+          fail_oracle_skip /tmp/goonix-store-cmd.json
+          go test -json ./builder/... -count=1 -timeout 10m | tee /tmp/goonix-builder.json
+          fail_oracle_skip /tmp/goonix-builder.json
+          go test ./substituter/... -run TestSubstituteHelloFromCache -count=1 -timeout 5m
+
+  nix-2-35:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Install Nix 2.35.1
+        uses: cachix/install-nix-action@v30
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.35.1/install
+      - name: Verify Nix version
+        run: nix-instantiate --version | grep -F '2.35.1'
+      - name: Allow Nix sandbox user namespaces (Ubuntu 24.04 AppArmor)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Fetch nixpkgs pin
+        run: |
+          mkdir -p testdata
+          curl -fsSL -o /tmp/nixpkgs.tar.gz https://github.com/NixOS/nixpkgs/archive/50ab793786d9de88ee30ec4e4c24fb4236fc2674.tar.gz
+          mkdir -p testdata/nixpkgs
+          tar -xzf /tmp/nixpkgs.tar.gz -C testdata/nixpkgs --strip-components=1
+          echo 50ab793786d9de88ee30ec4e4c24fb4236fc2674 > testdata/pinned-nixpkgs-rev
+      - name: Oracle smoke on Nix 2.35
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go test ./internal/oracle/... ./eval/... -run 'ATermEscape|DerivationStrictRung08|StructuredAttrs' -count=1 -timeout 15m
+          go test ./builder/... -run FixedOutput -count=1 -timeout 10m

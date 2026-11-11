@@ -1,0 +1,2 @@
+// Marker for import-time string interpolation oracle.
+x

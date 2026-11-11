@@ -1,0 +1,19 @@
+{
+  "fwh0qbryiqv54xj9mrhdky1rj8d9xn8n-xgcc-13.3.0.drv": {
+    "name": "xgcc-13.3.0",
+    "outputs": {
+      "out": { "path": "abc123foo-xgcc-13.3.0" }
+    },
+    "inputSrcs": [ "/nix/store/cafebabe-glibc-2.40" ],
+    "inputDrvs": {
+      "/nix/store/deadbeef-bootstrap-stage1-stdenv-linux.drv": {
+        "outputs": [ "out" ],
+        "dynamicOutputs": {}
+      }
+    },
+    "system": "x86_64-linux",
+    "builder": "/nix/store/builder.sh",
+    "args": [ "-c", "build" ],
+    "env": { "name": "xgcc-13.3.0", "out": "/nix/store/abc123foo-xgcc-13.3.0" }
+  }
+}
