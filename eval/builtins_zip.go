@@ -51,7 +51,6 @@ func builtinZipAttrsWith(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, 
 		sym := sym
 		inSets := sets
 		t := &Thunk{
-			eval: ev,
 			pos:  pos,
 			lazy: func(ev *Evaluator) (*Value, error) {
 				name := ev.Intern.Lookup(sym)

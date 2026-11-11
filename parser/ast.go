@@ -17,8 +17,8 @@ package parser
 // Pos is a source position.
 type Pos struct {
 	File string
-	Line int
-	Col  int
+	Line int32
+	Col  int32
 }
 
 // Expr is the root interface for Nix expression AST nodes.
@@ -139,6 +139,14 @@ type AttrSet struct {
 	Inherit   []Inherit
 	// Members preserves source order of inherit and bind entries.
 	Members []AttrSetMember
+	// static indexes static names while parsing a large set, so building
+	// one with n attributes is not O(n^2). See findStatic.
+	static map[string]staticRef
+}
+
+type staticRef struct {
+	bind int // index into Binds, or -1 for an inherited name
+	pos  Pos // the inherit's position when bind is -1
 }
 
 // AttrSetMember is one inherit or bind in an attribute set, in source order.

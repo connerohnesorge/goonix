@@ -24,37 +24,79 @@ import (
 // Env is a lexical environment frame.
 type Env struct {
 	Parent *Env
-	// Static bindings from let/rec/lambda (eager name -> value or thunk).
-	Vars map[data.Symbol]*AttrBinding
-	// Dynamic layer from `with` (attrs value, looked up after Vars).
+	// Static bindings from let/rec/lambda. Most frames hold a few names (a
+	// function argument, a small let), kept inline in vars; a frame that
+	// grows past envMapAt names moves them to big.
+	vars []envVar
+	big  map[data.Symbol]*AttrBinding
+	// Dynamic layer from `with` (attrs value, looked up after the vars).
 	With *Value
-	// Applying is the callable currently being applied (callPackageWith auto-merge).
-	Applying *Value
 }
+
+type envVar struct {
+	sym data.Symbol
+	b   AttrBinding
+}
+
+const envMapAt = 8
 
 // NewEnv returns an empty environment.
 func NewEnv() *Env {
-	return &Env{Vars: make(map[data.Symbol]*AttrBinding)}
+	return &Env{}
 }
 
 func (e *Env) extend() *Env {
-	return &Env{
-		Parent: e,
-		Vars:   make(map[data.Symbol]*AttrBinding),
-	}
+	return &Env{Parent: e}
 }
 
 func (e *Env) bind(sym data.Symbol, v *Value) {
-	e.Vars[sym] = &AttrBinding{Value: v}
+	e.set(sym, AttrBinding{Value: v})
 }
 
 func (e *Env) bindThunk(sym data.Symbol, t *Thunk) {
-	e.Vars[sym] = &AttrBinding{Thunk: t}
+	e.set(sym, AttrBinding{Thunk: t})
+}
+
+func (e *Env) set(sym data.Symbol, b AttrBinding) {
+	if e.big != nil {
+		e.big[sym] = &b
+		return
+	}
+	for i := range e.vars {
+		if e.vars[i].sym == sym {
+			e.vars[i].b = b
+			return
+		}
+	}
+	if len(e.vars) < envMapAt {
+		e.vars = append(e.vars, envVar{sym, b})
+		return
+	}
+	e.big = make(map[data.Symbol]*AttrBinding, 2*envMapAt)
+	for i := range e.vars {
+		e.big[e.vars[i].sym] = &e.vars[i].b
+	}
+	e.vars = nil
+	e.big[sym] = &b
+}
+
+// local returns the binding of sym in this frame only.
+func (e *Env) local(sym data.Symbol) (*AttrBinding, bool) {
+	if e.big != nil {
+		b, ok := e.big[sym]
+		return b, ok
+	}
+	for i := range e.vars {
+		if e.vars[i].sym == sym {
+			return &e.vars[i].b, true
+		}
+	}
+	return nil, false
 }
 
 func (e *Env) lookup(sym data.Symbol) (*AttrBinding, bool) {
 	for cur := e; cur != nil; cur = cur.Parent {
-		if b, ok := cur.Vars[sym]; ok {
+		if b, ok := cur.local(sym); ok {
 			return b, true
 		}
 	}
@@ -64,7 +106,7 @@ func (e *Env) lookup(sym data.Symbol) (*AttrBinding, bool) {
 func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, error) {
 	// Nix ExprVar: lexical scopes, then static builtins, then innermost-first `with`.
 	for cur := env; cur != nil; cur = cur.Parent {
-		if b, ok := cur.Vars[sym]; ok {
+		if b, ok := cur.local(sym); ok {
 			return b, true, nil
 		}
 	}

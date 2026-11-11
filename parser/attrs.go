@@ -54,8 +54,40 @@ func unparen(e Expr) Expr {
 	}
 }
 
-// findStatic returns the plain binding or inherit for name in set.
+const staticIndexAt = 16
+
+// findStatic returns the plain binding or inherit for name in set. Small
+// sets are scanned; a set past staticIndexAt names gets an index.
 func findStatic(set *AttrSet, name string) (bind *Binding, inherited *Pos) {
+	if set.static == nil && len(set.Binds)+len(set.Inherit) > staticIndexAt {
+		set.static = make(map[string]staticRef, 2*len(set.Binds))
+		for i, b := range set.Binds {
+			if len(b.Path) == 1 && b.Path[0].Expr == nil {
+				if _, dup := set.static[b.Path[0].Name]; !dup {
+					set.static[b.Path[0].Name] = staticRef{bind: i}
+				}
+			}
+		}
+		for _, inh := range set.Inherit {
+			for _, n := range inh.Names {
+				if _, dup := set.static[n.Name]; n.Expr == nil && !dup {
+					set.static[n.Name] = staticRef{bind: -1, pos: inh.Pos}
+				}
+			}
+		}
+	}
+	if set.static != nil {
+		ref, ok := set.static[name]
+		switch {
+		case !ok:
+			return nil, nil
+		case ref.bind < 0:
+			p := ref.pos
+			return nil, &p
+		default:
+			return &set.Binds[ref.bind], nil
+		}
+	}
 	for i := range set.Binds {
 		b := &set.Binds[i]
 		if len(b.Path) == 1 && b.Path[0].Expr == nil && b.Path[0].Name == name {
@@ -74,6 +106,11 @@ func findStatic(set *AttrSet, name string) (bind *Binding, inherited *Pos) {
 }
 
 func appendBind(set *AttrSet, b Binding) {
+	if set.static != nil && len(b.Path) == 1 && b.Path[0].Expr == nil {
+		if _, dup := set.static[b.Path[0].Name]; !dup {
+			set.static[b.Path[0].Name] = staticRef{bind: len(set.Binds)}
+		}
+	}
 	set.Binds = append(set.Binds, b)
 	bc := b
 	set.Members = append(set.Members, AttrSetMember{Binding: &bc})
@@ -166,6 +203,7 @@ func mergeAttrs(into, from *AttrSet) error {
 			}
 			inh := *m.Inherit
 			into.Inherit = append(into.Inherit, inh)
+			indexInherit(into, inh)
 			into.Members = append(into.Members, AttrSetMember{Inherit: &inh})
 			continue
 		}
@@ -210,6 +248,19 @@ func addInherit(set *AttrSet, inh Inherit) error {
 		}
 	}
 	set.Inherit = append(set.Inherit, inh)
+	indexInherit(set, inh)
 	set.Members = append(set.Members, AttrSetMember{Inherit: &inh})
 	return nil
+}
+
+// indexInherit records inherited names once set has an index.
+func indexInherit(set *AttrSet, inh Inherit) {
+	if set.static == nil {
+		return
+	}
+	for _, n := range inh.Names {
+		if _, dup := set.static[n.Name]; n.Expr == nil && !dup {
+			set.static[n.Name] = staticRef{bind: -1, pos: inh.Pos}
+		}
+	}
 }

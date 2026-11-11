@@ -30,8 +30,6 @@ func valueKindName(k ValueKind) string {
 		return "builtin"
 	case VKPartialBuiltin:
 		return "partial-builtin"
-	case VKDerivation:
-		return "derivation"
 	case VKDeferred:
 		return "thunk"
 	default:

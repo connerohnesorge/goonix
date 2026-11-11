@@ -145,11 +145,17 @@ func (ev *Evaluator) registerBuiltins() {
 
 // BuiltinAttrSet returns an attribute set of all registered builtins.
 func (ev *Evaluator) BuiltinAttrSet() *Value {
+	// One set per evaluator: every import binds builtins, and the set
+	// never changes after it is built.
+	if ev.builtinsSet != nil {
+		return ev.builtinsSet
+	}
 	av := Attrs(false)
 	for name, b := range ev.Builtins {
 		sym := ev.Intern.Intern(name)
 		av.Attrs.Binds[sym] = &AttrBinding{Value: &Value{Kind: VKBuiltin, Builtin: b}}
 	}
+	ev.builtinsSet = av
 	return av
 }
 
@@ -407,7 +413,7 @@ func builtinAttrNames(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, err
 		names = append(names, ev.Intern.Lookup(sym))
 	}
 	// sort for stability
-	stringsSort(names)
+	stdsort.Strings(names)
 	elems := make([]*Value, len(names))
 	for i, n := range names {
 		elems[i] = Str(n, pos)
@@ -443,16 +449,6 @@ func builtinCatAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 		}
 	}
 	return List(out...), nil
-}
-
-func stringsSort(ss []string) {
-	for i := 0; i < len(ss); i++ {
-		for j := i + 1; j < len(ss); j++ {
-			if ss[j] < ss[i] {
-				ss[i], ss[j] = ss[j], ss[i]
-			}
-		}
-	}
 }
 
 func builtinGetAttr(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -1972,9 +1968,7 @@ func builtinMapAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 	for sym, bind := range set.Attrs.Binds {
 		name := ev.Intern.Lookup(sym)
 		inBind := bind
-		nameVal := Str(name, pos)
 		t := &Thunk{
-			eval: ev,
 			pos:  pos,
 			lazy: func(ev *Evaluator) (*Value, error) {
 				// Nix passes the attribute's value to f unevaluated.
@@ -1982,7 +1976,7 @@ func builtinMapAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, erro
 				if inBind.Thunk != nil {
 					val = Deferred(inBind.Thunk)
 				}
-				r, err := ev.applyCall2(f, nameVal, val, pos)
+				r, err := ev.applyCall2(f, Str(name, pos), val, pos)
 				if err != nil {
 					return nil, err
 				}
@@ -2006,7 +2000,7 @@ func builtinAttrValues(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, er
 	for sym := range set.Attrs.Binds {
 		names = append(names, ev.Intern.Lookup(sym))
 	}
-	stringsSort(names)
+	stdsort.Strings(names)
 	out := make([]*Value, 0, len(names))
 	for _, name := range names {
 		sym := ev.Intern.Intern(name)
@@ -2166,7 +2160,7 @@ func builtinIsAttrs(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error
 	if err != nil {
 		return nil, err
 	}
-	return Bool(fv.Kind == VKAttrs || fv.Kind == VKDerivation), nil
+	return Bool(fv.Kind == VKAttrs), nil
 }
 
 func builtinIsFunction(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
@@ -2249,7 +2243,7 @@ func builtinTypeOf(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error)
 		t = "path"
 	case VKList:
 		t = "list"
-	case VKAttrs, VKDerivation:
+	case VKAttrs:
 		t = "set"
 	case VKLambda:
 		t = "lambda"
@@ -2579,7 +2573,7 @@ func builtinUnsafeGetAttrPos(ev *Evaluator, pos parser.Pos, args []*Value) (*Val
 	if !ok || b == nil {
 		return Null(), nil
 	}
-	if b.Pos.File == "" && b.Pos.Line == 0 && b.Pos.Col == 0 {
+	if b.Pos == nil || (b.Pos.File == "" && b.Pos.Line == 0 && b.Pos.Col == 0) {
 		return Null(), nil
 	}
 	out := Attrs(false)

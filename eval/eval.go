@@ -66,9 +66,9 @@ type Evaluator struct {
 	strictDrvs       map[string]*gonixdrv.Derivation // every derivationStrict result, keyed by drvPath
 	moduloCache      *store.ModuloCache
 
-	verifyStrictMemo bool // recompute derivationStrict on memo hit and assert identical (tests)
+	builtinsSet *Value // cached BuiltinAttrSet
 
-	applyingCallable *Value // current partial application target (callPackageWith auto-merge)
+	verifyStrictMemo bool // recompute derivationStrict on memo hit and assert identical (tests)
 
 	// xp holds enabled experimental features (Nix --extra-experimental-features).
 	// flakes also enables fetch-tree, matching Nix 2.24.9.
@@ -223,8 +223,7 @@ func (ev *Evaluator) evalExpr(expr parser.Expr, env *Env) (*Value, error) {
 	case *parser.List:
 		out := make([]*Value, len(e.Elems))
 		for i, el := range e.Elems {
-			t := ev.newThunk(el, env, el.Pos())
-			out[i] = Deferred(t)
+			out[i] = ev.maybeThunk(el, env)
 		}
 		return List(out...), nil
 	case *parser.AttrSet:
@@ -429,7 +428,7 @@ func (ev *Evaluator) bindAttrInherit(inh parser.Inherit, populateEnv, bindEnv *E
 			namePos = inh.Pos
 		}
 		t := ev.newThunk(expr, lookupEnv, namePos)
-		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t, Pos: namePos}
+		av.Attrs.Binds[sym] = &AttrBinding{Thunk: t, Pos: &t.pos}
 		if inh.From != nil && recursive {
 			bindEnv.bindThunk(sym, t)
 		}
@@ -442,73 +441,6 @@ func (ev *Evaluator) bindingSym(b parser.Binding) data.Symbol {
 		return 0
 	}
 	return ev.Intern.Intern(b.Path[0].Name)
-}
-
-func (ev *Evaluator) evalInherit(inh parser.Inherit, env *Env, av *Value) error {
-	var from *Value
-	if inh.From != nil {
-		v, err := ev.evalExpr(inh.From, env)
-		if err != nil {
-			return err
-		}
-		fv, err := ev.forceValue(v)
-		if err != nil {
-			return err
-		}
-		if fv.Kind != VKAttrs {
-			return evalErr(inh.Pos, "inherit from expects attribute set")
-		}
-		from = fv
-	}
-	for _, n := range inh.Names {
-		name := n.Name
-		if n.Expr != nil {
-			v, err := ev.evalExpr(n.Expr, env)
-			if err != nil {
-				return err
-			}
-			fv, err := ev.forceString(v)
-			if err != nil {
-				return err
-			}
-			name = fv
-		}
-		sym := ev.Intern.Intern(name)
-		var val *Value
-		if from != nil {
-			if b, ok := from.Attrs.Binds[sym]; ok && b != nil {
-				if b.Thunk != nil {
-					var err error
-					val, err = ev.forceThunk(b.Thunk)
-					if err != nil {
-						return err
-					}
-				} else {
-					val = b.Value
-				}
-			} else {
-				return evalErr(inh.Pos, "attribute %q missing", name)
-			}
-		} else {
-			if bind, ok, err := ev.lookupEnv(env, sym); err != nil {
-				return err
-			} else if ok {
-				if bind.Thunk != nil {
-					var err error
-					val, err = ev.forceThunk(bind.Thunk)
-					if err != nil {
-						return err
-					}
-				} else {
-					val = bind.Value
-				}
-			} else {
-				return evalErr(inh.Pos, "undefined variable %q in inherit", name)
-			}
-		}
-		av.Attrs.Binds[sym] = &AttrBinding{Value: val, Pos: inh.Pos}
-	}
-	return nil
 }
 
 func (ev *Evaluator) evalLet(l *parser.Let, env *Env) (*Value, error) {
@@ -602,8 +534,7 @@ func (ev *Evaluator) evalCall(c *parser.Call, env *Env) (*Value, error) {
 	}
 	args := make([]*Value, len(c.Args))
 	for i, a := range c.Args {
-		t := ev.newThunk(a, env, a.Pos())
-		args[i] = Deferred(t)
+		args[i] = ev.maybeThunk(a, env)
 	}
 	if ev.isCallableValue(ff, c.P) {
 		return ev.applyCallableN(ff, args, c.P)
@@ -641,9 +572,6 @@ func (ev *Evaluator) applyLambda(l *LambdaValue, args []*Value, pos parser.Pos) 
 		return nil, evalErr(pos, "invalid lambda")
 	}
 	child := l.Env.extend()
-	if ev.applyingCallable != nil {
-		child.Applying = ev.applyingCallable
-	}
 	if l.Formals == nil && l.SimpleArg != "" {
 		if len(args) != 1 {
 			return nil, evalErr(pos, "function expects 1 argument, got %d", len(args))
@@ -1054,11 +982,38 @@ func (ev *Evaluator) evalOpUpdate(b *parser.BinaryOp, env *Env) (*Value, error) 
 	return mergeAttrBindMaps(l, r), nil
 }
 
+// maybeThunk is Nix's Expr::maybeThunk, used for function arguments and
+// list elements, where env is complete: a variable bound in a lexical scope
+// is passed as its existing value or thunk, and a literal as its value,
+// instead of allocating a new thunk around it.
+func (ev *Evaluator) maybeThunk(e parser.Expr, env *Env) *Value {
+	switch x := e.(type) {
+	case *parser.Var:
+		if b, ok := env.lookup(ev.Intern.Intern(x.Name)); ok {
+			if b.Thunk != nil {
+				return Deferred(b.Thunk)
+			}
+			if b.Value != nil {
+				return b.Value
+			}
+		}
+	case *parser.Integer, *parser.Float:
+		if v, err := ev.evalExpr(e, env); err == nil {
+			return v
+		}
+	case *parser.String:
+		if len(x.Parts) == 1 && x.Parts[0].Interp == nil {
+			return Str(x.Parts[0].Text, x.P)
+		}
+	}
+	return Deferred(ev.newThunk(e, env, e.Pos()))
+}
+
 func (ev *Evaluator) newThunk(expr parser.Expr, env *Env, pos parser.Pos) *Thunk {
 	if pos.File == "" && expr != nil {
 		pos = expr.Pos()
 	}
-	return &Thunk{eval: ev, expr: expr, env: env, pos: pos}
+	return &Thunk{expr: expr, env: env, pos: pos}
 }
 
 // deferredApplyCall returns a lazy list element / map result without applying f yet (Nix map laziness).
@@ -1066,8 +1021,7 @@ func (ev *Evaluator) deferredApplyCall(f, arg *Value, pos parser.Pos) *Value {
 	fCap, argCap := f, arg
 	posCap := pos
 	t := &Thunk{
-		eval: ev,
-		pos:  posCap,
+		pos: posCap,
 		lazy: func(ev *Evaluator) (*Value, error) {
 			return ev.applyCallable(fCap, argCap, posCap)
 		},
@@ -1194,10 +1148,7 @@ func (ev *Evaluator) valueToBool(v *Value) (bool, error) {
 
 func (ev *Evaluator) forceString(v *Value) (string, error) {
 	pos := parser.Pos{}
-	if v != nil && v.Pos.File != "" {
-		pos = v.Pos
-	}
-	if v != nil && v.Kind == VKDeferred && v.Deferred != nil && pos.File == "" {
+	if v != nil && v.Kind == VKDeferred && v.Deferred != nil {
 		pos = v.Deferred.pos
 	}
 	sv, err := ev.coerceToString(v, CoerceContext{Mode: CoerceString, Pos: pos})
@@ -1236,28 +1187,21 @@ func mergeAttrBindMaps(lhs, rhs *Value) *Value {
 	if right == nil || right.Kind != VKAttrs {
 		return left
 	}
-	out := Attrs(false)
+	// As in Nix, a // with an empty side returns the other side itself.
+	if len(right.Attrs.Binds) == 0 {
+		return left
+	}
+	if len(left.Attrs.Binds) == 0 {
+		return right
+	}
+	binds := make(map[data.Symbol]*AttrBinding, len(left.Attrs.Binds)+len(right.Attrs.Binds))
 	for sym, bind := range left.Attrs.Binds {
-		out.Attrs.Binds[sym] = bind
+		binds[sym] = bind
 	}
 	for sym, bind := range right.Attrs.Binds {
-		out.Attrs.Binds[sym] = bind
+		binds[sym] = bind
 	}
-	if left.Attrs != nil && len(left.Attrs.Binds) > 0 {
-		lhsCopy := &AttrSet{Binds: make(map[data.Symbol]*AttrBinding, len(left.Attrs.Binds))}
-		for sym, bind := range left.Attrs.Binds {
-			lhsCopy.Binds[sym] = bind
-		}
-		out.Attrs.MergeLHS = lhsCopy
-	}
-	if right.Attrs != nil {
-		rhsCopy := &AttrSet{Binds: make(map[data.Symbol]*AttrBinding, len(right.Attrs.Binds))}
-		for sym, bind := range right.Attrs.Binds {
-			rhsCopy.Binds[sym] = bind
-		}
-		out.Attrs.UpdateRHS = rhsCopy
-	}
-	return out
+	return &Value{Kind: VKAttrs, Attrs: &AttrSet{Binds: binds}}
 }
 
 func (ev *Evaluator) equalValues(a, b *Value) (bool, error) {

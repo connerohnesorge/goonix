@@ -56,9 +56,6 @@ func mergeStringContexts(a, b []StringContextElem) []StringContextElem {
 // coerceToString implements Nix EvalState::coerceToString for string contexts.
 func (ev *Evaluator) coerceToString(v *Value, cc CoerceContext) (*Value, error) {
 	pos := cc.Pos
-	if v != nil && pos.File == "" && v.Pos.File != "" {
-		pos = v.Pos
-	}
 	fv, err := ev.mustWHNF(v, pos)
 	if err != nil {
 		return nil, err

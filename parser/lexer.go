@@ -50,7 +50,7 @@ func (r *lexResult) pos(offset int) Pos {
 	if i < 0 {
 		return Pos{File: r.file, Line: 1, Col: 1}
 	}
-	return Pos{File: r.file, Line: i + 1, Col: offset - r.lines[i] + 1}
+	return Pos{File: r.file, Line: int32(i + 1), Col: int32(offset - r.lines[i] + 1)}
 }
 
 func (r *lexResult) slice(start, end int) string {
