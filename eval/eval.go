@@ -361,15 +361,11 @@ func (ev *Evaluator) evalPath(p *parser.Path, env *Env) (*Value, error) {
 		}
 		return Path(resolved), nil
 	}
-	if strings.HasPrefix(text, "./") || strings.HasPrefix(text, "../") {
-		if ev.curFile != "" {
-			text = filepath.Join(filepath.Dir(ev.curFile), text)
-		}
+	// Any relative path literal, with or without a leading ./ (such as
+	// apparmor/includes.nix), is relative to the file it appears in.
+	if !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "~/") && ev.curFile != "" {
+		text = filepath.Join(filepath.Dir(ev.curFile), text)
 	}
-	if strings.HasPrefix(text, "./") || strings.HasPrefix(text, "../") || strings.HasPrefix(text, "/") {
-		return Path(text), nil
-	}
-	// Path with interpolations is represented via ConcatStrings in parser; bare paths here.
 	return Path(text), nil
 }
 
@@ -554,7 +550,7 @@ func (ev *Evaluator) evalLet(l *parser.Let, env *Env) (*Value, error) {
 		if len(l.Attrs.Members) > 0 {
 			for _, m := range l.Attrs.Members {
 				if m.Inherit != nil {
-					if err := ev.bindLetInherit(*m.Inherit, child); err != nil {
+					if err := ev.bindLetInherit(*m.Inherit, env, child); err != nil {
 						return nil, err
 					}
 				}
@@ -564,7 +560,7 @@ func (ev *Evaluator) evalLet(l *parser.Let, env *Env) (*Value, error) {
 			}
 		} else {
 			for _, inh := range l.Attrs.Inherit {
-				if err := ev.bindLetInherit(inh, child); err != nil {
+				if err := ev.bindLetInherit(inh, env, child); err != nil {
 					return nil, err
 				}
 			}
@@ -576,7 +572,10 @@ func (ev *Evaluator) evalLet(l *parser.Let, env *Env) (*Value, error) {
 	return ev.evalExpr(l.Body, child)
 }
 
-func (ev *Evaluator) bindLetInherit(inh parser.Inherit, env *Env) error {
+// bindLetInherit binds inherited names into the let scope. A plain inherit
+// x reads x from the enclosing scope outer (in Nix, let inherit x; is not
+// self-referential). inherit (e) x evaluates e in the let scope itself.
+func (ev *Evaluator) bindLetInherit(inh parser.Inherit, outer, env *Env) error {
 	for _, n := range inh.Names {
 		name := n.Name
 		if n.Expr != nil {
@@ -594,7 +593,11 @@ func (ev *Evaluator) bindLetInherit(inh parser.Inherit, env *Env) error {
 		} else {
 			expr = &parser.Var{P: inh.Pos, Name: name}
 		}
-		t := ev.newThunk(expr, env, inh.Pos)
+		lookup := env
+		if inh.From == nil {
+			lookup = outer
+		}
+		t := ev.newThunk(expr, lookup, inh.Pos)
 		env.bindThunk(sym, t)
 	}
 	return nil

@@ -169,20 +169,33 @@ func lex(src []byte, path string) (*lexResult, error) {
 				}
 				continue
 			}
+			// Nix's STRING rule: ([^$"\\]|\$[^{"\\]|\\ANY|\$\\ANY)*. A $ that
+			// is not followed by { consumes the next character, so $${ is text.
+		scan:
 			for i < n {
 				if src[i] == '"' {
-					break
-				}
-				if src[i] == '$' && i+1 < n && src[i+1] == '{' {
 					break
 				}
 				if src[i] == '\\' && i+1 < n {
 					i += 2
 					continue
 				}
-				if src[i] == '\n' {
-					i++
-					continue
+				if src[i] == '$' && i+1 < n {
+					switch src[i+1] {
+					case '{':
+						break scan
+					case '\\':
+						if i+2 < n {
+							i += 3
+							continue
+						}
+					case '"':
+						i++
+						continue
+					default:
+						i += 2
+						continue
+					}
 				}
 				i++
 			}
@@ -254,7 +267,13 @@ func lex(src []byte, path string) (*lexResult, error) {
 				if i+1 < n && src[i] == '$' && src[i+1] == '{' {
 					break
 				}
+				// Nix's IND_STR rule \$[^{']: a $ consumes the next character
+				// unless that is { or ', so $${ is text.
 				if src[i] == '$' {
+					if i+1 < n && src[i+1] != '\'' {
+						i += 2
+						continue
+					}
 					break
 				}
 				i++

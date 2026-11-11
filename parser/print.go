@@ -121,7 +121,7 @@ func printExpr(b *bytes.Buffer, expr Expr) {
 			printExpr(b, e.Expr)
 			b.WriteString(")")
 		} else {
-			b.WriteString("(0 sub ")
+			b.WriteString("(__sub 0 ")
 			printExpr(b, e.Expr)
 			b.WriteString(")")
 		}
@@ -289,16 +289,33 @@ func printAttrName(b *bytes.Buffer, seg AttrName) {
 		b.WriteString("\"${")
 		printExpr(b, seg.Expr)
 		b.WriteString("}\"")
-	} else {
+	} else if isPlainIdent(seg.Name) {
 		b.WriteString(seg.Name)
+	} else {
+		printLiteralString(b, escapeString(seg.Name))
 	}
 }
 
+// isPlainIdent reports whether Nix prints name without quotes.
+func isPlainIdent(name string) bool {
+	if name == "" || name == "or" {
+		return name == "or"
+	}
+	for i, c := range name {
+		ok := c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+			i > 0 && (c >= '0' && c <= '9' || c == '\'' || c == '-')
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// escapeString escapes s the way Nix's printString does.
+var stringEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`, "${", `\${`)
+
 func escapeString(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, "$", `\$`)
-	return s
+	return stringEscaper.Replace(s)
 }
 
 func escapeIndented(s string) string {

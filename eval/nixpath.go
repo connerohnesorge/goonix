@@ -91,44 +91,28 @@ func (np *NixPath) Entries() []string {
 	return out
 }
 
-// FindFile resolves a logical name to an absolute filesystem path.
+// FindFile resolves a logical name the way Nix's findFile does. An entry
+// with a prefix matches name itself or name below prefix/; an entry without
+// a prefix is a directory that name is looked up in. The first existing
+// candidate wins.
 func (np *NixPath) FindFile(name string) (string, error) {
-	sub := name
-	wantPrefix := ""
-	if idx := strings.Index(name, "/"); idx >= 0 {
-		wantPrefix = name[:idx]
-		sub = name[idx+1:]
-	}
 	for _, e := range np.entries {
-		if wantPrefix != "" && e.prefix == wantPrefix {
-			c := filepath.Join(e.path, sub)
-			if st, err := os.Stat(c); err == nil && !st.IsDir() {
-				return c, nil
-			}
-			c = c + ".nix"
-			if st, err := os.Stat(c); err == nil && !st.IsDir() {
-				return c, nil
-			}
+		var c string
+		switch {
+		case e.prefix == "":
+			c = filepath.Join(e.path, name)
+		case name == e.prefix:
+			c = e.path
+		case strings.HasPrefix(name, e.prefix+"/"):
+			c = filepath.Join(e.path, name[len(e.prefix)+1:])
+		default:
+			continue
 		}
-		candidates := []string{
-			filepath.Join(e.path, name),
-			filepath.Join(e.path, name+".nix"),
-		}
-		if e.prefix != "" && e.prefix == name {
-			if st, err := os.Stat(e.path); err == nil && st.IsDir() {
-				return e.path, nil
-			}
-		}
-		for _, c := range candidates {
-			if st, err := os.Stat(c); err == nil {
-				if st.IsDir() {
-					return c, nil
-				}
-				return c, nil
-			}
+		if _, err := os.Stat(c); err == nil {
+			return c, nil
 		}
 	}
-	return "", fmt.Errorf("file %q not found in NIX_PATH", name)
+	return "", fmt.Errorf("file '%s' was not found in the Nix search path (add it using $NIX_PATH or -I)", name)
 }
 
 // ResolveAnglePath resolves <name> to a path string.

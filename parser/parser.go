@@ -191,6 +191,11 @@ func (p *Parser) parseLet() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	for _, b := range binds.Binds {
+		if b.Path[0].Expr != nil {
+			return nil, fmt.Errorf("%s:%d:%d: dynamic attributes not allowed in let", b.Pos.File, b.Pos.Line, b.Pos.Col)
+		}
+	}
 	if _, err := p.expect(tokenIn); err != nil {
 		return nil, err
 	}
@@ -209,9 +214,9 @@ func (p *Parser) parseLetBinds() (*AttrSet, error) {
 			if err != nil {
 				return nil, err
 			}
-			inhc := *inh
-			set.Inherit = append(set.Inherit, inhc)
-			set.Members = append(set.Members, AttrSetMember{Inherit: &inhc})
+			if err := addInherit(set, *inh); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		path, err := p.parseAttrPath()
@@ -228,15 +233,9 @@ func (p *Parser) parseLetBinds() (*AttrSet, error) {
 		if _, err := p.expect(tokenSemi); err != nil {
 			return nil, err
 		}
-		bind := Binding{
-			Pos:   path[0].pos(),
-			Path:  path,
-			Value: val,
-			Kind:  BindPlain,
+		if err := addAttr(set, path, val, path[0].pos()); err != nil {
+			return nil, err
 		}
-		set.Binds = append(set.Binds, bind)
-		b := bind
-		set.Members = append(set.Members, AttrSetMember{Binding: &b})
 	}
 	return set, nil
 }
@@ -457,11 +456,11 @@ func (p *Parser) parseBinOp(prec int) (Expr, error) {
 			continue
 		}
 		if op == "-" || op == "*" || op == "/" {
-			builtin := "sub"
+			builtin := "__sub"
 			if op == "*" {
-				builtin = "mul"
+				builtin = "__mul"
 			} else if op == "/" {
-				builtin = "div"
+				builtin = "__div"
 			}
 			left = &Call{
 				P:    left.Pos(),
@@ -779,9 +778,9 @@ func (p *Parser) parseBindsInner() (*AttrSet, error) {
 			if err != nil {
 				return nil, err
 			}
-			inhc := *inh
-			set.Inherit = append(set.Inherit, inhc)
-			set.Members = append(set.Members, AttrSetMember{Inherit: &inhc})
+			if err := addInherit(set, *inh); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		path, err := p.parseAttrPath()
@@ -798,15 +797,9 @@ func (p *Parser) parseBindsInner() (*AttrSet, error) {
 		if _, err := p.expect(tokenSemi); err != nil {
 			return nil, err
 		}
-		bind := Binding{
-			Pos:   path[0].pos(),
-			Path:  path,
-			Value: val,
-			Kind:  BindPlain,
+		if err := addAttr(set, path, val, path[0].pos()); err != nil {
+			return nil, err
 		}
-		set.Binds = append(set.Binds, bind)
-		b := bind
-		set.Members = append(set.Members, AttrSetMember{Binding: &b})
 	}
 	return set, nil
 }
@@ -879,6 +872,9 @@ func (p *Parser) parseInterpID() (AttrName, error) {
 		}
 		if _, err := p.expect(tokenDQuote); err != nil {
 			return AttrName{}, err
+		}
+		if len(parts) == 0 {
+			return AttrName{Name: "", Pos: qpos}, nil
 		}
 		if len(parts) == 1 && parts[0].Interp == nil {
 			return AttrName{Name: parts[0].Text, Pos: qpos}, nil

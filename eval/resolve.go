@@ -15,6 +15,8 @@
 package eval
 
 import (
+	"strings"
+
 	"github.com/connerohnesorge/goonix/data"
 	"github.com/connerohnesorge/goonix/parser"
 )
@@ -67,7 +69,7 @@ func (ev *Evaluator) lookupEnv(env *Env, sym data.Symbol) (*AttrBinding, bool, e
 		}
 	}
 	if name := ev.Intern.Lookup(sym); name != "" {
-		if b, ok := ev.Builtins[name]; ok {
+		if b, ok := ev.globalBuiltin(name); ok {
 			return &AttrBinding{Value: &Value{Kind: VKBuiltin, Builtin: b}}, true, nil
 		}
 	}
@@ -384,4 +386,31 @@ func resolveAttrSet(a *parser.AttrSet, env *resolveEnv, isLet bool) (*parser.Att
 	}
 	out.Inherit = a.Inherit
 	return out, nil
+}
+
+// globalNames are the builtins Nix 2.24.9 puts in the base environment under
+// their own name. Every other builtin x is global only as __x. builtins,
+// true, false and null are bound elsewhere.
+var globalNames = map[string]bool{
+	"abort": true, "baseNameOf": true, "break": true, "derivation": true,
+	"derivationStrict": true, "dirOf": true, "fetchGit": true,
+	"fetchMercurial": true, "fetchTarball": true, "fetchTree": true,
+	"fromTOML": true, "import": true, "isNull": true, "map": true,
+	"placeholder": true, "removeAttrs": true, "scopedImport": true,
+	"throw": true, "toString": true,
+}
+
+// globalBuiltin resolves a free variable against the base environment the
+// way Nix does, so that `with pkgs; fetchurl` finds pkgs.fetchurl rather
+// than builtins.fetchurl.
+func (ev *Evaluator) globalBuiltin(name string) (*Builtin, bool) {
+	if globalNames[name] {
+		b, ok := ev.Builtins[name]
+		return b, ok
+	}
+	if base, ok := strings.CutPrefix(name, "__"); ok && !globalNames[base] && base != "builtins" {
+		b, ok := ev.Builtins[base]
+		return b, ok
+	}
+	return nil, false
 }

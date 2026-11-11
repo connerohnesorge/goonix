@@ -72,18 +72,30 @@ func TestLangSkeleton(t *testing.T) {
 	})
 }
 
+// TestNixPathFindFile checks Nix 2.24.9's search path rules: no .nix
+// suffix is added, a prefixed entry matches name and name/..., and a
+// directory is a valid result.
 func TestNixPathFindFile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "hello.nix"), []byte("1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	np := eval.ParseNixPath("").WithSearchPath(dir)
-	p, err := np.FindFile("hello")
-	if err != nil {
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if !contains(p, "hello.nix") {
-		t.Fatalf("path = %q", p)
+	np := eval.ParseNixPath("").WithSearchPath(dir)
+	if p, err := np.FindFile("hello.nix"); err != nil || p != filepath.Join(dir, "hello.nix") {
+		t.Fatalf("hello.nix = %q, %v", p, err)
+	}
+	if _, err := np.FindFile("hello"); err == nil {
+		t.Fatal("<hello> resolved; Nix does not add .nix")
+	}
+	px := eval.ParseNixPath("x=" + dir)
+	if p, err := px.FindFile("x/sub"); err != nil || p != filepath.Join(dir, "sub") {
+		t.Fatalf("x/sub = %q, %v", p, err)
+	}
+	if _, err := px.FindFile("hello.nix"); err == nil {
+		t.Fatal("prefixed entry matched a name outside its prefix")
 	}
 }
 

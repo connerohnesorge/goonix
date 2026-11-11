@@ -14,7 +14,7 @@ let
   kernelFamilies = { bsd = { }; darwin = { }; };
   inherit (execFormats) macho elf;
   inherit (kernelFamilies) bsd darwin;
-  setTypes = type: mapAttrs (name: value: value);
+  setTypes = type: builtins.mapAttrs (name: value: value);
 in (setTypes null {
   macos = {
     execFormat = macho;
