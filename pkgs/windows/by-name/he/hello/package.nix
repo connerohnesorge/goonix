@@ -1,0 +1,15 @@
+# GNU hello: a name and a source, with the stdenv's setup.sh doing unpack,
+# configure, build and install.  pkgs/windows builds it with the stage-1
+# stdenv, and test/data/seed-stdenv.nix with the seed stdenv.
+#
+# pkgs/windows/hello.nix points `nova-nix build` at this package: build takes
+# a derivation-valued expression, and this is a function (it takes
+# { stdenv, fetchurl }), so something has to call it.
+{ stdenv, fetchurl }:
+stdenv.mkDerivation {
+  name = "hello";
+  src = fetchurl {
+    url = "mirror://gnu/hello/hello-2.12.3.tar.gz";
+    sha256 = "0d5f60154382fee10b114a1c34e785d8b1f492073ae2d3a6f7b147687b366aa0";
+  };
+}

@@ -31,11 +31,7 @@ const (
 
 // DumpPathFilter writes a filtered NAR of path to w.
 func DumpPathFilter(w io.Writer, path string, filter func(string, NodeType) bool) error {
-	var fn gonixnar.SourceFilterFunc
-	if filter != nil {
-		fn = filter
-	}
-	return gonixnar.DumpPathFilter(w, path, fn)
+	return dumpNAR(w, path, filter)
 }
 
 // NewNARWriter constructs a streaming NAR encoder.

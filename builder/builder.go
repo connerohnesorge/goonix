@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
 	"github.com/nix-community/go-nix/pkg/nixbase32"
@@ -190,6 +191,9 @@ func (b *Builder) buildOne(drvPath string, d *gonixdrv.Derivation, outPaths map[
 	if b.trySubstituteOutputs(outPaths) {
 		return nil
 	}
+	if d.Builder == builtinUnpack {
+		return b.buildBuiltinUnpack(drvPath, d, outPaths)
+	}
 	if isFixedOutput(d) {
 		return b.buildFixedOutput(drvPath, d, outPaths)
 	}
@@ -345,10 +349,93 @@ func verifyTextOutput(logical, phys, want, algo string) error {
 }
 
 func (b *Builder) fetchFixedOutputURL(d *gonixdrv.Derivation, phys, hashMode string) error {
-	rawURL := d.Env["url"]
-	if rawURL == "" {
+	urls := fetchURLs(d)
+	if len(urls) == 0 {
 		return fmt.Errorf("fixed-output fetchurl missing url")
 	}
+	// NovaNix's `urls` list: try each in order, and move on after any
+	// failure, including a download whose hash is wrong. The last URL's
+	// outcome is what the caller verifies and reports.
+	var errs []string
+	for i, rawURL := range urls {
+		err := b.fetchOneURL(rawURL, phys, hashMode)
+		if err == nil && i < len(urls)-1 && (hashMode == "flat" || hashMode == "") {
+			err = verifyFetchedFlat(d, phys)
+		}
+		if err == nil {
+			return nil
+		}
+		_ = local.RemoveStoreTree(phys)
+		if len(urls) == 1 {
+			return err
+		}
+		errs = append(errs, fmt.Sprintf("%s: %v", rawURL, err))
+	}
+	return fmt.Errorf("builtin:fetchurl: every URL failed:\n%s", strings.Join(errs, "\n"))
+}
+
+// fetchURLs is the derivation's `urls` (whitespace-separated, as NovaNix's
+// fetchurl writes it) or, without one, its `url`.
+func fetchURLs(d *gonixdrv.Derivation) []string {
+	if v, ok := d.Env["urls"]; ok {
+		return strings.FieldsFunc(v, func(r rune) bool {
+			return r < 0x80 && (r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\f' || r == '\v')
+		})
+	}
+	if v := d.Env["url"]; v != "" {
+		return []string{v}
+	}
+	return nil
+}
+
+func verifyFetchedFlat(d *gonixdrv.Derivation, phys string) error {
+	algo := d.Env["outputHashAlgo"]
+	if algo == "" {
+		algo = d.Outputs["out"].HashAlgorithm
+	}
+	return local.VerifyFlatOutput(phys, d.Outputs["out"].Hash, algo)
+}
+
+// fetchAttempts and fetchRetryBase are NovaNix's per-URL retry policy for
+// transient failures: five attempts, exponential backoff from 250ms.
+const (
+	fetchAttempts  = 5
+	fetchRetryBase = 250 * time.Millisecond
+)
+
+type transientFetchError struct{ err error }
+
+func (e transientFetchError) Error() string { return e.err.Error() }
+
+func (b *Builder) fetchOneURL(rawURL, phys, hashMode string) error {
+	var err error
+	for attempt := 0; attempt < fetchAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(fetchRetryBase << (attempt - 1))
+		}
+		err = b.fetchOneURLOnce(rawURL, phys, hashMode)
+		var te transientFetchError
+		if err == nil || !errors.As(err, &te) {
+			return err
+		}
+		_ = local.RemoveStoreTree(phys)
+	}
+	return err
+}
+
+// transientStatus reports whether an HTTP status is worth retrying: server
+// errors and 408/429, but not the 5xx codes that cannot change on retry.
+func transientStatus(code int) bool {
+	switch code {
+	case 408, 429:
+		return true
+	case 501, 505, 511:
+		return false
+	}
+	return code >= 500
+}
+
+func (b *Builder) fetchOneURLOnce(rawURL, phys, hashMode string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return err
@@ -356,7 +443,7 @@ func (b *Builder) fetchFixedOutputURL(d *gonixdrv.Derivation, phys, hashMode str
 	var r io.ReadCloser
 	switch u.Scheme {
 	case "file":
-		f, err := os.Open(u.Path)
+		f, err := os.Open(fileURLPath(u))
 		if err != nil {
 			return err
 		}
@@ -364,11 +451,15 @@ func (b *Builder) fetchFixedOutputURL(d *gonixdrv.Derivation, phys, hashMode str
 	default:
 		resp, err := http.Get(rawURL)
 		if err != nil {
-			return err
+			return transientFetchError{err}
 		}
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
-			return fmt.Errorf("fetchurl HTTP %s", resp.Status)
+			err := fmt.Errorf("fetchurl HTTP %s", resp.Status)
+			if transientStatus(resp.StatusCode) {
+				return transientFetchError{err}
+			}
+			return err
 		}
 		r = resp.Body
 	}
@@ -384,7 +475,7 @@ func (b *Builder) fetchFixedOutputURL(d *gonixdrv.Derivation, phys, hashMode str
 		_, copyErr := io.Copy(f, r)
 		closeErr := f.Close()
 		if copyErr != nil {
-			return copyErr
+			return transientFetchError{copyErr}
 		}
 		return closeErr
 	}
@@ -403,12 +494,22 @@ func (b *Builder) fetchFixedOutputURL(d *gonixdrv.Derivation, phys, hashMode str
 	}
 	if _, err := io.Copy(f, r); err != nil {
 		f.Close()
-		return err
+		return transientFetchError{err}
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
 	return store.CopyPathToStore(dest, phys)
+}
+
+// fileURLPath is the local path of a file:// URL. On Windows the URL path of
+// file:///C:/x is /C:/x, and the leading slash is not part of the path.
+func fileURLPath(u *url.URL) string {
+	p := u.Path
+	if runtime.GOOS == "windows" && len(p) > 2 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
+	}
+	return filepath.FromSlash(p)
 }
 
 func (b *Builder) registerBuilt(logicalPath, phys string, refs []string) error {

@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 
-	gonixnar "github.com/nix-community/go-nix/pkg/nar"
 	"github.com/nix-community/go-nix/pkg/nixbase32"
 	"github.com/nix-community/go-nix/pkg/nixhash"
 
@@ -58,7 +57,7 @@ func (s *Store) AddToStoreFlat(sourceFile, name string) (logicalPath string, err
 		return "", err
 	}
 	var buf bytes.Buffer
-	if err := gonixnar.DumpPath(&buf, sourceFile); err != nil {
+	if err := store.DumpPath(&buf, sourceFile); err != nil {
 		return "", err
 	}
 	refs, err := s.ScanReferences(buf.Bytes())
@@ -257,115 +256,6 @@ func copyFile(src, dst string) error {
 	defer out.Close()
 	_, err = io.Copy(out, in)
 	return err
-}
-
-func unpackNAR(r io.Reader, dest string) error {
-	nr, err := gonixnar.NewReader(r)
-	if err != nil {
-		return err
-	}
-	defer nr.Close()
-
-	first, err := nr.Next()
-	if err != nil {
-		return err
-	}
-	// Single regular file at "/" → flat store object (dest is the file path).
-	if first.Path == "/" && first.Type == gonixnar.TypeRegular {
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return err
-		}
-		mode := os.FileMode(0o444)
-		if first.Executable {
-			mode = 0o555
-		}
-		f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(f, nr)
-		closeErr := f.Close()
-		if err != nil {
-			return err
-		}
-		return closeErr
-	}
-
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
-	}
-	if err := writeNAREntry(nr, first, dest); err != nil {
-		return err
-	}
-	for {
-		hdr, err := nr.Next()
-		if err == io.EOF {
-			return finalizeNARModes(dest)
-		}
-		if err != nil {
-			return err
-		}
-		if err := writeNAREntry(nr, hdr, dest); err != nil {
-			return err
-		}
-	}
-}
-
-func finalizeNARModes(root string) error {
-	return filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return os.Chmod(p, 0o555)
-		}
-		mode := info.Mode().Perm()
-		if mode&0o111 != 0 {
-			return os.Chmod(p, 0o555)
-		}
-		return os.Chmod(p, 0o444)
-	})
-}
-
-func writeNAREntry(nr *gonixnar.Reader, hdr *gonixnar.Header, destRoot string) error {
-	rel := hdr.Path
-	if rel == "/" {
-		rel = ""
-	}
-	target := filepath.Join(destRoot, filepath.FromSlash(rel))
-	switch hdr.Type {
-	case gonixnar.TypeDirectory:
-		return os.MkdirAll(target, 0o755)
-	case gonixnar.TypeSymlink:
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		return os.Symlink(hdr.LinkTarget, target)
-	case gonixnar.TypeRegular:
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		mode := os.FileMode(0o444)
-		if hdr.Executable {
-			mode = 0o555
-		}
-		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(f, nr)
-		closeErr := f.Close()
-		if err != nil {
-			return err
-		}
-		return closeErr
-	default:
-		return fmt.Errorf("unknown nar node type %q", hdr.Type)
-	}
 }
 
 // VerifyFlatOutput checks a fixed-output flat hash against a built file (raw content, not NAR).

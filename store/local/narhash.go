@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 
-	gonixnar "github.com/nix-community/go-nix/pkg/nar"
 	"github.com/nix-community/go-nix/pkg/nixbase32"
 
 	"github.com/connerohnesorge/goonix/store"
@@ -50,5 +49,5 @@ func HashNARStream(r io.Reader) (hash string, size int64, err error) {
 
 // DumpPathToWriter writes NAR for path using go-nix.
 func DumpPathToWriter(w io.Writer, path string) error {
-	return gonixnar.DumpPath(w, path)
+	return store.DumpPath(w, path)
 }

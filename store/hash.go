@@ -18,7 +18,6 @@ import (
 	"crypto/sha256"
 	"io"
 
-	"github.com/nix-community/go-nix/pkg/nar"
 	"github.com/nix-community/go-nix/pkg/nixbase32"
 	"github.com/nix-community/go-nix/pkg/nixhash"
 )
@@ -41,7 +40,7 @@ func CompressHash(input []byte, size int) []byte {
 // RecursivePathHash returns the nixbase32 SHA-256 hash of path's NAR representation.
 func RecursivePathHash(path string) (string, error) {
 	h := sha256.New()
-	if err := nar.DumpPath(h, path); err != nil {
+	if err := dumpNAR(h, path, nil); err != nil {
 		return "", err
 	}
 	return nixbase32.EncodeToString(h.Sum(nil)), nil
@@ -49,5 +48,5 @@ func RecursivePathHash(path string) (string, error) {
 
 // DumpPath writes the NAR encoding of path to w.
 func DumpPath(w io.Writer, path string) error {
-	return nar.DumpPath(w, path)
+	return dumpNAR(w, path, nil)
 }

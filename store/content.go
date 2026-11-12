@@ -114,7 +114,16 @@ func copyPathRecursive(src, dst string) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(dst, data, info.Mode()&0o777)
+		if err := os.WriteFile(dst, data, info.Mode()&0o777); err != nil {
+			return err
+		}
+		// A Windows executable mark lives in a stream the copy does not carry.
+		if IsExecutable(src, info) {
+			if dfi, err := os.Lstat(dst); err == nil && !IsExecutable(dst, dfi) {
+				return MarkExecutable(dst)
+			}
+		}
+		return nil
 	}
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
+	"github.com/nix-community/go-nix/pkg/narinfo/signature"
 
 	"github.com/connerohnesorge/goonix/builder"
 	"github.com/connerohnesorge/goonix/eval"
@@ -21,6 +22,9 @@ func cmdBuild(args []string) {
 	storeFlag := fs.String("store", "", "physical store root (contains store/ subdirectory)")
 	extraXP := fs.String("extra-experimental-features", "", "space-separated experimental features (flakes enables fetch-tree)")
 	allowRelocated := fs.Bool("allow-relocated-store", false, "allow physical store path rewriting when /nix/store bind mount is unavailable (testing only)")
+	substituterURL := fs.String("substituter", "", "binary cache URL (default https://cache.nixos.org)")
+	var trustedKeys stringList
+	fs.Var(&trustedKeys, "trusted-key", "public key NAME:BASE64 that signs the substituter's narinfo (repeatable)")
 	ra, flags, err := splitRootArgs(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -81,7 +85,16 @@ func cmdBuild(args []string) {
 		os.Exit(1)
 	}
 
-	sub := substituter.NewClient(substituter.Config{})
+	subCfg := substituter.Config{CacheURL: *substituterURL}
+	for _, k := range trustedKeys {
+		pk, err := signature.ParsePublicKey(k)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid --trusted-key %q: %v\n", k, err)
+			os.Exit(2)
+		}
+		subCfg.TrustedKeys = append(subCfg.TrustedKeys, pk)
+	}
+	sub := substituter.NewClient(subCfg)
 	b := &builder.Builder{
 		Store: st,
 		Config: builder.Config{
@@ -135,4 +148,14 @@ func writeRegisteredDrvClosure(st *local.Store, ev *eval.Evaluator, drvPath stri
 		return err
 	}
 	return st.WriteDerivation(aterm, drvPath)
+}
+
+// stringList is a repeatable string flag.
+type stringList []string
+
+func (l *stringList) String() string { return strings.Join(*l, " ") }
+
+func (l *stringList) Set(v string) error {
+	*l = append(*l, v)
+	return nil
 }
