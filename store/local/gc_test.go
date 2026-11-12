@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/connerohnesorge/goonix/store"
 )
 
 func TestGCKeepsRootsAndReferences(t *testing.T) {
@@ -39,7 +41,7 @@ func TestGCKeepsRootsAndReferences(t *testing.T) {
 	if err := st.AddPermRoot(referrer, rootLink); err != nil {
 		t.Fatal(err)
 	}
-	target, err := os.Readlink(rootLink)
+	target, err := store.ReadLinkTarget(rootLink)
 	if err != nil || target != referrer {
 		t.Fatalf("perm root -> %q err %v", target, err)
 	}
