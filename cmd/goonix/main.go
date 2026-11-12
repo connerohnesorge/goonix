@@ -91,6 +91,8 @@ func main() {
 		cmdDrvDiff(os.Args[2:])
 	case "gc":
 		cmdGC(os.Args[2:])
+	case "hash-path":
+		cmdHashPath(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -107,10 +109,11 @@ Usage:
   goonix parse <file.nix>
   goonix eval [--json] [--pure] [-I path]... [-A attr] [--arg name expr] [--argstr name str] <file.nix|dir>
   goonix instantiate [--store DIR] [-I path]... [-A attr] [--arg name expr] [--argstr name str] <file.nix|dir>
-  goonix build [--store DIR] [-I path]... [-A attr] [--arg name expr] [--argstr name str] <file.nix|dir>
+  goonix build [--store DIR] [--substituter URL] [--trusted-key KEY]... [-I path]... [-A attr] [--arg name expr] [--argstr name str] <file.nix|dir>
   goonix derivation-show [--go-eval FILE [-I path]...] [--nix PATH]
   goonix drv-diff --nix-instantiate FILE | --nix-drv PATH --go-eval FILE [-I path]...
   goonix gc --store DIR
+  goonix hash-path PATH...
 
 `)
 }

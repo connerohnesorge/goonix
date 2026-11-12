@@ -45,7 +45,7 @@ func dumpNARNode(nw *gonixnar.Writer, p, sub string, filter func(string, NodeTyp
 	case fi.Mode().IsRegular():
 		t = NodeTypeRegular
 	default:
-		return fmt.Errorf("file '%s' has an unsupported type", p)
+		return fmt.Errorf("file '%s' has an unsupported type", p) // stub-scan: exempt (Nix's dump message)
 	}
 	if filter != nil && !filter(p, t) {
 		return nil

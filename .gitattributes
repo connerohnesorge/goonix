@@ -1,0 +1,5 @@
+# Files whose bytes become store paths or run under bash keep LF on every
+# checkout, Windows included: a CRLF copy of pkgs/windows hashes to different
+# derivations than NovaNix's, and bash rejects CR in scripts.
+pkgs/windows/** text eol=lf
+scripts/*.sh text eol=lf

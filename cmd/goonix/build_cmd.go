@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 
 	gonixdrv "github.com/nix-community/go-nix/pkg/derivation"
@@ -38,7 +40,7 @@ func cmdBuild(args []string) {
 	}
 	physRoot := *storeFlag
 	if physRoot == "" {
-		physRoot = filepath.Join(os.TempDir(), "goonix-build-store")
+		physRoot = defaultBuildStoreRoot()
 	}
 	st, err := local.OpenStore(physRoot)
 	if err != nil {
@@ -122,8 +124,18 @@ func cmdBuild(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	for name, p := range outPaths {
-		p = st.Config().RewriteDefaultStoreDir(p)
+	names := make([]string, 0, len(outPaths))
+	for name := range outPaths {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		p := st.Config().RewriteDefaultStoreDir(outPaths[name])
+		// On Windows the result is printed where it is on disk, the path a
+		// user runs, as NovaNix prints it.
+		if runtime.GOOS == "windows" {
+			p = local.PhysicalPath(st.Root, p)
+		}
 		fmt.Printf("%s=%s\n", name, p)
 	}
 	_ = store.DefaultStoreDir
@@ -158,4 +170,14 @@ func (l *stringList) String() string { return strings.Join(*l, " ") }
 func (l *stringList) Set(v string) error {
 	*l = append(*l, v)
 	return nil
+}
+
+// defaultBuildStoreRoot is the physical store root build uses without
+// --store. On Windows it is C:\nix, so the store is C:\nix\store, NovaNix's
+// default and the directory its binary cache's outputs were built in.
+func defaultBuildStoreRoot() string {
+	if runtime.GOOS == "windows" {
+		return `C:\nix`
+	}
+	return filepath.Join(os.TempDir(), "goonix-build-store")
 }

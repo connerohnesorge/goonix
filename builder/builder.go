@@ -524,6 +524,9 @@ func (b *Builder) registerBuilt(logicalPath, phys string, refs []string) error {
 }
 
 func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths map[string]string) error {
+	if nativeBuilds {
+		return b.runNativeBuilder(drvPath, d, outPaths)
+	}
 	cfg := b.Store.Config()
 	if cfg.LogicalStoreDir() != store.DefaultStoreDir && !b.Config.AllowRelocated {
 		return fmt.Errorf("logical store directory is %q (expected %q); set AllowRelocated only for tests", cfg.LogicalStoreDir(), store.DefaultStoreDir)
@@ -586,6 +589,12 @@ func (b *Builder) runBuilder(drvPath string, d *gonixdrv.Derivation, outPaths ma
 			return err
 		}
 	}
+	return b.registerRunOutputs(drvPath, d, outPaths, physOuts)
+}
+
+// registerRunOutputs scans, checks and registers the outputs a builder wrote
+// at physOuts.
+func (b *Builder) registerRunOutputs(drvPath string, d *gonixdrv.Derivation, outPaths, physOuts map[string]string) error {
 	also := make([]string, 0, len(outPaths))
 	for _, logicalOut := range outPaths {
 		also = append(also, logicalOut)

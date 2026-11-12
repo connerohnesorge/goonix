@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'cursor/**']
+    branches: [main, 'cursor/**', windows-builds]
   pull_request:
 
 jobs:
@@ -35,6 +35,34 @@ jobs:
         run: go test ./... -short -timeout 15m
       - name: Vet
         run: go vet ./...
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Build
+        run: go build -o goonix.exe ./cmd/goonix
+      # bash, as NovaNix's publish job ran: TEMP is then the long spelling,
+      # which hello's debug info records.
+      - name: Substitute and build pkgs/windows hello
+        shell: bash
+        run: bash scripts/windows-e2e.sh ./goonix.exe
+      - name: Store, builder and substituter tests
+        if: ${{ !cancelled() }}
+        run: go test ./store/... ./builder/... ./substituter/... -short -timeout 20m
+      - name: Vet
+        if: ${{ !cancelled() }}
+        run: go vet ./...
+      - name: Show the store on failure
+        if: failure()
+        shell: bash
+        run: ls -la /c/nix/store "$RUNNER_TEMP/subst/store" 2>/dev/null | head -100
 
   ladder:
     runs-on: ubuntu-latest

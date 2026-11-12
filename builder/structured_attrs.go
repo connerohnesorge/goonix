@@ -25,19 +25,30 @@ var shVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // prepareStructuredAttrs + writeStructuredAttrsShell do. The derivation env
 // keeps only __json; these files are what the builder reads.
 func (b *Builder) writeStructuredAttrsFiles(d *gonixdrv.Derivation, outPaths map[string]string, tmpDir string) error {
-	raw := ""
-	if d != nil && d.Env != nil {
-		raw = d.Env["__json"]
-	}
-	if raw == "" {
+	if d == nil || d.Env == nil || d.Env["__json"] == "" {
 		return nil
 	}
-	doc, err := parseNixJSON(raw)
+	body, shell, err := b.structuredAttrsBodies(d, outPaths, nil)
 	if err != nil {
-		return fmt.Errorf("cannot process __json attribute: %s", err.Error())
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, ".attrs.json"), []byte(body), 0o444); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(tmpDir, ".attrs.sh"), []byte(shell), 0o444)
+}
+
+// structuredAttrsBodies renders .attrs.json and .attrs.sh. rewrite, when
+// set, is applied to every string in the document before it is encoded (a
+// native build's physical store spelling); output placeholders map to
+// outPaths, or to rewrite's result for them.
+func (b *Builder) structuredAttrsBodies(d *gonixdrv.Derivation, outPaths map[string]string, rewrite func(string) string) (string, string, error) {
+	doc, err := parseNixJSON(d.Env["__json"])
+	if err != nil {
+		return "", "", fmt.Errorf("cannot process __json attribute: %s", err.Error())
 	}
 	if err := b.expandExportReferencesGraph(d, doc); err != nil {
-		return err
+		return "", "", err
 	}
 	outputs := map[string]any{}
 	names := make([]string, 0, len(outPaths))
@@ -49,23 +60,47 @@ func (b *Builder) writeStructuredAttrsFiles(d *gonixdrv.Derivation, outPaths map
 		outputs[name] = store.OutputPlaceholder(name)
 	}
 	doc["outputs"] = outputs
+	if rewrite != nil {
+		doc = rewriteJSONStrings(doc, rewrite).(map[string]any)
+		body, err := marshalNixJSON(doc)
+		if err != nil {
+			return "", "", err
+		}
+		return string(body), writeStructuredAttrsShell(doc), nil
+	}
 
 	body, err := marshalNixJSON(doc)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	for _, name := range names {
 		body = bytes.ReplaceAll(body, []byte(store.OutputPlaceholder(name)), []byte(outPaths[name]))
 	}
 	rewritten, err := parseNixJSON(string(body))
 	if err != nil {
-		return err
+		return "", "", err
 	}
-	shell := writeStructuredAttrsShell(rewritten)
-	if err := os.WriteFile(filepath.Join(tmpDir, ".attrs.json"), body, 0o444); err != nil {
-		return err
+	return string(body), writeStructuredAttrsShell(rewritten), nil
+}
+
+// rewriteJSONStrings applies f to every string in a decoded JSON value.
+func rewriteJSONStrings(v any, f func(string) string) any {
+	switch t := v.(type) {
+	case string:
+		return f(t)
+	case map[string]any:
+		for k, e := range t {
+			t[k] = rewriteJSONStrings(e, f)
+		}
+		return t
+	case []any:
+		for i, e := range t {
+			t[i] = rewriteJSONStrings(e, f)
+		}
+		return t
+	default:
+		return v
 	}
-	return os.WriteFile(filepath.Join(tmpDir, ".attrs.sh"), []byte(shell), 0o444)
 }
 
 func (b *Builder) structuredAttrsEnv(d *gonixdrv.Derivation, tmpDir string) []string {
