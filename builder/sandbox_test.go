@@ -292,3 +292,45 @@ func readOnlyOutput(t *testing.T, st *local.Store) string {
 	}
 	return string(body)
 }
+
+// The sandbox has the /dev and /etc entries of Nix 2.24.9's sandbox. bash
+// process substitution needs /dev/fd; nixpkgs' setup.sh uses it.
+func TestSandboxHasNixDevAndEtc(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	if !userMountNSAvailable() {
+		t.Skip("user namespace unavailable")
+	}
+	st, err := local.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	attrs := `{
+	  name = "dev-etc";
+	  system = "x86_64-linux";
+	  builder = "/bin/sh";
+	  args = [ "-c" ''
+	    for p in /dev/fd /dev/stdin /dev/stdout /dev/stderr; do
+	      [ -L "$p" ] || { echo "missing $p"; exit 1; }
+	    done
+	    [ -d /dev/fd/ ] || { echo "/dev/fd does not resolve"; exit 1; }
+	    : > /dev/shm/probe || { echo "/dev/shm not writable"; exit 1; }
+	    : > /tmp/probe || { echo "/tmp not writable"; exit 1; }
+	    while IFS= read -r line; do
+	      case $line in nixbld:x:1000:*) found=1 ;; esac
+	    done < /etc/passwd
+	    [ -n "$found" ] || { echo "no nixbld in /etc/passwd"; exit 1; }
+	    [ -e /etc/group ] || { echo "no /etc/group"; exit 1; }
+	    read -r hosts < /etc/hosts
+	    printf '%s\n' "$hosts" > "$out"
+	  '' ];
+	}`
+	if err := realiseAttrs(t, st, attrs, false); err != nil {
+		t.Fatal(err)
+	}
+	if body := readOnlyOutput(t, st); body != "127.0.0.1 localhost\n" {
+		t.Fatalf("/etc/hosts first line %q", body)
+	}
+}

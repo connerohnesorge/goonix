@@ -43,7 +43,9 @@ func cmdBuild(args []string) {
 	}
 	defer st.Close()
 
-	ev := eval.NewEvaluator().WithEffects(eval.IOEffects{Root: st.Config().LogicalStoreDir()}).WithExperimental(strings.Fields(*extraXP)...)
+	// Files the evaluation adds to the store (builder scripts, toFile, path
+	// coercions) go to the physical store the builder reads from.
+	ev := eval.NewEvaluator().WithEffects(eval.ChrootIOEffects{PhysRoot: physRoot}).WithExperimental(strings.Fields(*extraXP)...)
 	ra.apply(ev)
 	expr, curFile, err := ra.expr(rest[0])
 	ev.SetCurFile(curFile)

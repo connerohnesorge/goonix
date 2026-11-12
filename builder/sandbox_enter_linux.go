@@ -158,6 +158,9 @@ func sandboxSetup() error {
 	if err := unix.Mount("proc", filepath.Join(root, "proc"), "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
 		return err
 	}
+	if err := setupSandboxDevAndEtc(root, spec.IsolateNet); err != nil {
+		return err
+	}
 	if spec.IsolateNet {
 		if err := bringUpLoopback(); err != nil {
 			return err
@@ -231,6 +234,82 @@ func sandboxSetup() error {
 	for _, phys := range spec.Outputs {
 		if err := copyOutputToHost(storeFD, "/nix/store/"+filepath.Base(phys), filepath.Base(phys)); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// setupSandboxDevAndEtc adds the /dev and /etc entries Nix 2.24.9's sandbox
+// provides (local-derivation-goal.cc): the /dev/fd and stdio links bash
+// process substitution needs, /dev/tty, a /dev/shm tmpfs, a private devpts,
+// and the passwd, group and hosts files. A fixed-output build has the network,
+// so it also sees the host's resolver files, as in Nix.
+func setupSandboxDevAndEtc(root string, isolateNet bool) error {
+	for _, d := range []string{"dev/shm", "dev/pts", "etc"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			return err
+		}
+	}
+	links := [][2]string{
+		{"/proc/self/fd", "dev/fd"},
+		{"/proc/self/fd/0", "dev/stdin"},
+		{"/proc/self/fd/1", "dev/stdout"},
+		{"/proc/self/fd/2", "dev/stderr"},
+	}
+	for _, l := range links {
+		if err := os.Symlink(l[0], filepath.Join(root, l[1])); err != nil {
+			return err
+		}
+	}
+	if _, err := os.Lstat("/dev/tty"); err == nil {
+		dst := filepath.Join(root, "dev/tty")
+		if err := os.WriteFile(dst, nil, 0o666); err != nil {
+			return err
+		}
+		// /dev/tty cannot be opened without a controlling terminal, but a
+		// failed bind is not fatal: Nix only binds it when it exists.
+		_ = unix.Mount("/dev/tty", dst, "", unix.MS_BIND, "")
+	}
+	if err := unix.Mount("none", filepath.Join(root, "dev/shm"), "tmpfs", 0, "mode=1777"); err != nil {
+		return err
+	}
+	// A private devpts with its own ptmx. When the kernel refuses a new
+	// devpts instance in this namespace, Nix falls back to no ptys too.
+	if err := unix.Mount("none", filepath.Join(root, "dev/pts"), "devpts", 0, "newinstance,mode=0620"); err == nil {
+		if err := os.Symlink("/dev/pts/ptmx", filepath.Join(root, "dev/ptmx")); err != nil {
+			return err
+		}
+		_ = os.Chmod(filepath.Join(root, "dev/pts/ptmx"), 0o666)
+	}
+	if err := os.Chmod(filepath.Join(root, "tmp"), 0o1777); err != nil {
+		return err
+	}
+	files := map[string]string{
+		"etc/passwd": "root:x:0:0:Nix build user:/build:/noshell\n" +
+			"nixbld:x:1000:1000:Nix build user:/build:/noshell\n" +
+			"nobody:x:65534:65534:Nobody:/:/noshell\n",
+		"etc/group": "root:x:0:\n" +
+			"nixbld:!:1000:\n" +
+			"nogroup:x:65534:\n",
+	}
+	if isolateNet {
+		files["etc/hosts"] = "127.0.0.1 localhost\n::1 localhost\n"
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+			return err
+		}
+	}
+	if !isolateNet {
+		for _, name := range []string{"resolv.conf", "services", "hosts"} {
+			host := filepath.Join("/etc", name)
+			real, err := filepath.EvalSymlinks(host)
+			if err != nil {
+				continue
+			}
+			if err := bindFileRO(real, filepath.Join(root, "etc", name)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

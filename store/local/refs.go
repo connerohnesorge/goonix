@@ -5,11 +5,11 @@
 package local
 
 import (
-	"os"
-	"path/filepath"
 	"sort"
 
 	"github.com/nix-community/go-nix/pkg/storepath/references"
+
+	"github.com/connerohnesorge/goonix/store"
 )
 
 // ScanReferences finds store path references in data by matching known valid paths.
@@ -22,6 +22,19 @@ func (s *Store) ScanReferences(data []byte) ([]string, error) {
 // sibling outputs. Nix's referenceable set is the input closure plus every
 // output of the derivation, including the output itself.
 func (s *Store) scanReferences(data []byte, extra []string) ([]string, error) {
+	scanner, err := s.newReferenceScanner(extra)
+	if err != nil || scanner == nil {
+		return nil, err
+	}
+	if _, err := scanner.Write(data); err != nil {
+		return nil, err
+	}
+	return scanner.References(), nil
+}
+
+// newReferenceScanner returns a scanner over the registered paths plus extra,
+// or nil when there is nothing to look for.
+func (s *Store) newReferenceScanner(extra []string) (*references.ReferenceScanner, error) {
 	candidates, err := s.listValidPaths()
 	if err != nil {
 		return nil, err
@@ -43,14 +56,7 @@ func (s *Store) scanReferences(data []byte, extra []string) ([]string, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	scanner, err := references.NewReferenceScanner(candidates)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := scanner.Write(data); err != nil {
-		return nil, err
-	}
-	return scanner.References(), nil
+	return references.NewReferenceScanner(candidates)
 }
 
 // ScanPathReferences scans a store object (file or directory tree) for references
@@ -60,54 +66,25 @@ func (s *Store) ScanPathReferences(logicalPath string) ([]string, error) {
 }
 
 // ScanPathReferencesAmong scans logicalPath for references to registered paths
-// and to also (the output itself and its sibling outputs).
+// and to also (the output itself and its sibling outputs). Like Nix, it scans
+// the path's NAR serialisation, so symlink targets and file names count, and
+// a top-level symlink output is read as a link, not followed.
 func (s *Store) ScanPathReferencesAmong(logicalPath string, also []string) ([]string, error) {
 	phys := PhysicalPath(s.Root, logicalPath)
-	info, err := os.Stat(phys)
-	if err != nil {
-		return nil, err
-	}
 	extra := make([]string, 0, len(also)+1)
 	extra = append(extra, logicalPath)
 	extra = append(extra, also...)
-	if !info.IsDir() {
-		data, err := os.ReadFile(phys)
-		if err != nil {
-			return nil, err
-		}
-		return s.scanReferences(data, extra)
-	}
-	merged := map[string]struct{}{}
-	err = filepath.WalkDir(phys, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		refs, err := s.scanReferences(data, extra)
-		if err != nil {
-			return err
-		}
-		for _, r := range refs {
-			merged[r] = struct{}{}
-		}
-		return nil
-	})
+	scanner, err := s.newReferenceScanner(extra)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]string, 0, len(merged))
-	for r := range merged {
-		out = append(out, r)
+	if scanner == nil {
+		return nil, nil
 	}
+	if err := store.DumpPath(scanner, phys); err != nil {
+		return nil, err
+	}
+	out := scanner.References()
 	sort.Strings(out)
 	return out, nil
 }

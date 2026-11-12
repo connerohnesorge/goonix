@@ -87,39 +87,28 @@ func (b *Builder) BuildRealisation(rootDrv string) error {
 			return gonixdrv.ReadDerivation(f)
 		}
 	}
-	order, err := TopoSort(rootDrv, b.Load)
-	if err != nil {
+	// TopoSort rejects a cyclic or unloadable graph before anything runs.
+	if _, err := TopoSort(rootDrv, b.Load); err != nil {
 		return err
 	}
-	replacements, err := b.computeReplacements(order)
-	if err != nil {
-		return err
-	}
-	for _, drvPath := range order {
-		if err := b.buildOne(drvPath, replacements); err != nil {
-			return fmt.Errorf("build %s: %w", drvPath, err)
-		}
-	}
-	return nil
+	r := &realiser{b: b, built: map[string]bool{}}
+	return r.realise(rootDrv, nil)
 }
 
-func (b *Builder) computeReplacements(order []string) (map[string]string, error) {
-	repl := make(map[string]string)
-	for _, drvPath := range order {
-		d, err := b.Load(drvPath)
-		if err != nil {
-			return nil, err
-		}
-		r, err := d.CalculateDrvReplacement(repl)
-		if err != nil {
-			return nil, err
-		}
-		repl[drvPath] = r
-	}
-	return repl, nil
+// realiser makes derivation outputs valid the way Nix's goals do: a wanted
+// output that is already valid or can be substituted is done, and only a
+// derivation that has to be built has its inputs realised. So a cached
+// package is fetched with its runtime closure, and its build-time inputs
+// (the compiler, the bootstrap stages) are never fetched or built.
+type realiser struct {
+	b     *Builder
+	built map[string]bool
 }
 
-func (b *Builder) buildOne(drvPath string, replacements map[string]string) error {
+// realise makes the outputs in wanted valid (every output when wanted is
+// empty), substituting or building drvPath as needed.
+func (r *realiser) realise(drvPath string, wanted []string) error {
+	b := r.b
 	d, err := b.Load(drvPath)
 	if err != nil {
 		return err
@@ -130,9 +119,60 @@ func (b *Builder) buildOne(drvPath string, replacements map[string]string) error
 	}
 	cfg := b.Store.Config()
 	for name, p := range outPaths {
-		p = cfg.RewriteDefaultStoreDir(p)
-		outPaths[name] = p
+		outPaths[name] = cfg.RewriteDefaultStoreDir(p)
 	}
+	names := wanted
+	if len(names) == 0 {
+		for name := range outPaths {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	done := true
+	for _, name := range names {
+		p, ok := outPaths[name]
+		if !ok {
+			return fmt.Errorf("derivation '%s' does not have wanted outputs '%s'", drvPath, name)
+		}
+		valid, err := b.Store.IsValidPath(p)
+		if err != nil {
+			return err
+		}
+		if valid {
+			continue
+		}
+		if b.trySubstitutePath(p) {
+			continue
+		}
+		done = false
+		break
+	}
+	if done {
+		return nil
+	}
+	if r.built[drvPath] {
+		return fmt.Errorf("build %s: outputs %v are not valid after building", drvPath, names)
+	}
+	r.built[drvPath] = true
+	inputs := make([]string, 0, len(d.InputDerivations))
+	for inp := range d.InputDerivations {
+		inputs = append(inputs, inp)
+	}
+	sort.Strings(inputs)
+	for _, inp := range inputs {
+		if err := r.realise(inp, d.InputDerivations[inp]); err != nil {
+			return err
+		}
+	}
+	if err := b.buildOne(drvPath, d, outPaths); err != nil {
+		return fmt.Errorf("build %s: %w", drvPath, err)
+	}
+	return nil
+}
+
+// buildOne builds d. Outputs that are already valid are left alone; when
+// every output is valid there is nothing to do.
+func (b *Builder) buildOne(drvPath string, d *gonixdrv.Derivation, outPaths map[string]string) error {
 	allValid := true
 	for _, p := range outPaths {
 		ok, err := b.Store.IsValidPath(p)
@@ -154,6 +194,16 @@ func (b *Builder) buildOne(drvPath string, replacements map[string]string) error
 		return b.buildFixedOutput(drvPath, d, outPaths)
 	}
 	return b.runBuilder(drvPath, d, outPaths)
+}
+
+// trySubstitutePath substitutes one store path and its references.
+func (b *Builder) trySubstitutePath(p string) bool {
+	sub := b.Config.Substituter
+	if sub == nil {
+		return false
+	}
+	ok, err := sub.TrySubstitute(b.Store, p)
+	return err == nil && ok
 }
 
 func (b *Builder) trySubstituteOutputs(outPaths map[string]string) bool {

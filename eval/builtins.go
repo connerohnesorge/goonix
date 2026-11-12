@@ -1589,14 +1589,29 @@ func builtinCurrentSystem(ev *Evaluator, pos parser.Pos, args []*Value) (*Value,
 }
 
 func currentSystemString() string {
-	switch runtime.GOOS {
-	case "linux":
-		return "x86_64-linux"
-	case "darwin":
-		return "aarch64-darwin"
-	default:
-		return runtime.GOOS + "-" + runtime.GOARCH
+	return hostSystem(runtime.GOARCH, runtime.GOOS)
+}
+
+// hostSystem is Nix's system string for a Go arch and OS: the CPU as
+// nixpkgs' systems.parse names it, then the kernel. Windows is
+// x86_64-windows / aarch64-windows, as NovaNix and nixpkgs spell it.
+func hostSystem(goarch, goos string) string {
+	cpu := goarch
+	switch goarch {
+	case "amd64":
+		cpu = "x86_64"
+	case "arm64":
+		cpu = "aarch64"
+	case "386":
+		cpu = "i686"
+	case "arm":
+		cpu = "armv7l"
+	case "riscv64":
+		cpu = "riscv64"
+	case "ppc64le":
+		cpu = "powerpc64le"
 	}
+	return cpu + "-" + goos
 }
 
 func builtinFetchurl(ev *Evaluator, pos parser.Pos, args []*Value) (*Value, error) {
