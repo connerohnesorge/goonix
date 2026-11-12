@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"github.com/nix-community/go-nix/pkg/nixhash"
+
+	"github.com/connerohnesorge/goonix/store"
 )
 
 // AddGCRoot records a direct GC root named name that points at logicalPath.
@@ -38,7 +40,7 @@ func (s *Store) AddGCRoot(name, logicalPath string) error {
 // GCRootPath returns the store path pinned by a direct root name, if any.
 func (s *Store) GCRootPath(name string) (string, bool, error) {
 	link := filepath.Join(s.PhysicalGCRootsDir(), name)
-	if target, err := os.Readlink(link); err == nil {
+	if target, err := store.ReadLinkTarget(link); err == nil {
 		return target, true, nil
 	}
 	var p string
@@ -89,7 +91,7 @@ func (s *Store) AddPermRoot(logicalPath, gcRoot string) error {
 		if fi.Mode()&os.ModeSymlink == 0 {
 			return fmt.Errorf("cannot create symlink '%s'; already exists", abs)
 		}
-		target, err := os.Readlink(abs)
+		target, err := store.ReadLinkTarget(abs)
 		if err != nil || !s.inStore(target) {
 			return fmt.Errorf("cannot create symlink '%s'; already exists", abs)
 		}
@@ -202,7 +204,7 @@ func (s *Store) walkGCRoot(path string, out map[string]struct{}) error {
 		return nil
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(path)
+		target, err := store.ReadLinkTarget(path)
 		if err != nil {
 			return err
 		}
@@ -228,7 +230,7 @@ func (s *Store) walkGCRoot(path string, out map[string]struct{}) error {
 		if inner.Mode()&os.ModeSymlink == 0 {
 			return nil
 		}
-		storePath, err := os.Readlink(abs)
+		storePath, err := store.ReadLinkTarget(abs)
 		if err != nil || !s.inStore(storePath) {
 			return nil
 		}

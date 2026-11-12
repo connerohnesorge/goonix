@@ -23,6 +23,10 @@ func TestNARRestoreRoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tree, "bin", "tool"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Windows has no mode bit for this; the platform layer's mark is the bit.
+	if err := store.MarkExecutable(filepath.Join(tree, "bin", "tool")); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(tree, "share", "doc", "README"), []byte("hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +74,9 @@ func TestNARRestoreFlatExecutable(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "f")
 	if err := os.WriteFile(f, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkExecutable(f); err != nil {
 		t.Fatal(err)
 	}
 	var want bytes.Buffer

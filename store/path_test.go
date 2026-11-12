@@ -15,7 +15,6 @@
 package store_test
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/connerohnesorge/goonix/store"
@@ -36,7 +35,7 @@ func TestParseAbsoluteDefault(t *testing.T) {
 func TestCustomStoreDir(t *testing.T) {
 	cfg := store.Config{StoreDir: "/custom/store"}
 	const rel = "m5j1yp47lw1psd9n6bzina1167abbprr-bash44-023.drv"
-	want := filepath.Join("/custom/store", rel)
+	want := "/custom/store/" + rel
 	got := cfg.RewriteDefaultStoreDir("/nix/store/" + rel)
 	if got != want {
 		t.Fatalf("Rewrite = %q, want %q", got, want)

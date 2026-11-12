@@ -7,9 +7,13 @@
 # 2. Build hello from source in C:\nix\store: builtin:fetchurl,
 #    builtin:unpack of the MSYS2 and MinGW-w64 seeds, and a native MSYS2 bash
 #    builder in a job object. Then run it.
-# 3. Compare the local NAR hashes with NovaNix's narinfo. msys-seed must
-#    match. hello is reported: it matches only when the build directory and
-#    toolchain are the ones NovaNix's cache was built with.
+# 3. Compare the local NAR hashes with NovaNix's narinfo. msys-seed and hello
+#    must match: hello's debug info records the build directory
+#    (%TEMP%\<hash>) and store spellings, so a match means goonix spawned the
+#    build exactly as NovaNix's publish job did on the same runner image.
+#    mingw-w64-seed is reported only: NovaNix's cache holds a copy unpacked
+#    before NovaNix took the executable bit from the archive (nova-nix #128),
+#    so only its .exe files are executable there.
 set -euo pipefail
 
 goonix=$1
@@ -59,7 +63,7 @@ for name in msys-seed mingw-w64-seed hello; do
     echo "$base: same NAR as the cache ($local_hash)"
   else
     echo "$base: local $local_hash, cache $cache_hash"
-    if [ "$name" = msys-seed ]; then
+    if [ "$name" != mingw-w64-seed ]; then
       status=1
     fi
   fi
